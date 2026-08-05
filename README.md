@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-151 tests, none of which need a key, a network, or an org.
+184 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
