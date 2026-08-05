@@ -186,7 +186,26 @@ Record-triggered and autolaunched flows:
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 
 Formula **fields** on an object work anywhere a reference does (`$Record.Margin__c`).
-Formula **resources** defined inside a flow do not. Screen flows are out of scope.
+Formula **resources** defined inside a flow do not.
+
+### Deliberately out of scope
+
+**Migrated Workflow Rules** (`processType: Workflow`). They are a legacy
+migration artefact, not something anyone authors today, and supporting them
+would mean carrying their shape forever. A survey will keep counting them; the
+count is expected to sit there.
+
+**Screen flows are in scope and not yet built** — the next planned addition.
+Roughly, in the order they pay off:
+
+1. `processType: Flow`, plus screens carrying display text and input fields.
+   Covers most of what a simple screen flow does.
+2. Choices and dynamic choice sets, for pickers and radio groups.
+3. LWC and Aura extensions on a screen.
+
+Everything the IR cannot yet hold is refused rather than approximated, so a
+partial implementation is safe to ship: a screen flow using stage 2 features
+is refused by a build that only has stage 1.
 
 ## Layout
 
