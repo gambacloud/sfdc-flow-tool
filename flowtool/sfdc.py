@@ -13,7 +13,7 @@ import io
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -363,6 +363,30 @@ async def flow_builder_url(
         return fallback
 
     return f"{base}/builder_platform_interaction/flowBuilder.app?flowId={version_id}"
+
+
+async def retrieve_all_flows(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> Dict[str, str]:
+    """
+    Every flow in the org, in one retrieve.
+
+    A retrieve is a job: submit, poll, download. Doing that per flow turns a
+    survey of fifty flows into fifty round trips, so this asks for `*` once and
+    unpacks the result.
+    """
+    async with MetadataClient(instance_url, session_id, api_version) as client:
+        job_id = await client.start_retrieve("*")
+        zip_bytes = await client.wait_for_retrieve(job_id, timeout_seconds=600.0)
+
+    flows: Dict[str, str] = {}
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        for name in archive.namelist():
+            if not name.startswith("flows/") or not name.endswith(".flow"):
+                continue
+            api_name = name[len("flows/"): -len(".flow")]
+            flows[api_name] = archive.read(name).decode("utf-8")
+    return flows
 
 
 def build_retrieve_package(flow_api_name: str, api_version: str) -> str:

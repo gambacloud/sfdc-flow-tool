@@ -13,7 +13,8 @@ module returns is one it fully understands.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence
 
 from .ir import (
     ActionCall,
@@ -42,17 +43,42 @@ from .xmlgen import METADATA_NS
 NS = {"m": METADATA_NS}
 
 
+@dataclass(frozen=True)
+class Gap:
+    """
+    One thing this build cannot represent.
+
+    `code` is stable and groupable — it is what a survey across an org counts.
+    `detail` is the sentence a person reads and names the element it came from,
+    so the two are deliberately different: "child:queriedFields" groups, while
+    "Get_Contacts uses a hand-picked field list" explains.
+    """
+
+    code: str
+    detail: str
+
+
 class UnsupportedFlow(ValueError):
     """The flow uses constructs this IR cannot represent."""
 
-    def __init__(self, reasons: List[str], api_name: str = ""):
-        self.reasons = reasons
+    def __init__(self, gaps: Sequence, api_name: str = ""):
+        self.gaps: List[Gap] = [
+            gap if isinstance(gap, Gap) else Gap("other", str(gap)) for gap in gaps
+        ]
         self.api_name = api_name
         subject = f"{api_name} " if api_name else ""
         super().__init__(
             f"{subject}uses Flow features SFDC Flow Tool cannot represent yet:\n"
-            + "\n".join(f"  - {reason}" for reason in reasons)
+            + "\n".join(f"  - {gap.detail}" for gap in self.gaps)
         )
+
+    @property
+    def reasons(self) -> List[str]:
+        return [gap.detail for gap in self.gaps]
+
+    @property
+    def codes(self) -> List[str]:
+        return [gap.code for gap in self.gaps]
 
 
 # Tags that carry no logic and can be ignored without changing behaviour.
@@ -171,7 +197,7 @@ _CHILD_MEANING = {
 }
 
 
-def _unknown_children(node: ET.Element, allowed: set, where: str) -> List[str]:
+def _unknown_children(node: ET.Element, allowed: set, where: str) -> List[Gap]:
     """Every child tag of `node` that this module would otherwise ignore."""
     reasons = []
     seen = set()
@@ -181,7 +207,7 @@ def _unknown_children(node: ET.Element, allowed: set, where: str) -> List[str]:
             continue
         seen.add(tag)
         meaning = _CHILD_MEANING.get(tag, f"<{tag}>")
-        reasons.append(f"{where} uses {meaning}")
+        reasons.append(Gap(f"child:{tag}", f"{where} uses {meaning}"))
     return reasons
 
 
@@ -419,16 +445,19 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as exc:
-        raise UnsupportedFlow([f"the XML did not parse: {exc}"], api_name) from exc
+        raise UnsupportedFlow(
+            [Gap("unparseable", f"the XML did not parse: {exc}")], api_name
+        ) from exc
 
-    reasons: List[str] = []
+    reasons: List[Gap] = []
 
     process_type = _text(root, "m:processType")
     if process_type and process_type != "AutoLaunchedFlow":
-        reasons.append(
+        reasons.append(Gap(
+            f"process_type:{process_type}",
             f"process type {process_type} (only record-triggered and "
-            "autolaunched flows are supported)"
-        )
+            "autolaunched flows are supported)",
+        ))
 
     seen_unsupported = set()
     for child in root:
@@ -438,7 +467,10 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         if tag in seen_unsupported:
             continue
         seen_unsupported.add(tag)
-        reasons.append(_KNOWN_UNSUPPORTED.get(tag, f"unrecognised element <{tag}>"))
+        reasons.append(Gap(
+            f"element:{tag}",
+            _KNOWN_UNSUPPORTED.get(tag, f"unrecognised element <{tag}>"),
+        ))
 
     # The same check, one level down. This is where a fault path or a scheduled
     # path used to disappear without a word.
@@ -468,7 +500,10 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                 # the IR is stricter than Salesforce, not that the flow is
                 # broken. Report it as a gap rather than a 500.
                 name = _text(node, "m:name") or tag
-                reasons.append(f"{name} does not fit SFDC Flow Tool's model: {exc}")
+                reasons.append(Gap(
+                    "ir_mismatch",
+                    f"{name} does not fit the model: {exc}",
+                ))
 
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
@@ -514,7 +549,8 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         # The flow deployed, so this means the IR is stricter than Salesforce.
         # Say so plainly rather than pretending the flow is malformed.
         raise UnsupportedFlow(
-            [f"it does not fit SFDC Flow Tool's model: {exc}"], api_name or label
+            [Gap("ir_mismatch", f"it does not fit the model: {exc}")],
+            api_name or label,
         ) from exc
 
 

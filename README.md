@@ -131,6 +131,36 @@ editing from that diagram would delete them on deploy.
 `parse(generate(ir)) == ir` is asserted for every element type in
 `tests/test_roundtrip.py`. That property is what makes an edit round-trip safe.
 
+## Measuring the gap
+
+```bash
+.venv/Scripts/python.exe survey.py --org dev
+```
+
+Retrieves every flow in the org in one call, parses each, and reports what
+actually blocks the ones it can't take:
+
+```
+47 flows:  31 parse, 16 refused (65% covered)
+
+What blocks them, by how many flows each blocks:
+
+     9  ############################  element:screens
+     4  ############                  element:formulas
+     2  ######                        child:queriedFields
+     1  ###                           element:waits
+
+Biggest single win: supporting element:screens would unblock 9 of 47 flows.
+```
+
+Read-only — nothing is written to the org. `--save DIR` keeps the retrieved
+files so later runs can go offline with `--dir`, and `--json` writes the whole
+report for tracking coverage over time.
+
+The line to watch is **"parsed but did NOT survive a round trip"**. That means a
+flow looks editable and isn't: something would be lost on the way back out. It
+should always be empty.
+
 ## What it covers
 
 Record-triggered and autolaunched flows:
@@ -161,6 +191,7 @@ Formula **resources** defined inside a flow do not. Screen flows are out of scop
 | `flowtool/config.py` | Loads `.env` |
 | `forge.py` | The pipeline, as a CLI |
 | `server.py` | The pipeline, over HTTP |
+| `survey.py` | Measures how much of an org this build can model |
 | `diagnose.py` | Isolates where org authentication breaks |
 
 ### Adding a provider
