@@ -63,6 +63,26 @@ sf org login web --alias dev
 
 ## Use
 
+### Web UI
+
+```bash
+.venv/Scripts/python.exe server.py
+```
+
+Open `http://localhost:8000`. Describe the flow, read the rendered diagram,
+approve it, validate it against an org, deploy it.
+
+The approval gate is enforced by the server, not the browser: every change bumps
+the flow's version, and `validate` and `deploy` return 403 unless the version you
+approved is still the current one. A repair — which round-trips through the model
+— produces a new version, so it needs approving again.
+
+Only the `sf` CLI path is exposed over HTTP, so no org token ever crosses it.
+Start the server from a shell where `sf` is on PATH, or the org list comes up
+empty.
+
+### CLI
+
 ```bash
 .venv/Scripts/python.exe forge.py "when an opportunity is won, mark its account hot" --org dev
 ```
@@ -110,7 +130,10 @@ Delete Records, Loop, Subflow. Screen flows are not supported.
 | `flowforge/llm.py` | Text → IR, bring-your-own-key, self-repairing |
 | `flowforge/sfdc.py` | Metadata API: package, validate, deploy |
 | `flowforge/orgs.py` | Reads org credentials from the `sf` CLI |
-| `forge.py` | The pipeline |
+| `flowforge/config.py` | Loads `.env` |
+| `forge.py` | The pipeline, as a CLI |
+| `server.py` | The pipeline, over HTTP |
+| `static/` | The web UI |
 | `diagnose.py` | Isolates where org authentication breaks |
 
 ```bash

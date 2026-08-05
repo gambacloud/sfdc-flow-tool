@@ -85,16 +85,36 @@ def value_text(value: Value) -> str:
     return "?"
 
 
+# Salesforce spells negation as a boolean on the right of a unary operator:
+# IsNull with false means "is not null". Reading only the operator would show
+# the user the opposite of what the flow does.
+_NEGATED_UNARY = {
+    "IsNull": "is not null",
+    "IsChanged": "is not changed",
+    "WasSet": "was not set",
+}
+
+
+def _unary_text(left: str, operator: str, right: Optional[Value]) -> str:
+    if right is not None and right.boolean_value is False:
+        return f"{left} {_NEGATED_UNARY.get(operator, 'not ' + operator)}"
+    return f"{left} {_OPERATOR_TEXT.get(operator, operator)}"
+
+
 def condition_text(condition: Condition) -> str:
-    operator = _OPERATOR_TEXT.get(condition.operator, condition.operator)
     if condition.operator in _UNARY:
-        return f"{condition.left} {operator}"
+        return _unary_text(condition.left, condition.operator, condition.right)
+    operator = _OPERATOR_TEXT.get(condition.operator, condition.operator)
     return f"{condition.left} {operator} {value_text(condition.right)}"
 
 
 def filter_text(record_filter: RecordFilter) -> str:
+    if record_filter.operator in _UNARY:
+        return _unary_text(
+            record_filter.field, record_filter.operator, record_filter.value
+        )
     operator = _OPERATOR_TEXT.get(record_filter.operator, record_filter.operator)
-    if record_filter.operator in _UNARY or record_filter.value is None:
+    if record_filter.value is None:
         return f"{record_filter.field} {operator}"
     return f"{record_filter.field} {operator} {value_text(record_filter.value)}"
 

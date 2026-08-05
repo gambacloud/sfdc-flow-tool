@@ -373,6 +373,30 @@ class Flow(BaseModel):
             targets.append(element.next)
         return targets
 
+    def connector_map(self) -> str:
+        """
+        Every connector, as text. Goes into the unreachable-element error so the
+        reader - usually the model repairing its own output - can see where the
+        chain actually breaks instead of guessing which link is missing.
+        """
+        lines = [f"  start -> {self.start.next or '(nothing)'}"]
+        for element in self.elements:
+            if isinstance(element, Decision):
+                for outcome in element.outcomes:
+                    lines.append(
+                        f"  {element.name} outcome {outcome.name} -> "
+                        f"{outcome.next or '(ends)'}"
+                    )
+                lines.append(f"  {element.name} default -> {element.next or '(ends)'}")
+            elif isinstance(element, Loop):
+                lines.append(
+                    f"  {element.name} each -> {element.first_element or '(nothing)'}"
+                )
+                lines.append(f"  {element.name} done -> {element.next or '(ends)'}")
+            else:
+                lines.append(f"  {element.name} -> {element.next or '(ends)'}")
+        return "\n".join(lines)
+
     def reachable(self) -> set:
         """Names reachable from the start connector."""
         by_name = self.by_name()
@@ -443,6 +467,11 @@ class Flow(BaseModel):
         if orphans:
             raise ValueError(
                 f"unreachable elements: {sorted(orphans)}. No path from Start "
-                "reaches them - connect them, or remove them."
+                "reaches them. Here is every connector as it stands:\n"
+                f"{self.connector_map()}\n"
+                "Set the connector that should lead to each unreachable element. "
+                "For a Decision, that is the outcome's own `next` - an outcome "
+                "with next=null ends the path instead of continuing to the "
+                "element you meant."
             )
         return self

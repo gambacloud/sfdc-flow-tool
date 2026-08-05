@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlowForge</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header>
+  <h1>FlowForge</h1>
+  <div class="meta" id="env"></div>
+</header>
+
+<main>
+  <!-- Left: the conversation -->
+  <section class="panel" id="left">
+    <div class="pad">
+      <label for="request">What should the flow do?</label>
+      <textarea id="request" rows="4"
+        placeholder="When an opportunity is won, mark its account as Hot"></textarea>
+
+      <details id="options">
+        <summary>Options</summary>
+        <div class="options">
+          <label>Provider
+            <select id="provider"></select>
+          </label>
+          <label>Effort
+            <select id="effort">
+              <option>low</option><option>medium</option>
+              <option selected>high</option><option>xhigh</option><option>max</option>
+            </select>
+          </label>
+          <label>API version
+            <input id="apiVersion" value="62.0" size="6">
+          </label>
+          <label class="check">
+            <input type="checkbox" id="activate">
+            Deploy Active <span class="warn-inline">(runs on live records)</span>
+          </label>
+        </div>
+      </details>
+
+      <button id="designBtn" class="primary">Design the flow</button>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <div class="pad refine" id="refineBox" hidden>
+      <label for="instruction">Change something</label>
+      <textarea id="instruction" rows="2"
+        placeholder="also set the account's description"></textarea>
+      <button id="refineBtn">Revise</button>
+    </div>
+  </section>
+
+  <!-- Right: the flow -->
+  <section class="panel" id="right">
+    <div id="empty" class="empty">
+      <p>Describe a flow and it appears here as a diagram.</p>
+      <p class="dim">Nothing is sent to Salesforce until you approve it.</p>
+    </div>
+
+    <div id="flowView" hidden>
+      <div class="flow-head">
+        <div>
+          <h2 id="flowLabel"></h2>
+          <div class="meta" id="flowMeta"></div>
+        </div>
+        <div class="badges">
+          <span class="badge" id="statusBadge"></span>
+          <span class="badge dim" id="versionBadge"></span>
+        </div>
+      </div>
+
+      <p class="desc" id="flowDesc"></p>
+
+      <div class="diagram-wrap">
+        <div id="diagram"></div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="diagram">Diagram</button>
+        <button class="tab" data-tab="markdown">Documentation</button>
+        <button class="tab" data-tab="xml">Flow XML</button>
+        <button class="tab" data-tab="ir">IR</button>
+      </div>
+      <pre id="code" hidden></pre>
+
+      <div class="actions">
+        <div class="row">
+          <label>Org
+            <select id="org"></select>
+          </label>
+          <button id="approveBtn" class="primary">Approve</button>
+          <button id="validateBtn" disabled>Validate</button>
+          <button id="deployBtn" class="danger" disabled>Deploy</button>
+        </div>
+        <div id="gate" class="gate"></div>
+      </div>
+
+      <div id="result" class="result" hidden></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

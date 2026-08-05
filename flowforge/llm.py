@@ -69,7 +69,11 @@ the Start element and Salesforce refuses to run the flow.
 - `next: null` means the path ends there. There is no "End" element; a path \
 that ends simply has no next.
 - Every element must be reachable from start by following connectors.
-- A Decision's `next` is its default (else) path. Each outcome has its own `next`.
+- A Decision's `next` is its default (else) path. Each outcome has its own \
+`next`, and that is what carries control when the outcome's conditions are met. \
+Elements do not run in list order: an element only runs if some connector points \
+at it. If a Decision is meant to lead to an element, set that outcome's `next` to \
+the element's name.
 - A Loop's `first_element` is the first element inside the loop body; its `next` \
 is what runs after the loop finishes.
 - Conditions are structured: a left reference, an operator, and a typed right \
@@ -203,7 +207,11 @@ class AnthropicProvider:
         text = next((b.text for b in response.content if b.type == "text"), None)
         if not text:
             raise LLMError("The model returned no JSON.")
-        return json.loads(text)
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"The model returned malformed JSON: {exc}") from exc
 
 
 # --------------------------------------------------------------------------
@@ -235,7 +243,9 @@ class GeminiProvider:
         api_key: Optional[str] = None,
         model: str = "gemini-3.6-flash",
         effort: str = "high",
-        max_tokens: int = 16000,
+        # Gemini counts thinking towards the output cap, so this needs more
+        # headroom than a provider that bills thinking separately.
+        max_tokens: int = 48000,
     ):
         try:
             from google import genai
@@ -307,14 +317,30 @@ class GeminiProvider:
         except errors.APIError as exc:
             raise LLMError(f"Gemini API error: {exc.message}") from exc
 
+        reason = ""
+        if response.candidates:
+            reason = str(response.candidates[0].finish_reason or "")
+
+        # A truncated response still has text, so this has to be checked before
+        # parsing - otherwise json.loads fails on a half-written document and
+        # the real cause (the token cap) never surfaces.
+        if "MAX_TOKEN" in reason.upper():
+            raise LLMError(
+                f"Gemini hit its {self.max_tokens}-token output cap before "
+                "finishing the IR. Thinking counts towards that cap, so either "
+                "lower the effort or raise max_tokens."
+            )
         text = response.text
         if not text:
-            # Usually a safety block or an output-token cutoff; say which.
-            reason = "unknown"
-            if response.candidates:
-                reason = str(response.candidates[0].finish_reason)
-            raise LLMError(f"Gemini returned no JSON (finish reason: {reason}).")
-        return json.loads(text)
+            raise LLMError(f"Gemini returned no JSON (finish reason: {reason or 'unknown'}).")
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise LLMError(
+                f"Gemini returned malformed JSON (finish reason: {reason or 'unknown'}): "
+                f"{exc}"
+            ) from exc
 
 
 # --------------------------------------------------------------------------

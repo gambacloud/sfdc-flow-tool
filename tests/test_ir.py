@@ -160,6 +160,40 @@ class TestReferences:
                 ],
             )
 
+    def test_the_unreachable_error_shows_where_the_chain_breaks(self):
+        """
+        The model repaired nothing across four attempts when the message only
+        said "connect them". It needs to see the wiring to find the gap.
+        """
+        with pytest.raises(ValidationError) as caught:
+            _flow(
+                start=Start(next="D"),
+                elements=[
+                    Decision(
+                        name="D",
+                        label="D",
+                        outcomes=[
+                            Outcome(
+                                name="Yes",
+                                label="Yes",
+                                conditions=[
+                                    Condition(
+                                        left="$Record.Amount",
+                                        operator="GreaterThan",
+                                        right=Value(number_value=1),
+                                    )
+                                ],
+                            )
+                        ],
+                    ),
+                    GetRecords(name="Orphan", label="x", object="Account"),
+                ],
+            )
+        message = str(caught.value)
+        assert "start -> D" in message
+        assert "D outcome Yes -> (ends)" in message, "must show the broken link"
+        assert "Orphan -> (ends)" in message
+
     def test_elements_reached_through_a_decision_outcome_count(self):
         _flow(
             start=Start(next="D"),
