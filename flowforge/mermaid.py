@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .ir import (
+    ActionCall,
     Assignment,
     Condition,
     Decision,
@@ -140,6 +141,8 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
         return f'{name}[/"{text}"/]'
     if isinstance(element, Subflow):
         return f'{name}[["{text}"]]'
+    if isinstance(element, ActionCall):
+        return f'{name}[/"{text}"\]'
     if isinstance(element, (RecordCreate, RecordUpdate, RecordDelete, GetRecords)):
         return f'{name}[("{text}")]'
     return f'{name}["{text}"]'
@@ -252,6 +255,7 @@ _TYPE_LABEL = {
     RecordDelete: "Delete Records",
     Loop: "Loop",
     Subflow: "Subflow",
+    ActionCall: "Action",
 }
 
 

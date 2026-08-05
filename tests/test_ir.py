@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from flowforge.ir import (
+    RecordFilter,
     Loop,
     Assignment,
     AssignmentItem,
@@ -60,15 +61,26 @@ class TestRecordUpdateModes:
             fields=[FieldValue(field="Rating", value=Value(string_value="Hot"))],
         )
 
-    def test_combining_both_is_rejected(self):
-        # Salesforce: "You can't use the sObjectInputReference field with the
-        # inputAssignments field." Caught here, before any XML exists.
-        with pytest.raises(ValidationError, match="cannot be combined"):
+    def test_reference_plus_fields_is_a_real_shape(self):
+        # Flow Builder's third mode: take the record from a reference and set
+        # fields on it. Deployed flows in real orgs use this with $Record, so
+        # forbidding it made existing flows unreadable.
+        RecordUpdate(
+            name="U",
+            label="U",
+            input_reference="$Record",
+            fields=[FieldValue(field="Rating", value=Value(string_value="Hot"))],
+        )
+
+    def test_reference_plus_filters_is_rejected(self):
+        # The reference already picked the records; filters would pick them again.
+        with pytest.raises(ValidationError, match="cannot be combined with filters"):
             RecordUpdate(
                 name="U",
                 label="U",
-                input_reference="Get_Account",
-                fields=[FieldValue(field="Rating", value=Value(string_value="Hot"))],
+                input_reference="$Record",
+                filters=[RecordFilter(field="Id", operator="EqualTo",
+                                      value=Value(string_value="x"))],
             )
 
     def test_needs_some_target(self):

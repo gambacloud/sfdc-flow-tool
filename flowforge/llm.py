@@ -12,8 +12,9 @@ every provider goes through the same gate.
 from __future__ import annotations
 
 import json
+import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
 from pydantic import ValidationError
@@ -21,6 +22,57 @@ from pydantic import ValidationError
 from .ir import Flow
 
 DEFAULT_MAX_REPAIRS = 3
+
+log = logging.getLogger("flowforge")
+
+
+@dataclass
+class Usage:
+    """
+    Running token cost for a provider. Cached input is counted separately
+    because it is billed at about a tenth of the rate, so folding it into the
+    input total would overstate what a session actually costs.
+    """
+
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+    thinking_tokens: int = 0
+
+    def add(
+        self,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        thinking_tokens: int = 0,
+    ) -> None:
+        self.calls += 1
+        self.input_tokens += input_tokens or 0
+        self.output_tokens += output_tokens or 0
+        self.cached_input_tokens += cached_input_tokens or 0
+        self.thinking_tokens += thinking_tokens or 0
+
+    def as_dict(self) -> Dict[str, int]:
+        return {
+            "calls": self.calls,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cached_input_tokens": self.cached_input_tokens,
+            "thinking_tokens": self.thinking_tokens,
+        }
+
+    def __str__(self) -> str:
+        parts = [
+            f"{self.calls} call{'' if self.calls == 1 else 's'}",
+            f"in {self.input_tokens:,}",
+            f"out {self.output_tokens:,}",
+        ]
+        if self.cached_input_tokens:
+            parts.append(f"cached {self.cached_input_tokens:,}")
+        if self.thinking_tokens:
+            parts.append(f"thinking {self.thinking_tokens:,}")
+        return ", ".join(parts)
 
 
 class LLMError(RuntimeError):
@@ -41,10 +93,15 @@ class Provider(Protocol):
     """
 
     name: str
+    usage: Usage
 
     def complete_json(
         self, system: str, messages: List[Message], schema: Dict[str, Any]
     ) -> Dict[str, Any]: ...
+
+    def complete_text(self, system: str, messages: List[Message]) -> str:
+        """Prose, for explaining a flow rather than building one."""
+        ...
 
 
 # --------------------------------------------------------------------------
@@ -84,11 +141,16 @@ value. Never write a condition as a formula string.
 - Element and outcome names must be valid API names: start with a letter, then \
 letters, digits, and single underscores. No spaces, no trailing underscore, no \
 double underscore.
-- Update Records has two mutually exclusive modes. Either update a record already \
-in a variable (`input_reference` alone), or find records by criteria and set \
-values (`object` + `filters` + `fields`). Never combine `input_reference` with \
-`fields` or `filters` - Salesforce rejects the deploy.
-- Create Records likewise takes either `input_reference` or `fields`, not both.
+- Update Records takes one of three shapes: `input_reference` alone (update the \
+record as it stands), `object` + `filters` + `fields` (find records by criteria \
+and set values), or `input_reference` + `fields` (take the record from a \
+reference and set values on it). `filters` never goes with `input_reference`.
+- A reference must be writable to set fields on it. `$Record` is. The output of \
+a Get Records with `store_output_automatically` is not - to change values on a \
+record you looked up, update by criteria filtered on its Id instead.
+- Create Records takes either `input_reference` alone, or `object` plus \
+`fields`. A variable already carries its object, so `input_reference` never \
+comes with `object` or `fields`.
 - A record retrieved with `store_output_automatically: true` is read-only. You \
 cannot assign into its fields. To change values on it, use Update Records by \
 criteria filtered on its Id.
@@ -114,6 +176,24 @@ When the request is ambiguous in a way that changes the logic, pick the reading 
 careful Salesforce admin would take and state the assumption in the flow's \
 `description`. Do not invent fields or objects you were not given - if you must \
 guess an API name, say so in the description.
+"""
+
+
+EXPLAIN_PROMPT = """\
+You explain Salesforce Flows to admins, reading the flow's IR document.
+
+The IR is the same structure as the flow itself: `start` is the trigger, \
+`elements` are the steps, and `next` is the connector between them. A `next` of \
+null means the path ends there. A Decision's own `next` is its default path; \
+each outcome has its own.
+
+Write for someone who will have to maintain this. Lead with what the flow is \
+for, then walk the paths in the order they run. Name the objects and fields it \
+touches. Where the flow does something a reader would not expect from its name, \
+say so.
+
+Be concrete and brief. No headings for a short flow, no restating the JSON, no \
+preamble about what you are about to do.
 """
 
 
@@ -147,6 +227,18 @@ class AnthropicProvider:
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
+        self.usage = Usage()
+
+    def _record(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        self.usage.add(
+            input_tokens=getattr(usage, "input_tokens", 0),
+            output_tokens=getattr(usage, "output_tokens", 0),
+            cached_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        )
+        log.info("%s %s -> %s", self.name, self.model, self.usage)
 
     def complete_json(
         self, system: str, messages: List[Message], schema: Dict[str, Any]
@@ -196,6 +288,8 @@ class AnthropicProvider:
         except anthropic.APIStatusError as exc:
             raise LLMError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
 
+        self._record(response)
+
         if response.stop_reason == "refusal":
             raise LLMError("The model declined this request.")
         if response.stop_reason == "max_tokens":
@@ -212,6 +306,29 @@ class AnthropicProvider:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise LLMError(f"The model returned malformed JSON: {exc}") from exc
+
+    def complete_text(self, system: str, messages: List[Message]) -> str:
+        import anthropic
+
+        try:
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=[
+                    {"type": "text", "text": system,
+                     "cache_control": {"type": "ephemeral"}}
+                ],
+                messages=[{"role": m.role, "content": m.content} for m in messages],
+                thinking={"type": "adaptive"},
+                output_config={"effort": self.effort},
+            )
+        except anthropic.APIStatusError as exc:
+            raise LLMError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
+
+        self._record(response)
+        if response.stop_reason == "refusal":
+            raise LLMError("The model declined this request.")
+        return "".join(b.text for b in response.content if b.type == "text").strip()
 
 
 # --------------------------------------------------------------------------
@@ -266,6 +383,19 @@ class GeminiProvider:
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
+        self.usage = Usage()
+
+    def _record(self, response) -> None:
+        meta = getattr(response, "usage_metadata", None)
+        if meta is None:
+            return
+        self.usage.add(
+            input_tokens=getattr(meta, "prompt_token_count", 0) or 0,
+            output_tokens=getattr(meta, "candidates_token_count", 0) or 0,
+            cached_input_tokens=getattr(meta, "cached_content_token_count", 0) or 0,
+            thinking_tokens=getattr(meta, "thoughts_token_count", 0) or 0,
+        )
+        log.info("%s %s -> %s", self.name, self.model, self.usage)
 
     def _available_models(self) -> List[str]:
         try:
@@ -277,19 +407,47 @@ class GeminiProvider:
         except Exception:  # listing is a nicety; never mask the original error
             return []
 
-    def complete_json(
-        self, system: str, messages: List[Message], schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        from google.genai import errors, types
+    def _contents(self, messages: List[Message]):
+        from google.genai import types
 
         # Gemini names the assistant role "model", not "assistant".
-        contents = [
+        return [
             types.Content(
                 role="user" if message.role == "user" else "model",
                 parts=[types.Part(text=message.content)],
             )
             for message in messages
         ]
+
+    def complete_text(self, system: str, messages: List[Message]) -> str:
+        from google.genai import errors, types
+
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=self.max_tokens,
+            thinking_config=types.ThinkingConfig(
+                thinking_level=_GEMINI_THINKING.get(self.effort, "HIGH")
+            ),
+        )
+        try:
+            response = self._client.models.generate_content(
+                model=self.model, contents=self._contents(messages), config=config
+            )
+        except errors.APIError as exc:
+            raise LLMError(f"Gemini API error: {exc.message}") from exc
+
+        self._record(response)
+        text = response.text
+        if not text:
+            raise LLMError("Gemini returned no text.")
+        return text.strip()
+
+    def complete_json(
+        self, system: str, messages: List[Message], schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        from google.genai import errors, types
+
+        contents = self._contents(messages)
 
         config = types.GenerateContentConfig(
             system_instruction=system,
@@ -316,6 +474,8 @@ class GeminiProvider:
             raise LLMError(f"Gemini server error: {exc.message}") from exc
         except errors.APIError as exc:
             raise LLMError(f"Gemini API error: {exc.message}") from exc
+
+        self._record(response)
 
         reason = ""
         if response.candidates:
@@ -374,11 +534,19 @@ class FlowGenerator:
         last_error: Optional[str] = None
 
         for attempt in range(self.max_repairs + 1):
+            log.info(
+                "attempt %s/%s (%s messages)",
+                attempt + 1, self.max_repairs + 1, len(conversation),
+            )
             payload = self.provider.complete_json(SYSTEM_PROMPT, conversation, self._schema)
             try:
                 flow = Flow.model_validate(payload)
             except ValidationError as exc:
                 last_error = _readable_errors(exc)
+                log.warning(
+                    "attempt %s rejected: %s",
+                    attempt + 1, last_error.replace(chr(10), ' | '),
+                )
                 if attempt == self.max_repairs:
                     break
                 # Echo back what it produced, then the exact complaint. Feeding
@@ -399,6 +567,11 @@ class FlowGenerator:
                 )
                 continue
 
+            log.info(
+                "valid IR after %s attempt%s: %s, %s element%s",
+                attempt + 1, '' if attempt == 0 else 's', flow.api_name,
+                len(flow.elements), '' if len(flow.elements) == 1 else 's',
+            )
             return GenerationResult(flow=flow, messages=conversation, repairs=attempt)
 
         raise LLMError(
@@ -408,6 +581,50 @@ class FlowGenerator:
 
     def generate(self, request: str) -> GenerationResult:
         return self._validated([Message(role="user", content=request)])
+
+    def adopt(self, flow: Flow, origin: str = "an existing flow in the org") -> GenerationResult:
+        """
+        Start a conversation from a flow that already exists, so a refinement
+        edits it rather than designing something new from its description.
+        """
+        return GenerationResult(
+            flow=flow,
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        f"Here is {origin}. Keep everything about it the same "
+                        "unless I ask for a change."
+                    ),
+                )
+            ],
+            repairs=0,
+        )
+
+    def explain(self, flow: Flow, question: Optional[str] = None) -> str:
+        """
+        Prose about what a flow does. Reads the IR rather than the XML: it is
+        the same information, an order of magnitude smaller, and already
+        validated.
+        """
+        ask = question or (
+            "Explain what this flow does, in plain language, for a Salesforce "
+            "admin who has never seen it. Cover what triggers it, what it does "
+            "on each path, and anything about it that looks risky or surprising. "
+            "Do not restate the JSON field by field."
+        )
+        return self.provider.complete_text(
+            EXPLAIN_PROMPT,
+            [
+                Message(
+                    role="user",
+                    content=(
+                        f"{ask}\n\nFlow IR:\n"
+                        f"{flow.model_dump_json(exclude_none=True, indent=1)}"
+                    ),
+                )
+            ],
+        )
 
     def refine(self, previous: GenerationResult, instruction: str) -> GenerationResult:
         """

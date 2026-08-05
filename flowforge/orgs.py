@@ -27,10 +27,13 @@ class OrgCredentials:
 def _sf_executable() -> str:
     exe = shutil.which("sf")
     if not exe:
+        # Reached from the CLI and from the web UI, so the advice has to hold
+        # in both - there is no prompt to fall back to in a browser.
         raise SfCliError(
             "The sf CLI is not on PATH. Install it with:\n"
             "    npm install -g @salesforce/cli\n"
-            "or run without --org and paste a session id at the prompt."
+            "If it is already installed, start FlowForge from a shell where "
+            "`sf` resolves - PATH differs between PowerShell and Git Bash."
         )
     return exe
 

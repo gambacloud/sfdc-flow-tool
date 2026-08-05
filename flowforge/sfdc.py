@@ -177,6 +177,51 @@ class MetadataClient:
             raise RuntimeError("deploy() returned no job id")
         return node.text
 
+    async def start_retrieve(self, flow_api_name: str) -> str:
+        body = (
+            "<met:retrieve><met:retrieveRequest>"
+            f"<met:apiVersion>{self.api_version}</met:apiVersion>"
+            "<met:singlePackage>true</met:singlePackage>"
+            f"{build_retrieve_package(flow_api_name, self.api_version)}"
+            "</met:retrieveRequest></met:retrieve>"
+        )
+        root = await self._post(body)
+        node = root.find(".//met:retrieveResponse/met:result/met:id", SOAP_NS)
+        if node is None or not node.text:
+            raise RetrieveError("retrieve() returned no job id")
+        return node.text
+
+    async def wait_for_retrieve(
+        self, job_id: str, poll_seconds: float = 1.5, timeout_seconds: float = 120.0
+    ) -> bytes:
+        body_template = (
+            "<met:checkRetrieveStatus>"
+            f"<met:asyncProcessId>{job_id}</met:asyncProcessId>"
+            "<met:includeZip>true</met:includeZip>"
+            "</met:checkRetrieveStatus>"
+        )
+        waited = 0.0
+        while waited < timeout_seconds:
+            root = await self._post(body_template)
+            result = root.find(".//met:checkRetrieveStatusResponse/met:result", SOAP_NS)
+            if result is None:
+                raise RetrieveError("checkRetrieveStatus returned no result")
+
+            done = (result.findtext("met:done", "", SOAP_NS) or "").lower() == "true"
+            if done:
+                status = result.findtext("met:status", "", SOAP_NS)
+                if status not in ("Succeeded", "SucceededPartial"):
+                    message = result.findtext("met:errorMessage", "", SOAP_NS)
+                    raise RetrieveError(f"Retrieve {status}: {message or 'no detail'}")
+                encoded = result.findtext("met:zipFile", "", SOAP_NS)
+                if not encoded:
+                    raise RetrieveError("Retrieve returned no package")
+                return base64.b64decode(encoded)
+
+            await asyncio.sleep(poll_seconds)
+            waited += poll_seconds
+        raise TimeoutError(f"retrieve {job_id} still running after {timeout_seconds}s")
+
     async def check_status(self, job_id: str) -> DeployResult:
         body = (
             "<met:checkDeployStatus>"
@@ -230,6 +275,123 @@ class MetadataClient:
             await asyncio.sleep(poll_seconds)
             waited += poll_seconds
         raise TimeoutError(f"deploy {job_id} still running after {timeout_seconds}s")
+
+
+@dataclass
+class FlowSummary:
+    api_name: str
+    label: str
+    active: bool
+    description: Optional[str] = None
+    last_modified: Optional[str] = None
+
+
+class RetrieveError(RuntimeError):
+    pass
+
+
+async def list_flows(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> List[FlowSummary]:
+    """
+    Every flow definition in the org, newest first.
+
+    FlowDefinition rather than Flow: a flow has one row per version, and what a
+    user picks from a list is the flow, not version 7 of it.
+    """
+    base = _normalise(instance_url)
+    query = (
+        "SELECT DeveloperName, MasterLabel, Description, ActiveVersionId, "
+        "LastModifiedDate FROM FlowDefinition ORDER BY LastModifiedDate DESC"
+    )
+    url = f"{base}/services/data/v{api_version}/tooling/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(fault or f"Could not list flows ({resp.status_code}): {resp.text[:300]}")
+
+    return [
+        FlowSummary(
+            api_name=record["DeveloperName"],
+            label=record.get("MasterLabel") or record["DeveloperName"],
+            active=bool(record.get("ActiveVersionId")),
+            description=record.get("Description"),
+            last_modified=record.get("LastModifiedDate"),
+        )
+        for record in resp.json().get("records", [])
+    ]
+
+
+async def flow_builder_url(
+    instance_url: str, session_id: str, flow_api_name: str, api_version: str = "62.0"
+) -> str:
+    """
+    A link straight into Flow Builder for the version that was just deployed.
+
+    Needs the version id, which only exists after the deploy, so this is
+    resolved afterwards rather than constructed from the API name. Falls back to
+    the Flows list, which is still one click from the flow.
+    """
+    base = _normalise(instance_url)
+    fallback = f"{base}/lightning/setup/Flows/home"
+
+    query = (
+        "SELECT Id FROM Flow WHERE Definition.DeveloperName = "
+        f"'{flow_api_name}' ORDER BY VersionNumber DESC LIMIT 1"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{base}/services/data/v{api_version}/tooling/query",
+                params={"q": query},
+                headers={"Authorization": f"Bearer {session_id}"},
+            )
+        if resp.status_code != 200:
+            return fallback
+        records = resp.json().get("records", [])
+        if not records:
+            return fallback
+        version_id = records[0]["Id"]
+    except (httpx.HTTPError, ValueError, KeyError):
+        # A missing link is a nuisance; a failed deploy report is not. Never let
+        # this step turn a successful deploy into an error.
+        return fallback
+
+    return f"{base}/builder_platform_interaction/flowBuilder.app?flowId={version_id}"
+
+
+def build_retrieve_package(flow_api_name: str, api_version: str) -> str:
+    return (
+        f'<met:unpackaged><met:types><met:members>{flow_api_name}</met:members>'
+        f"<met:name>Flow</met:name></met:types>"
+        f"<met:version>{api_version}</met:version></met:unpackaged>"
+    )
+
+
+async def retrieve_flow(
+    instance_url: str, session_id: str, flow_api_name: str, api_version: str = "62.0"
+) -> str:
+    """Pull one flow's metadata XML out of the org."""
+    async with MetadataClient(instance_url, session_id, api_version) as client:
+        job_id = await client.start_retrieve(flow_api_name)
+        zip_bytes = await client.wait_for_retrieve(job_id)
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        wanted = f"flows/{flow_api_name}.flow"
+        names = archive.namelist()
+        if wanted not in names:
+            # Salesforce returns an empty package rather than an error when the
+            # flow does not exist, so say that plainly.
+            raise RetrieveError(
+                f"{flow_api_name} was not in the retrieved package. "
+                "Check the API name, or that the flow has a saved version."
+            )
+        return archive.read(wanted).decode("utf-8")
 
 
 async def validate_flow(

@@ -26,6 +26,15 @@ def _args(**overrides) -> argparse.Namespace:
     return argparse.Namespace(**defaults)
 
 
+@pytest.fixture(autouse=True)
+def no_link_lookup(monkeypatch):
+    """The post-deploy link needs the org; these tests stub the org away."""
+    async def fake(*_a, **_k):
+        return "https://x/lightning/setup/Flows/home"
+
+    monkeypatch.setattr(forge, "flow_builder_url", fake)
+
+
 @pytest.fixture
 def keyboard(monkeypatch):
     """Queue answers for input(); fail loudly if the code asks more than expected."""

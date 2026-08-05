@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 from xml.dom import minidom
 
 from .ir import (
+    ActionCall,
     Assignment,
     Decision,
     Element,
@@ -246,6 +247,21 @@ def _write_loop(root: ET.Element, el: Loop, xy) -> None:
     _connector(node, "noMoreValuesConnector", el.next)
 
 
+def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
+    node = _sub(root, "actionCalls")
+    _write_common(node, el, xy)
+    _sub(node, "actionName", el.action_name)
+    _sub(node, "actionType", el.action_type)
+    _connector(node, "connector", el.next)
+    _connector(node, "faultConnector", el.fault_next)
+    for parameter in el.input_parameters:
+        ip = _sub(node, "inputParameters")
+        _sub(ip, "name", parameter.name)
+        _value_el(ip, "value", parameter.value)
+    if el.store_output_automatically:
+        _sub(node, "storeOutputAutomatically", "true")
+
+
 def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
@@ -258,6 +274,7 @@ def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
 
 
 _WRITERS = {
+    ActionCall: ("actionCalls", _write_action_call),
     Assignment: ("assignments", _write_assignment),
     Decision: ("decisions", _write_decision),
     Loop: ("loops", _write_loop),
@@ -270,6 +287,7 @@ _WRITERS = {
 
 # The order Salesforce emits Flow children in.
 _ROOT_ORDER = [
+    "actionCalls",
     "assignments",
     "decisions",
     "loops",

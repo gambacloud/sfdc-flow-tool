@@ -9,7 +9,14 @@ import json
 
 import pytest
 
-from flowforge.llm import FlowGenerator, LLMError, Message, gemini_schema, strict_schema
+from flowforge.llm import (
+    FlowGenerator,
+    LLMError,
+    Message,
+    Usage,
+    gemini_schema,
+    strict_schema,
+)
 from flowforge.ir import Flow
 
 VALID = {
@@ -73,9 +80,11 @@ class ScriptedProvider:
     def __init__(self, *payloads):
         self.payloads = list(payloads)
         self.calls = []
+        self.usage = Usage()
 
     def complete_json(self, system, messages, schema):
         self.calls.append(list(messages))
+        self.usage.add(input_tokens=100, output_tokens=50)
         return self.payloads.pop(0)
 
 
@@ -241,4 +250,4 @@ class TestGeminiDialect:
     def test_the_union_of_element_types_is_intact(self):
         elements = gemini_schema(RAW)["properties"]["elements"]["items"]
         branches = elements.get("anyOf") or elements.get("oneOf")
-        assert branches and len(branches) == 8, "lost element types from the union"
+        assert branches and len(branches) == 9, "lost element types from the union"

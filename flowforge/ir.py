@@ -210,7 +210,10 @@ class GetRecords(BaseElement):
 
 class RecordCreate(BaseElement):
     type: Literal["RecordCreate"] = "RecordCreate"
-    object: str
+    # Required in field mode; omitted when creating from a variable, because
+    # Salesforce takes the object from the variable and the XML carries no
+    # <object> at all.
+    object: Optional[str] = None
     fields: List[FieldValue] = Field(default_factory=list)
     # When set, creates from an existing sObject variable instead of field-by-field.
     input_reference: Optional[str] = None
@@ -221,10 +224,15 @@ class RecordCreate(BaseElement):
             raise ValueError(
                 f"{self.name}: RecordCreate needs either fields or input_reference"
             )
-        if self.input_reference and self.fields:
+        if self.input_reference and (self.fields or self.object):
             raise ValueError(
-                f"{self.name}: input_reference creates the record from a variable, so "
-                "it cannot be combined with fields. Use one or the other."
+                f"{self.name}: input_reference creates the record from a variable, "
+                "which already carries its object and field values, so it cannot be "
+                "combined with object or fields. Use one or the other."
+            )
+        if self.fields and not self.object:
+            raise ValueError(
+                f"{self.name}: RecordCreate with fields needs an object"
             )
         return self
 
@@ -245,16 +253,22 @@ class RecordUpdate(BaseElement):
             raise ValueError(
                 f"{self.name}: RecordUpdate needs input_reference or object"
             )
-        # Salesforce rejects a deploy that carries both: "You can't use the
-        # sObjectInputReference field with the inputAssignments field."
-        # Either update a record already held in a variable, or find records
-        # by criteria and set fields on them - never both.
-        if self.input_reference and (self.fields or self.filters):
+        # Update Records has three legitimate shapes:
+        #   1. input_reference alone      - update the record as it stands
+        #   2. object + filters + fields  - find records by criteria, set values
+        #   3. input_reference + fields   - take the ID from a record, set values
+        # Only filters are exclusive with input_reference: they select records,
+        # which is what the reference already did.
+        #
+        # Whether a particular reference may be written to is a separate
+        # question - a Get Records output stored automatically is read-only -
+        # but that depends on what the reference points at, so it cannot be
+        # settled here. It lives in the model's instructions instead.
+        if self.input_reference and self.filters:
             raise ValueError(
-                f"{self.name}: input_reference updates the record as it stands, so it "
-                "cannot be combined with fields or filters. To change values first, "
-                "put an Assignment before this element; to update by criteria, drop "
-                "input_reference and set object + filters instead."
+                f"{self.name}: input_reference already identifies the records to "
+                "update, so it cannot be combined with filters. Use one or the "
+                "other."
             )
         return self
 
@@ -284,6 +298,32 @@ class Loop(BaseElement):
     # `next` is the no-more-values connector (what runs after the loop).
 
 
+class ActionCall(BaseElement):
+    """
+    Any invocable action: an email alert, Send Email, an Apex @InvocableMethod,
+    Post to Chatter, Submit for Approval. They differ only by `action_type`.
+
+    `action_type` is a plain string rather than a fixed list: Salesforce keeps
+    adding types, and a closed list would refuse real flows that use one this
+    build has not heard of.
+    """
+
+    type: Literal["ActionCall"] = "ActionCall"
+    action_name: str = Field(
+        description="The action's API name - the Email Alert's name, the Apex "
+        "class's invocable name, and so on."
+    )
+    action_type: str = Field(
+        description="e.g. emailAlert, emailSimple, apex, submit, chatterPost, "
+        "quickAction."
+    )
+    input_parameters: List["InputAssignment"] = Field(default_factory=list)
+    store_output_automatically: bool = False
+    # Where to go if the action fails. Actions are the elements most likely to,
+    # since they leave the flow's own transaction.
+    fault_next: Optional[str] = None
+
+
 class Subflow(BaseElement):
     type: Literal["Subflow"] = "Subflow"
     flow_name: str
@@ -292,6 +332,7 @@ class Subflow(BaseElement):
 
 Element = Annotated[
     Union[
+        ActionCall,
         Assignment,
         Decision,
         GetRecords,
@@ -369,6 +410,8 @@ class Flow(BaseModel):
             targets.extend(oc.next for oc in element.outcomes if oc.next)
         if isinstance(element, Loop) and element.first_element:
             targets.append(element.first_element)
+        if isinstance(element, ActionCall) and element.fault_next:
+            targets.append(element.fault_next)
         if element.next:
             targets.append(element.next)
         return targets
@@ -393,6 +436,10 @@ class Flow(BaseModel):
                     f"  {element.name} each -> {element.first_element or '(nothing)'}"
                 )
                 lines.append(f"  {element.name} done -> {element.next or '(ends)'}")
+            elif isinstance(element, ActionCall):
+                lines.append(f"  {element.name} -> {element.next or '(ends)'}")
+                if element.fault_next:
+                    lines.append(f"  {element.name} on fault -> {element.fault_next}")
             else:
                 lines.append(f"  {element.name} -> {element.next or '(ends)'}")
         return "\n".join(lines)
@@ -441,6 +488,8 @@ class Flow(BaseModel):
                     check(oc.next, f"{el.name}.{oc.name}.next")
             if isinstance(el, Loop):
                 check(el.first_element, f"{el.name}.first_element")
+            if isinstance(el, ActionCall):
+                check(el.fault_next, f"{el.name}.fault_next")
 
         if problems:
             raise ValueError("unresolved references: " + "; ".join(problems))

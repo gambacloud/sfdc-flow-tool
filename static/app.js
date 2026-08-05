@@ -95,9 +95,11 @@ async function renderDiagram(source) {
 
 function renderTab() {
   const isDiagram = state.tab === "diagram";
+  const isExplain = state.tab === "explain";
   $("diagram").parentElement.hidden = !isDiagram;
-  $("code").hidden = isDiagram;
-  if (!isDiagram) $("code").textContent = state.artifacts[state.tab] ?? "";
+  $("explainPane").hidden = !isExplain;
+  $("code").hidden = isDiagram || isExplain;
+  if (!isDiagram && !isExplain) $("code").textContent = state.artifacts[state.tab] ?? "";
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.tab === state.tab);
   });
@@ -153,6 +155,23 @@ function renderFlow(data) {
   badge.className = "badge " + (data.status === "Active" ? "active" : "draft");
   $("versionBadge").textContent = "v" + data.version;
 
+  const usage = data.usage || {};
+  if (usage.calls) {
+    const bits = [
+      `${usage.calls} model call${usage.calls === 1 ? "" : "s"}`,
+      `${usage.input_tokens.toLocaleString()} in`,
+      `${usage.output_tokens.toLocaleString()} out`,
+    ];
+    // Cached input bills at roughly a tenth, so it is worth showing apart.
+    if (usage.cached_input_tokens) {
+      bits.push(`${usage.cached_input_tokens.toLocaleString()} cached`);
+    }
+    if (usage.thinking_tokens) {
+      bits.push(`${usage.thinking_tokens.toLocaleString()} thinking`);
+    }
+    $("usage").textContent = bits.join("  ·  ");
+  }
+
   $("log").innerHTML = "";
   data.history.forEach((entry) => {
     const node = document.createElement("div");
@@ -163,6 +182,11 @@ function renderFlow(data) {
     node.lastElementChild.textContent = entry.note;
     $("log").appendChild(node);
   });
+
+  // A new version means the old explanation describes something else.
+  $("explanation").textContent =
+    "Ask the model what this flow does, or leave the box empty for a walkthrough.";
+  $("explanation").className = "explanation dim";
 
   $("result").hidden = true;
   renderDiagram(data.mermaid);
@@ -190,6 +214,16 @@ function renderResult(result) {
     ? `${result.status} - this flow will deploy cleanly`
     : `${result.status} - Salesforce rejected it`;
   box.appendChild(title);
+
+  if (result.flow_url) {
+    const link = document.createElement("a");
+    link.href = result.flow_url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "flow-link";
+    link.textContent = "Open it in Flow Builder";
+    box.appendChild(link);
+  }
 
   if (result.failures.length) {
     const list = document.createElement("ul");
@@ -227,6 +261,72 @@ async function design() {
     renderFlow(data);
   } catch (err) {
     showError(button.parentElement, err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function loadFlows() {
+  const picker = $("flowPicker");
+  picker.innerHTML = "";
+  picker.add(new Option("Loading...", ""));
+  try {
+    const org = $("org")?.value || "";
+    const data = await api(`/api/flows${org ? "?org=" + encodeURIComponent(org) : ""}`);
+    picker.innerHTML = "";
+    if (!data.flows.length) {
+      picker.add(new Option("no flows in this org", ""));
+      return;
+    }
+    data.flows.forEach((flow) => {
+      const mark = flow.active ? "" : "  (inactive)";
+      picker.add(new Option(`${flow.label}${mark}`, flow.api_name));
+    });
+  } catch (err) {
+    picker.innerHTML = "";
+    picker.add(new Option("could not list flows", ""));
+    showError($("openPane"), err.message);
+  }
+}
+
+async function importFlow() {
+  const button = $("importBtn");
+  showError($("openPane"), "");
+  const apiName = $("flowPicker").value;
+  if (!apiName) return;
+  busy(button, true, "Opening...");
+  try {
+    const data = await api("/api/import", {
+      api_name: apiName,
+      org: $("org")?.value || null,
+      effort: $("effort").value,
+    });
+    state.validatedVersion = null;
+    state.explanation = null;
+    renderFlow(data);
+  } catch (err) {
+    showError($("openPane"), err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function explainFlow() {
+  const button = $("explainBtn");
+  const target = $("explanation");
+  busy(button, true, "Reading...");
+  target.textContent = "Reading the flow...";
+  target.className = "explanation dim";
+  try {
+    const data = await api("/api/explain", {
+      session_id: state.sessionId,
+      question: $("question").value.trim() || null,
+    });
+    target.textContent = data.explanation;
+    target.className = "explanation filled";
+  } catch (err) {
+    target.textContent = err.message;
+    target.className = "explanation dim";
   } finally {
     busy(button, false);
   }
@@ -359,7 +459,24 @@ async function boot() {
     $("env").textContent = "Could not reach the server: " + err.message;
   }
 
+  document.querySelectorAll(".mode").forEach((mode) => {
+    mode.onclick = () => {
+      const open = mode.dataset.mode === "open";
+      document.querySelectorAll(".mode").forEach((other) =>
+        other.classList.toggle("active", other === mode)
+      );
+      $("openPane").hidden = !open;
+      $("newPane").hidden = open;
+      if (open && !$("flowPicker").dataset.loaded) {
+        $("flowPicker").dataset.loaded = "1";
+        loadFlows();
+      }
+    };
+  });
+
   $("designBtn").onclick = design;
+  $("importBtn").onclick = importFlow;
+  $("explainBtn").onclick = explainFlow;
   $("refineBtn").onclick = refine;
   $("approveBtn").onclick = approve;
   $("validateBtn").onclick = validate;
@@ -371,6 +488,11 @@ async function boot() {
       renderTab();
     };
   });
+
+  // Switching org invalidates the flow list that came from the previous one.
+  $("org").onchange = () => {
+    if ($("flowPicker").dataset.loaded) loadFlows();
+  };
 
   $("request").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) design();

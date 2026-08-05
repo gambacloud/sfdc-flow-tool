@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import getpass
 import os
 import sys
@@ -37,7 +38,7 @@ from flowforge.llm import (
     Provider,
 )
 from flowforge.mermaid import to_markdown, to_mermaid
-from flowforge.sfdc import DeployResult, validate_flow
+from flowforge.sfdc import DeployResult, flow_builder_url, validate_flow
 from flowforge.xmlgen import generate as generate_xml
 
 MAX_SALESFORCE_REPAIRS = 3
@@ -280,6 +281,13 @@ async def run(args: argparse.Namespace, provider: Provider, request: str) -> int
     step("Deploying")
     result = await check(approved.flow, instance_url, token, check_only=False)
     report(result)
+    if result.success:
+        link = await flow_builder_url(
+            instance_url, token, approved.flow.api_name,
+            api_version=approved.flow.api_version,
+        )
+        print(f"\n   Open it: {link}")
+    print(f"\nTokens: {provider.usage}")
     return 0 if result.success else 1
 
 
@@ -309,6 +317,7 @@ def build_provider(args: argparse.Namespace) -> Provider:
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="   %(message)s")
     loaded = load_env(Path(__file__).parent)
     if loaded:
         print(f"Loaded from .env: {', '.join(loaded)}")

@@ -198,6 +198,137 @@ class TestDeploymentPolicy:
         assert repaired["status"] == "Draft"
 
 
+SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>60.0</apiVersion>
+    <recordUpdates>
+        <name>Mark_Hot</name><label>Mark hot</label>
+        <locationX>176</locationX><locationY>150</locationY>
+        <inputAssignments><field>Rating</field>
+            <value><stringValue>Hot</stringValue></value></inputAssignments>
+        <object>Account</object>
+    </recordUpdates>
+    <label>Existing Flow</label>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <locationX>176</locationX><locationY>0</locationY>
+        <connector><targetReference>Mark_Hot</targetReference></connector>
+        <object>Opportunity</object>
+        <recordTriggerType>Update</recordTriggerType>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+    <status>Active</status>
+</Flow>"""
+
+SCREEN_XML = SAMPLE_XML.replace(
+    "<label>Existing Flow</label>",
+    "<screens><name>Ask</name></screens><label>Existing Flow</label>",
+)
+
+
+def stub_org(monkeypatch, xml=SAMPLE_XML, flows=None):
+    async def fake_retrieve(instance_url, token, api_name, api_version="62.0"):
+        return xml
+
+    async def fake_list(instance_url, token, api_version="62.0"):
+        from flowforge.sfdc import FlowSummary
+
+        return flows if flows is not None else [
+            FlowSummary("Existing_Flow", "Existing Flow", True, None, "2026-01-01")
+        ]
+
+    monkeypatch.setattr(server, "retrieve_flow", fake_retrieve)
+    monkeypatch.setattr(server, "list_flows", fake_list)
+
+
+class TestBrowseTheOrg:
+    def test_lists_flows(self, client, monkeypatch):
+        stub_org(monkeypatch)
+        data = client.get("/api/flows").json()
+        assert data["flows"][0]["api_name"] == "Existing_Flow"
+        assert data["flows"][0]["active"] is True
+
+    def test_imports_a_flow_as_a_diagram(self, client, scripted, monkeypatch):
+        scripted(VALID)
+        stub_org(monkeypatch)
+        data = client.post("/api/import", json={"api_name": "Existing_Flow"}).json()
+
+        assert data["imported"] is True
+        assert data["api_name"] == "Existing_Flow"
+        assert "Mark_Hot" in data["mermaid"]
+        assert data["approved"] is False, "an imported flow still needs approving"
+
+    def test_import_does_not_call_the_model(self, client, scripted, monkeypatch):
+        provider = scripted()  # no payloads queued: any call would IndexError
+        stub_org(monkeypatch)
+        client.post("/api/import", json={"api_name": "Existing_Flow"})
+        assert provider.calls == [], "importing should be pure parsing"
+
+    def test_an_imported_active_flow_stays_active(self, client, scripted, monkeypatch):
+        scripted(VALID)
+        stub_org(monkeypatch)
+        data = client.post("/api/import", json={"api_name": "Existing_Flow"}).json()
+        # Opening a live flow to read it must not quietly propose deactivating it.
+        assert data["status"] == "Active"
+
+    def test_a_flow_we_cannot_model_is_refused_not_approximated(
+        self, client, scripted, monkeypatch
+    ):
+        scripted(VALID)
+        stub_org(monkeypatch, xml=SCREEN_XML)
+        response = client.post("/api/import", json={"api_name": "Existing_Flow"})
+        assert response.status_code == 422
+        assert "screen elements" in response.json()["detail"]
+
+    def test_an_imported_flow_can_be_refined(self, client, scripted, monkeypatch):
+        provider = scripted(VALID)
+        stub_org(monkeypatch)
+        session_id = client.post(
+            "/api/import", json={"api_name": "Existing_Flow"}
+        ).json()["session_id"]
+
+        refined = client.post(
+            "/api/refine",
+            json={"session_id": session_id, "instruction": "also set the description"},
+        ).json()
+        assert refined["version"] == 2
+
+        # The model saw the existing flow before the instruction, so it edits
+        # rather than designing a replacement.
+        conversation = provider.calls[0]
+        assert "Existing_Flow" in conversation[0].content
+        assert "Keep everything about it the same" in conversation[0].content
+        assert "Mark_Hot" in conversation[1].content, "the IR must precede the instruction"
+        assert conversation[-1].content == "also set the description"
+
+
+class TestExplain:
+    def test_returns_prose_about_the_flow(self, client, scripted, monkeypatch):
+        provider = scripted(VALID)
+        provider.text = "It marks accounts hot."
+        monkeypatch.setattr(
+            type(provider), "complete_text",
+            lambda self, system, messages: "It marks accounts hot.", raising=False,
+        )
+        session_id = design(client)["session_id"]
+        data = client.post("/api/explain", json={"session_id": session_id}).json()
+        assert data["explanation"] == "It marks accounts hot."
+
+    def test_the_model_is_given_the_ir_not_the_xml(self, client, scripted, monkeypatch):
+        provider = scripted(VALID)
+        seen = {}
+
+        def fake_text(self, system, messages):
+            seen["content"] = messages[-1].content
+            return "ok"
+
+        monkeypatch.setattr(type(provider), "complete_text", fake_text, raising=False)
+        session_id = design(client)["session_id"]
+        client.post("/api/explain", json={"session_id": session_id})
+        assert '"api_name"' in seen["content"], "expected the IR"
+        assert "<Flow" not in seen["content"], "the XML is bigger and adds nothing"
+
+
 class TestDeploy:
     def test_approved_and_confirmed_deploys_for_real(self, client, scripted, monkeypatch):
         scripted(VALID)

@@ -11,6 +11,7 @@ user approved is still the current one. A client-side check would be decoration.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -33,7 +34,14 @@ from flowforge.llm import (
 )
 from flowforge.llm import GeminiProvider
 from flowforge.mermaid import to_markdown, to_mermaid
-from flowforge.sfdc import validate_flow
+from flowforge.parse import UnsupportedFlow, parse_flow
+from flowforge.sfdc import (
+    RetrieveError,
+    flow_builder_url,
+    list_flows,
+    retrieve_flow,
+    validate_flow,
+)
 from flowforge.xmlgen import generate as generate_xml
 
 ROOT = Path(__file__).parent
@@ -67,6 +75,8 @@ class Session:
     # What the org said last time, kept so a repair does not depend on the
     # browser sending error text back to the server.
     last_failures: List[str] = field(default_factory=list)
+    # True when the flow came out of the org rather than from a description.
+    imported: bool = False
 
     @property
     def flow(self) -> Flow:
@@ -120,6 +130,8 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
         "markdown": to_markdown(flow),
         "ir": flow.model_dump(exclude_none=True),
         "repairs": session.result.repairs,
+        "usage": session.generator.provider.usage.as_dict(),
+        "imported": session.imported,
         "history": session.history,
     }
 
@@ -198,6 +210,20 @@ class DeployRequest(OrgRequest):
     confirm: bool = False
 
 
+class ImportRequest(BaseModel):
+    api_name: str
+    org: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: str = "high"
+    api_version: str = "62.0"
+
+
+class ExplainRequest(BaseModel):
+    session_id: str
+    question: Optional[str] = None
+
+
 # --------------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------------
@@ -245,6 +271,79 @@ def design(body: DesignRequest) -> Dict[str, Any]:
     session.apply_policy()
     SESSIONS[session_id] = session
     return view(session_id, session)
+
+
+@app.get("/api/flows")
+async def flows(org: Optional[str] = None) -> Dict[str, Any]:
+    instance_url, token = credentials(org)
+    try:
+        found = await list_flows(instance_url, token)
+    except RetrieveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "flows": [
+            {
+                "api_name": flow.api_name,
+                "label": flow.label,
+                "active": flow.active,
+                "description": flow.description,
+                "last_modified": flow.last_modified,
+            }
+            for flow in found
+        ]
+    }
+
+
+@app.post("/api/import")
+async def import_flow(body: ImportRequest) -> Dict[str, Any]:
+    """
+    Pull a flow out of the org and adopt it, so the next refinement edits it
+    rather than designing a replacement from its description.
+    """
+    instance_url, token = credentials(body.org)
+    try:
+        xml = await retrieve_flow(
+            instance_url, token, body.api_name, api_version=body.api_version
+        )
+    except (RetrieveError, TimeoutError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
+        flow = parse_flow(xml, api_name=body.api_name)
+    except UnsupportedFlow as exc:
+        # Refusing is the point: a diagram missing the parts we cannot model
+        # would describe a different flow than the one in the org.
+        raise HTTPException(422, str(exc)) from exc
+
+    try:
+        provider = build_provider(body.provider, body.model, body.effort)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    generator = FlowGenerator(provider)
+    session_id = uuid.uuid4().hex
+    session = Session(
+        generator=generator,
+        result=generator.adopt(flow, f"the flow {body.api_name} from {instance_url}"),
+        # An imported flow keeps the status it already has in the org, so
+        # opening one to read it cannot quietly propose deactivating it.
+        activate=flow.status == "Active",
+        api_version=flow.api_version,
+        history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
+        imported=True,
+    )
+    session.apply_policy()
+    SESSIONS[session_id] = session
+    return view(session_id, session)
+
+
+@app.post("/api/explain")
+def explain(body: ExplainRequest) -> Dict[str, str]:
+    session = get_session(body.session_id)
+    try:
+        return {"explanation": session.generator.explain(session.flow, body.question)}
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/refine")
@@ -336,11 +435,16 @@ async def deploy(body: DeployRequest) -> Dict[str, Any]:
     failures = [str(failure) for failure in result.failures]
     if not failures and result.error_message:
         failures = [result.error_message]
+    link = await flow_builder_url(
+        instance_url, token, session.flow.api_name,
+        api_version=session.flow.api_version,
+    )
     return {
         "success": result.success,
         "status": result.status,
         "failures": failures,
         "instance_url": instance_url,
+        "flow_url": link if result.success else None,
     }
 
 
@@ -375,6 +479,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S"
+    )
     print(f"FlowForge on http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

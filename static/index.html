@@ -11,12 +11,32 @@
 <header>
   <h1>FlowForge</h1>
   <div class="meta" id="env"></div>
+  <label class="header-org">Org
+    <select id="org"></select>
+  </label>
 </header>
 
 <main>
   <!-- Left: the conversation -->
   <section class="panel" id="left">
     <div class="pad">
+      <div class="modes">
+        <button class="mode active" data-mode="new">Describe a new flow</button>
+        <button class="mode" data-mode="open">Open one from the org</button>
+      </div>
+    </div>
+
+    <div class="pad" id="openPane" hidden>
+      <label for="flowPicker">Flows in the org</label>
+      <select id="flowPicker"><option value="">Loading...</option></select>
+      <button id="importBtn" class="primary">Open it</button>
+      <p class="dim" id="openNote">
+        Flows using screens, waits, or Apex actions are refused rather than
+        drawn approximately.
+      </p>
+    </div>
+
+    <div class="pad" id="newPane">
       <label for="request">What should the flow do?</label>
       <textarea id="request" rows="4"
         placeholder="When an opportunity is won, mark its account as Hot"></textarea>
@@ -76,6 +96,7 @@
       </div>
 
       <p class="desc" id="flowDesc"></p>
+      <div class="meta usage" id="usage"></div>
 
       <div class="diagram-wrap">
         <div id="diagram"></div>
@@ -83,17 +104,25 @@
 
       <div class="tabs">
         <button class="tab active" data-tab="diagram">Diagram</button>
+        <button class="tab" data-tab="explain">Explain</button>
         <button class="tab" data-tab="markdown">Documentation</button>
         <button class="tab" data-tab="xml">Flow XML</button>
         <button class="tab" data-tab="ir">IR</button>
       </div>
       <pre id="code" hidden></pre>
 
+      <div id="explainPane" hidden>
+        <div class="row">
+          <input id="question" placeholder="Ask something about this flow (optional)">
+          <button id="explainBtn">Explain</button>
+        </div>
+        <div id="explanation" class="explanation dim">
+          Ask the model what this flow does, or leave the box empty for a walkthrough.
+        </div>
+      </div>
+
       <div class="actions">
         <div class="row">
-          <label>Org
-            <select id="org"></select>
-          </label>
           <button id="approveBtn" class="primary">Approve</button>
           <button id="validateBtn" disabled>Validate</button>
           <button id="deployBtn" class="danger" disabled>Deploy</button>

@@ -1,12 +1,104 @@
 # FlowForge
 
-Describe business logic in plain language. Get a Salesforce Flow that deploys.
+Describe business logic in plain language, get a Salesforce Flow that deploys.
+Or open a flow that already exists, ask what it does, and change it.
 
 ```
-description -> IR -> graph -> your approval -> Flow XML -> checkOnly -> deploy
+description ─┐
+             ├─► IR ─► diagram ─► your approval ─► Flow XML ─► checkOnly ─► deploy
+existing flow┘
 ```
 
-## Why it works this way
+## Install
+
+Needs **Python 3.11+**. Node is optional — only for the Salesforce CLI.
+
+```bash
+git clone https://github.com/gambacloud/sfdc-flow-forge.git
+```
+
+```bash
+cd sfdc-flow-forge; python -m venv .venv; .venv/Scripts/python.exe -m pip install -r requirements.txt
+```
+
+On macOS or Linux the interpreter is `.venv/bin/python` instead.
+
+### 1. An LLM key
+
+Create a file called `.env` next to `forge.py`:
+
+```
+GEMINI_API_KEY=your-key
+```
+
+`ANTHROPIC_API_KEY=sk-ant-...` works too — whichever key is present is the one
+used. `.env` is gitignored.
+
+Use the file rather than a shell variable. A variable set with `$env:` or
+`export` only lives in that one shell, so setting it in one command and running
+the tool in the next silently does nothing. An environment variable that *is*
+set still wins over the file.
+
+**Never put a key in a source file.** It is the one place that gets committed.
+
+### 2. An org (optional, but needed to validate or deploy)
+
+```bash
+npm install -g @salesforce/cli
+```
+
+```bash
+sf org login web --alias dev
+```
+
+FlowForge reads credentials from the CLI, so no token is ever typed into the app
+or sent over HTTP. Without the CLI you can still design flows and export the XML;
+`forge.py` will also take a session id typed at a hidden prompt.
+
+Start FlowForge from a shell where `sf` resolves — PATH differs between
+PowerShell and Git Bash.
+
+### 3. Check it works
+
+```bash
+.venv/Scripts/python.exe -m pytest tests -q
+```
+
+151 tests, none of which need a key, a network, or an org.
+
+## Use it
+
+### Web UI
+
+```bash
+.venv/Scripts/python.exe server.py
+```
+
+Open `http://localhost:8000`.
+
+Describe a flow, or pick one from the org. You get a rendered diagram, an
+**Explain** tab that reads the flow back to you in prose, and tabs for the
+generated Markdown, Flow XML, and IR. Change it by asking. Approve, validate,
+deploy — with a link straight into Flow Builder when it lands.
+
+### CLI
+
+```bash
+.venv/Scripts/python.exe forge.py "when an opportunity is won, mark its account hot" --org dev
+```
+
+| Flag | Effect |
+|---|---|
+| `--org [ALIAS]` | Credentials from the `sf` CLI instead of a prompt |
+| `--out DIR` | Write `.flow-meta.xml`, `.md`, and `.ir.json` |
+| `--no-validate` | Design only; never contacts the org |
+| `--deploy` | Offer to deploy after validation passes |
+| `--activate` | Deploy Active. Without it, flows deploy as Drafts |
+| `--provider` | `gemini` or `anthropic` (default: whichever key is set) |
+| `--model` | Override the provider's default model |
+| `--effort` | `low` … `max` (default `high`) |
+
+## How it works
 
 An LLM asked to write Flow XML directly gets it wrong almost every time — empty
 `<object>` tags, element names with spaces, connectors pointing at elements that
@@ -18,107 +110,42 @@ reference to an "End" element that Flow XML doesn't have. A condition is
 `(left, operator, typed value)`, not a formula string. Every connector target is
 checked before any metadata exists.
 
-Both the diagram you approve and the XML that deploys are generated from that
-same IR, so they cannot disagree.
+Both the diagram you approve and the XML that deploys come from that same IR, so
+they cannot disagree. When Salesforce does reject something, the error goes back
+to the model and the corrected flow comes back through approval again.
 
-When Salesforce does reject something, the error goes back to the model and the
-corrected flow comes back through approval again.
+Nothing reaches the org before you approve it, and the gate is enforced by the
+server rather than the browser: every change bumps the flow's version, and
+validate and deploy refuse unless the version you approved is still current.
 
-## Setup
+## Opening an existing flow
 
-```bash
-git clone <this repo> && cd sfdc-flow-forge
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt
-```
+FlowForge retrieves the metadata, parses it back into IR, and draws it. From
+there it behaves like any other flow — explain, refine, approve, redeploy.
 
-Put your LLM key in a `.env` file next to `forge.py`:
+A flow using screens, waits, formula resources, or other constructs the IR can't
+hold is **refused, not drawn approximately**, naming what it found. Skipping
+those parts would show a diagram of a different flow than the one in the org, and
+editing from that diagram would delete them on deploy.
 
-```
-GEMINI_API_KEY=your-key
-# or: ANTHROPIC_API_KEY=sk-ant-...
-```
+`parse(generate(ir)) == ir` is asserted for every element type in
+`tests/test_roundtrip.py`. That property is what makes an edit round-trip safe.
 
-Whichever key is present is the provider that gets used; override with
-`--provider gemini|anthropic` and `--model <id>`.
+## What it covers
 
-`.env` is gitignored. Use the file rather than a shell variable — a variable set
-with `$env:` or `export` only lives in that one shell, so setting it in one
-command and running the tool in the next silently does nothing. An environment
-variable that *is* set still wins over the file.
+Record-triggered and autolaunched flows:
 
-**Never put a key in a source file.** It is the one place that gets committed.
-
-For org access, either install the Salesforce CLI:
-
-```bash
-npm install -g @salesforce/cli
-```
-
-```bash
-sf org login web --alias dev
-```
-
-…or skip it and paste a session id at the prompt (hidden input, never stored).
-
-## Use
-
-### Web UI
-
-```bash
-.venv/Scripts/python.exe server.py
-```
-
-Open `http://localhost:8000`. Describe the flow, read the rendered diagram,
-approve it, validate it against an org, deploy it.
-
-The approval gate is enforced by the server, not the browser: every change bumps
-the flow's version, and `validate` and `deploy` return 403 unless the version you
-approved is still the current one. A repair — which round-trips through the model
-— produces a new version, so it needs approving again.
-
-Only the `sf` CLI path is exposed over HTTP, so no org token ever crosses it.
-Start the server from a shell where `sf` is on PATH, or the org list comes up
-empty.
-
-### CLI
-
-```bash
-.venv/Scripts/python.exe forge.py "when an opportunity is won, mark its account hot" --org dev
-```
-
-You get a Mermaid graph and a summary, then `approve` / `refine` / `quit`.
-Refining edits the IR, so the graph and the XML stay in step. Only after you
-approve does anything reach the org, and only as `checkOnly` — deploying needs
-`--deploy` **and** a second confirmation.
-
-| Flag | Effect |
+| | |
 |---|---|
-| `--org [ALIAS]` | Credentials from the `sf` CLI instead of a prompt |
-| `--out DIR` | Write `.flow-meta.xml`, `.md`, and `.ir.json` |
-| `--no-validate` | Design only; never contacts the org |
-| `--deploy` | Offer to deploy after validation passes |
-| `--provider` | `gemini` or `anthropic` (default: whichever key is set) |
-| `--model` | Override the provider's default model |
-| `--effort` | `low` … `max` (default `high`) |
+| Assignment | Set variable values |
+| Decision | Branch on structured conditions |
+| Get / Create / Update / Delete Records | |
+| Loop | |
+| Subflow | |
+| **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 
-### Adding a provider
-
-Implement `complete_json(system, messages, schema)` and register it in
-`forge.PROVIDERS`. Validation is not your concern — it happens once, centrally,
-so every provider goes through the same gate.
-
-The one real work is the schema dialect. Providers disagree on which JSON Schema
-keywords they accept: Anthropic takes `const`, Gemini does not and needs a
-single-value `enum`; Gemini rejects `default` and `discriminator` outright.
-`flowforge/llm.py` has an adapter per dialect, and the tests assert that each one
-emits only keywords that provider documents — and that neither of them eats your
-field names on the way through.
-
-## Scope
-
-Record-triggered and autolaunched flows: Assignment, Decision, Get/Create/Update/
-Delete Records, Loop, Subflow. Screen flows are not supported.
+Formula **fields** on an object work anywhere a reference does (`$Record.Margin__c`).
+Formula **resources** defined inside a flow do not. Screen flows are out of scope.
 
 ## Layout
 
@@ -126,20 +153,33 @@ Delete Records, Loop, Subflow. Screen flows are not supported.
 |---|---|
 | `flowforge/ir.py` | The IR — the single source of truth |
 | `flowforge/xmlgen.py` | IR → Flow XML, deterministic, with auto-layout |
+| `flowforge/parse.py` | Flow XML → IR, or a refusal naming what it can't model |
 | `flowforge/mermaid.py` | IR → Mermaid + Markdown |
 | `flowforge/llm.py` | Text → IR, bring-your-own-key, self-repairing |
-| `flowforge/sfdc.py` | Metadata API: package, validate, deploy |
+| `flowforge/sfdc.py` | Metadata API: list, retrieve, validate, deploy |
 | `flowforge/orgs.py` | Reads org credentials from the `sf` CLI |
 | `flowforge/config.py` | Loads `.env` |
 | `forge.py` | The pipeline, as a CLI |
 | `server.py` | The pipeline, over HTTP |
-| `static/` | The web UI |
 | `diagnose.py` | Isolates where org authentication breaks |
 
-```bash
-.venv/Scripts/python.exe -m pytest tests -q
-```
+### Adding a provider
 
-The tests run without an API key, a network, or an org: the LLM is scripted and
-the org is stubbed. They cover the IR's invariants, the XML the compiler emits,
-the self-repair loop, and the approval gates.
+Implement `complete_json` and `complete_text`, then register it in
+`PROVIDERS`. Validation is not your concern — it happens once, centrally.
+
+The real work is the schema dialect. Providers disagree on which JSON Schema
+keywords they accept: Anthropic takes `const`, Gemini needs a single-value `enum`
+and rejects `default` and `discriminator`. `flowforge/llm.py` has an adapter per
+dialect, and the tests assert each one emits only keywords that provider
+documents — and that neither eats your field names on the way through.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `No LLM key found` | `.env` missing, misnamed, or in the wrong directory — the message prints the full path it wants |
+| `sf CLI is not on PATH` | Started from a shell where `sf` doesn't resolve |
+| Org list empty | Same |
+| `INVALID_SESSION_ID` | Run `python diagnose.py --org dev`; it isolates which layer is failing |
+| A flow won't open | The refusal names the construct. That's a gap in the IR, not a broken flow |
