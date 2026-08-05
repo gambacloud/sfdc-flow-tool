@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.flow-meta.xml
+out/
+dist/
+build/
+.pytest_cache/
