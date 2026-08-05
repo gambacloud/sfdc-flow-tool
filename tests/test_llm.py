@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from flowforge.llm import (
+from flowtool.llm import (
     FlowGenerator,
     LLMError,
     Message,
@@ -17,7 +17,7 @@ from flowforge.llm import (
     gemini_schema,
     strict_schema,
 )
-from flowforge.ir import Flow
+from flowtool.ir import Flow
 
 VALID = {
     "api_name": "Won_Deal_Flow",

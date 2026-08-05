@@ -2,7 +2,7 @@
 
 import os
 
-from flowforge.config import ENV_FILENAME, env_help, load_env, parse_env
+from flowtool.config import ENV_FILENAME, env_help, load_env, parse_env
 
 
 class TestParse:

@@ -1,4 +1,4 @@
-# FlowForge
+# SFDC Flow Tool
 
 Describe business logic in plain language, get a Salesforce Flow that deploys.
 Or open a flow that already exists, ask what it does, and change it.
@@ -14,11 +14,11 @@ existing flow┘
 Needs **Python 3.11+**. Node is optional — only for the Salesforce CLI.
 
 ```bash
-git clone https://github.com/gambacloud/sfdc-flow-forge.git
+git clone https://github.com/gambacloud/sfdc-flow-tool.git
 ```
 
 ```bash
-cd sfdc-flow-forge; python -m venv .venv; .venv/Scripts/python.exe -m pip install -r requirements.txt
+cd sfdc-flow-tool; python -m venv .venv; .venv/Scripts/python.exe -m pip install -r requirements.txt
 ```
 
 On macOS or Linux the interpreter is `.venv/bin/python` instead.
@@ -51,11 +51,11 @@ npm install -g @salesforce/cli
 sf org login web --alias dev
 ```
 
-FlowForge reads credentials from the CLI, so no token is ever typed into the app
+SFDC Flow Tool reads credentials from the CLI, so no token is ever typed into the app
 or sent over HTTP. Without the CLI you can still design flows and export the XML;
 `forge.py` will also take a session id typed at a hidden prompt.
 
-Start FlowForge from a shell where `sf` resolves — PATH differs between
+Start SFDC Flow Tool from a shell where `sf` resolves — PATH differs between
 PowerShell and Git Bash.
 
 ### 3. Check it works
@@ -120,7 +120,7 @@ validate and deploy refuse unless the version you approved is still current.
 
 ## Opening an existing flow
 
-FlowForge retrieves the metadata, parses it back into IR, and draws it. From
+SFDC Flow Tool retrieves the metadata, parses it back into IR, and draws it. From
 there it behaves like any other flow — explain, refine, approve, redeploy.
 
 A flow using screens, waits, formula resources, or other constructs the IR can't
@@ -151,14 +151,14 @@ Formula **resources** defined inside a flow do not. Screen flows are out of scop
 
 | Module | Role |
 |---|---|
-| `flowforge/ir.py` | The IR — the single source of truth |
-| `flowforge/xmlgen.py` | IR → Flow XML, deterministic, with auto-layout |
-| `flowforge/parse.py` | Flow XML → IR, or a refusal naming what it can't model |
-| `flowforge/mermaid.py` | IR → Mermaid + Markdown |
-| `flowforge/llm.py` | Text → IR, bring-your-own-key, self-repairing |
-| `flowforge/sfdc.py` | Metadata API: list, retrieve, validate, deploy |
-| `flowforge/orgs.py` | Reads org credentials from the `sf` CLI |
-| `flowforge/config.py` | Loads `.env` |
+| `flowtool/ir.py` | The IR — the single source of truth |
+| `flowtool/xmlgen.py` | IR → Flow XML, deterministic, with auto-layout |
+| `flowtool/parse.py` | Flow XML → IR, or a refusal naming what it can't model |
+| `flowtool/mermaid.py` | IR → Mermaid + Markdown |
+| `flowtool/llm.py` | Text → IR, bring-your-own-key, self-repairing |
+| `flowtool/sfdc.py` | Metadata API: list, retrieve, validate, deploy |
+| `flowtool/orgs.py` | Reads org credentials from the `sf` CLI |
+| `flowtool/config.py` | Loads `.env` |
 | `forge.py` | The pipeline, as a CLI |
 | `server.py` | The pipeline, over HTTP |
 | `diagnose.py` | Isolates where org authentication breaks |
@@ -170,7 +170,7 @@ Implement `complete_json` and `complete_text`, then register it in
 
 The real work is the schema dialect. Providers disagree on which JSON Schema
 keywords they accept: Anthropic takes `const`, Gemini needs a single-value `enum`
-and rejects `default` and `discriminator`. `flowforge/llm.py` has an adapter per
+and rejects `default` and `discriminator`. `flowtool/llm.py` has an adapter per
 dialect, and the tests assert each one emits only keywords that provider
 documents — and that neither eats your field names on the way through.
 

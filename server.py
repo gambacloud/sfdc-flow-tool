@@ -23,31 +23,31 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from flowforge.config import load_env
-from flowforge.ir import Flow
-from flowforge.llm import (
+from flowtool.config import load_env
+from flowtool.ir import Flow
+from flowtool.llm import (
     AnthropicProvider,
     FlowGenerator,
     GenerationResult,
     LLMError,
     Provider,
 )
-from flowforge.llm import GeminiProvider
-from flowforge.mermaid import to_markdown, to_mermaid
-from flowforge.parse import UnsupportedFlow, parse_flow
-from flowforge.sfdc import (
+from flowtool.llm import GeminiProvider
+from flowtool.mermaid import to_markdown, to_mermaid
+from flowtool.parse import UnsupportedFlow, parse_flow
+from flowtool.sfdc import (
     RetrieveError,
     flow_builder_url,
     list_flows,
     retrieve_flow,
     validate_flow,
 )
-from flowforge.xmlgen import generate as generate_xml
+from flowtool.xmlgen import generate as generate_xml
 
 ROOT = Path(__file__).parent
 load_env(ROOT)
 
-app = FastAPI(title="FlowForge")
+app = FastAPI(title="SFDC Flow Tool")
 
 PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider}
 
@@ -168,7 +168,7 @@ def build_provider(name: Optional[str], model: Optional[str], effort: str) -> Pr
 
 def credentials(org_alias: Optional[str]) -> tuple[str, str]:
     """Only the sf CLI path is exposed over HTTP - no token ever crosses it."""
-    from flowforge.orgs import SfCliError, get_org
+    from flowtool.orgs import SfCliError, get_org
 
     try:
         org = get_org(org_alias or None)
@@ -235,7 +235,7 @@ def config() -> Dict[str, Any]:
     orgs: List[str] = []
     cli = True
     try:
-        from flowforge.orgs import list_orgs
+        from flowtool.orgs import list_orgs
 
         orgs = list_orgs()
     except Exception:
@@ -474,7 +474,7 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 def main() -> None:
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="FlowForge web UI")
+    parser = argparse.ArgumentParser(description="SFDC Flow Tool web UI")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
@@ -482,7 +482,7 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S"
     )
-    print(f"FlowForge on http://{args.host}:{args.port}")
+    print(f"SFDC Flow Tool on http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

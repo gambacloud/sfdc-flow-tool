@@ -4,7 +4,7 @@ The diagram is what the user approves, so it must not misstate the logic.
 
 import pytest
 
-from flowforge.ir import (
+from flowtool.ir import (
     Condition,
     Decision,
     Flow,
@@ -14,7 +14,7 @@ from flowforge.ir import (
     Start,
     Value,
 )
-from flowforge.mermaid import condition_text, filter_text, to_markdown, to_mermaid
+from flowtool.mermaid import condition_text, filter_text, to_markdown, to_mermaid
 
 
 class TestUnaryOperators:

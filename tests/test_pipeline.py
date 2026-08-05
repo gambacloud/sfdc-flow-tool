@@ -13,8 +13,8 @@ from typing import List
 import pytest
 
 import forge
-from flowforge.llm import FlowGenerator
-from flowforge.sfdc import ComponentProblem, DeployResult
+from flowtool.llm import FlowGenerator
+from flowtool.sfdc import ComponentProblem, DeployResult
 from tests.test_llm import DANGLING, VALID, ScriptedProvider
 
 

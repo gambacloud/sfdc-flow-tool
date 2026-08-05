@@ -9,8 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
-from flowforge.llm import FlowGenerator
-from flowforge.sfdc import ComponentProblem, DeployResult
+from flowtool.llm import FlowGenerator
+from flowtool.sfdc import ComponentProblem, DeployResult
 from tests.test_llm import VALID, ScriptedProvider
 
 ACTIVE = dict(VALID, status="Active", api_version="60.0")
@@ -231,7 +231,7 @@ def stub_org(monkeypatch, xml=SAMPLE_XML, flows=None):
         return xml
 
     async def fake_list(instance_url, token, api_version="62.0"):
-        from flowforge.sfdc import FlowSummary
+        from flowtool.sfdc import FlowSummary
 
         return flows if flows is not None else [
             FlowSummary("Existing_Flow", "Existing Flow", True, None, "2026-01-01")

@@ -23,7 +23,7 @@ from .ir import Flow
 
 DEFAULT_MAX_REPAIRS = 3
 
-log = logging.getLogger("flowforge")
+log = logging.getLogger("flowtool")
 
 
 @dataclass

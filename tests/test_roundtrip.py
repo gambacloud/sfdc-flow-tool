@@ -8,7 +8,7 @@ than what is in the org, and editing that flow would deploy the difference.
 
 import pytest
 
-from flowforge.ir import (
+from flowtool.ir import (
     ActionCall,
     Assignment,
     AssignmentItem,
@@ -29,8 +29,8 @@ from flowforge.ir import (
     Value,
     Variable,
 )
-from flowforge.parse import UnsupportedFlow, parse_flow
-from flowforge.xmlgen import generate
+from flowtool.parse import UnsupportedFlow, parse_flow
+from flowtool.xmlgen import generate
 
 
 def roundtrip(flow: Flow) -> Flow:

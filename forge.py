@@ -27,9 +27,9 @@ from typing import List, Optional, Tuple
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from flowforge.config import env_help, load_env
-from flowforge.ir import Flow
-from flowforge.llm import (
+from flowtool.config import env_help, load_env
+from flowtool.ir import Flow
+from flowtool.llm import (
     AnthropicProvider,
     FlowGenerator,
     GeminiProvider,
@@ -37,9 +37,9 @@ from flowforge.llm import (
     LLMError,
     Provider,
 )
-from flowforge.mermaid import to_markdown, to_mermaid
-from flowforge.sfdc import DeployResult, flow_builder_url, validate_flow
-from flowforge.xmlgen import generate as generate_xml
+from flowtool.mermaid import to_markdown, to_mermaid
+from flowtool.sfdc import DeployResult, flow_builder_url, validate_flow
+from flowtool.xmlgen import generate as generate_xml
 
 MAX_SALESFORCE_REPAIRS = 3
 
@@ -117,7 +117,7 @@ def ask(prompt: str, options: List[str]) -> str:
 
 def credentials(use_cli: bool, alias: Optional[str]) -> Optional[Tuple[str, str]]:
     if use_cli:
-        from flowforge.orgs import SfCliError, get_org
+        from flowtool.orgs import SfCliError, get_org
 
         try:
             org = get_org(alias)

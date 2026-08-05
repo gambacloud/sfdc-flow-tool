@@ -50,7 +50,7 @@ class UnsupportedFlow(ValueError):
         self.api_name = api_name
         subject = f"{api_name} " if api_name else ""
         super().__init__(
-            f"{subject}uses Flow features FlowForge cannot represent yet:\n"
+            f"{subject}uses Flow features SFDC Flow Tool cannot represent yet:\n"
             + "\n".join(f"  - {reason}" for reason in reasons)
         )
 
@@ -358,7 +358,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                 # the IR is stricter than Salesforce, not that the flow is
                 # broken. Report it as a gap rather than a 500.
                 name = _text(node, "m:name") or tag
-                reasons.append(f"{name} does not fit FlowForge's model: {exc}")
+                reasons.append(f"{name} does not fit SFDC Flow Tool's model: {exc}")
 
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
@@ -402,7 +402,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         # The flow deployed, so this means the IR is stricter than Salesforce.
         # Say so plainly rather than pretending the flow is malformed.
         raise UnsupportedFlow(
-            [f"it does not fit FlowForge's model: {exc}"], api_name or label
+            [f"it does not fit SFDC Flow Tool's model: {exc}"], api_name or label
         ) from exc
 
 

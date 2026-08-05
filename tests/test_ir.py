@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from flowforge.ir import (
+from flowtool.ir import (
     RecordFilter,
     Loop,
     Assignment,

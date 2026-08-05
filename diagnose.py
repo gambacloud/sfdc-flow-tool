@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 
 import httpx
 
-from flowforge.sfdc import METADATA_NS, _fault_string, _normalise
+from flowtool.sfdc import METADATA_NS, _fault_string, _normalise
 
 API_VERSION = "62.0"
 
@@ -174,7 +174,7 @@ async def run(instance_url: str, token: str) -> int:
 
 def credentials(use_cli: bool, alias: Optional[str]) -> Optional[Tuple[str, str]]:
     if use_cli:
-        from flowforge.orgs import SfCliError, get_org
+        from flowtool.orgs import SfCliError, get_org
 
         try:
             org = get_org(alias)

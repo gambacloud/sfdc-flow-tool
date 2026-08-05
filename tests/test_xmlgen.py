@@ -5,7 +5,7 @@ Salesforce rejects, so a regression is caught without touching an org.
 
 import xml.etree.ElementTree as ET
 
-from flowforge.ir import (
+from flowtool.ir import (
     Condition,
     Decision,
     FieldValue,
@@ -17,7 +17,7 @@ from flowforge.ir import (
     Start,
     Value,
 )
-from flowforge.xmlgen import METADATA_NS, compute_layout, generate
+from flowtool.xmlgen import METADATA_NS, compute_layout, generate
 
 NS = {"m": METADATA_NS}
 
