@@ -142,7 +142,8 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
     if isinstance(element, Subflow):
         return f'{name}[["{text}"]]'
     if isinstance(element, ActionCall):
-        return f'{name}[/"{text}"\]'
+        # Mermaid's trapezoid ends with a literal backslash, hence the raw string.
+        return rf'{name}[/"{text}"\]'
     if isinstance(element, (RecordCreate, RecordUpdate, RecordDelete, GetRecords)):
         return f'{name}[("{text}")]'
     return f'{name}["{text}"]'
@@ -233,6 +234,12 @@ def to_mermaid(flow: Flow) -> str:
             edge(element.name, element.next, "done", dotted=True)
         else:
             edge(element.name, element.next)
+
+        # A fault path is real control flow; leaving it off the diagram would
+        # mean approving a flow whose error handling is invisible.
+        fault = getattr(element, "fault_next", None)
+        if fault:
+            edge(element.name, fault, "on error", dotted=True)
 
     if needs_end:
         lines.append("    " + _node(_END_NODE, "End", None))

@@ -94,6 +94,97 @@ _KNOWN_UNSUPPORTED = {
 }
 
 
+# --------------------------------------------------------------------------
+# What each element is allowed to contain
+# --------------------------------------------------------------------------
+#
+# Checking only the root let anything nested slip through unnoticed: a
+# faultConnector on a Get Records, a scheduled path on the start, an output
+# parameter on an action. Each was read as if it were not there, drawn as if it
+# were not there, and deleted on the next deploy. Every level is checked now.
+
+# Present on every element and carrying no logic of its own.
+_ELEMENT_COMMON = {
+    "name", "label", "locationX", "locationY", "description", "connector",
+    "processMetadataValues",
+}
+_FAULT = {"faultConnector"}
+
+_ELEMENT_CHILDREN = {
+    "assignments": _ELEMENT_COMMON | {"assignmentItems"},
+    "decisions": _ELEMENT_COMMON | {
+        "rules", "defaultConnector", "defaultConnectorLabel",
+    },
+    "loops": _ELEMENT_COMMON | {
+        "collectionReference", "iterationOrder", "nextValueConnector",
+        "noMoreValuesConnector",
+    },
+    "recordLookups": _ELEMENT_COMMON | _FAULT | {
+        "object", "filters", "filterLogic", "getFirstRecordOnly",
+        "storeOutputAutomatically", "assignNullValuesIfNoRecordsFound",
+        "sortField", "sortOrder",
+    },
+    "recordCreates": _ELEMENT_COMMON | _FAULT | {
+        "object", "inputAssignments", "inputReference", "storeOutputAutomatically",
+    },
+    "recordUpdates": _ELEMENT_COMMON | _FAULT | {
+        "object", "filters", "filterLogic", "inputAssignments", "inputReference",
+    },
+    "recordDeletes": _ELEMENT_COMMON | _FAULT | {
+        "object", "filters", "filterLogic", "inputReference",
+    },
+    "subflows": _ELEMENT_COMMON | _FAULT | {"flowName", "inputAssignments"},
+    "actionCalls": _ELEMENT_COMMON | _FAULT | {
+        "actionName", "actionType", "inputParameters", "storeOutputAutomatically",
+    },
+}
+
+_START_CHILDREN = {
+    "locationX", "locationY", "connector", "object", "recordTriggerType",
+    "triggerType", "filters", "filterLogic",
+    "doesRequireRecordChangedToMeetCriteria",
+}
+
+_VARIABLE_CHILDREN = {
+    "name", "dataType", "isCollection", "isInput", "isOutput", "objectType",
+}
+
+# Plain-language names for the nested things we know about but cannot hold, so
+# the refusal says what the flow actually uses rather than naming a tag.
+_CHILD_MEANING = {
+    "queriedFields": "a hand-picked field list",
+    "outputReference": "manual output storage",
+    "outputAssignments": "manually assigned outputs",
+    "outputParameters": "an action's output parameters",
+    "assignRecordIdToReference": "saving the new record Id to a variable",
+    "assignNextValueToReference": "its own loop variable",
+    "limit": "a record limit",
+    "scheduledPaths": "scheduled paths",
+    "schedule": "a schedule",
+    "filterFormula": "a formula-based entry condition",
+    "flowTransactionModel": "an explicit transaction model",
+    "value": "a default value",
+    "scale": "a decimal scale",
+    "apexClass": "an Apex type",
+    "elementSubtype": "an element subtype this build does not model",
+    "storeOutputAutomatically": "automatic output storage",
+}
+
+
+def _unknown_children(node: ET.Element, allowed: set, where: str) -> List[str]:
+    """Every child tag of `node` that this module would otherwise ignore."""
+    reasons = []
+    seen = set()
+    for child in node:
+        tag = child.tag.split("}")[-1]
+        if tag in allowed or tag in seen:
+            continue
+        seen.add(tag)
+        meaning = _CHILD_MEANING.get(tag, f"<{tag}>")
+        reasons.append(f"{where} uses {meaning}")
+    return reasons
+
+
 def _text(node: Optional[ET.Element], path: str) -> Optional[str]:
     if node is None:
         return None
@@ -160,8 +251,13 @@ def _common(node: ET.Element) -> Dict[str, Optional[str]]:
     return {
         "name": _text(node, "m:name") or "",
         "label": _text(node, "m:label") or _text(node, "m:name") or "",
+        "description": _text(node, "m:description"),
         "next": _target(node, "connector"),
     }
+
+
+def _fault_common(node: ET.Element) -> Dict[str, Optional[str]]:
+    return {**_common(node), "fault_next": _target(node, "faultConnector")}
 
 
 # --------------------------------------------------------------------------
@@ -217,7 +313,7 @@ def _read_decision(node: ET.Element) -> Decision:
 
 def _read_get_records(node: ET.Element) -> GetRecords:
     return GetRecords(
-        **_common(node),
+        **_fault_common(node),
         object=_text(node, "m:object") or "",
         filters=_filters(node),
         filter_logic=_text(node, "m:filterLogic") or "and",
@@ -230,7 +326,7 @@ def _read_get_records(node: ET.Element) -> GetRecords:
 
 def _read_record_create(node: ET.Element) -> RecordCreate:
     return RecordCreate(
-        **_common(node),
+        **_fault_common(node),
         object=_text(node, "m:object"),
         fields=_field_values(node),
         input_reference=_text(node, "m:inputReference"),
@@ -239,7 +335,7 @@ def _read_record_create(node: ET.Element) -> RecordCreate:
 
 def _read_record_update(node: ET.Element) -> RecordUpdate:
     return RecordUpdate(
-        **_common(node),
+        **_fault_common(node),
         object=_text(node, "m:object"),
         filters=_filters(node),
         filter_logic=_text(node, "m:filterLogic") or "and",
@@ -250,7 +346,7 @@ def _read_record_update(node: ET.Element) -> RecordUpdate:
 
 def _read_record_delete(node: ET.Element) -> RecordDelete:
     return RecordDelete(
-        **_common(node),
+        **_fault_common(node),
         object=_text(node, "m:object"),
         filters=_filters(node),
         input_reference=_text(node, "m:inputReference"),
@@ -276,12 +372,11 @@ def _read_action_call(node: ET.Element) -> ActionCall:
             continue
         parameters.append(InputAssignment(name=_text(item, "m:name") or "", value=value))
     return ActionCall(
-        **_common(node),
+        **_fault_common(node),
         action_name=_text(node, "m:actionName") or "",
         action_type=_text(node, "m:actionType") or "",
         input_parameters=parameters,
         store_output_automatically=_bool(node, "m:storeOutputAutomatically"),
-        fault_next=_target(node, "faultConnector"),
     )
 
 
@@ -293,7 +388,7 @@ def _read_subflow(node: ET.Element) -> Subflow:
             continue
         inputs.append(InputAssignment(name=_text(item, "m:name") or "", value=value))
     return Subflow(
-        **_common(node),
+        **_fault_common(node),
         flow_name=_text(node, "m:flowName") or "",
         input_assignments=inputs,
     )
@@ -345,6 +440,21 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         seen_unsupported.add(tag)
         reasons.append(_KNOWN_UNSUPPORTED.get(tag, f"unrecognised element <{tag}>"))
 
+    # The same check, one level down. This is where a fault path or a scheduled
+    # path used to disappear without a word.
+    for tag, allowed in _ELEMENT_CHILDREN.items():
+        for node in root.findall(f"m:{tag}", NS):
+            name = _text(node, "m:name") or tag
+            reasons.extend(_unknown_children(node, allowed, name))
+
+    start_node = root.find("m:start", NS)
+    if start_node is not None:
+        reasons.extend(_unknown_children(start_node, _START_CHILDREN, "the trigger"))
+
+    for node in root.findall("m:variables", NS):
+        name = _text(node, "m:name") or "a variable"
+        reasons.extend(_unknown_children(node, _VARIABLE_CHILDREN, name))
+
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
 
@@ -363,7 +473,6 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
 
-    start_node = root.find("m:start", NS)
     start = Start(
         next=_target(start_node, "connector") if start_node is not None else None,
         object=_text(start_node, "m:object"),
@@ -371,6 +480,9 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         trigger_type=_text(start_node, "m:triggerType"),
         filters=_filters(start_node) if start_node is not None else [],
         filter_logic=_text(start_node, "m:filterLogic") or "and",
+        only_when_changed_to_meet_criteria=_bool(
+            start_node, "m:doesRequireRecordChangedToMeetCriteria"
+        ),
     )
 
     variables = []

@@ -38,8 +38,23 @@ def roundtrip(flow: Flow) -> Flow:
 
 
 def assert_survives(flow: Flow) -> None:
+    """
+    Every field must come back identical. Element *order* is not compared:
+    control flow comes from connectors, and the XML groups elements by tag, so
+    the order that comes back is an artefact of the format rather than anything
+    the flow means. Everything else is compared exactly, per element, by name.
+    """
     returned = roundtrip(flow)
-    assert returned.model_dump() == flow.model_dump()
+
+    before, after = flow.model_dump(), returned.model_dump()
+    assert {k: v for k, v in after.items() if k != "elements"} == {
+        k: v for k, v in before.items() if k != "elements"
+    }
+
+    by_name = {e["name"]: e for e in after["elements"]}
+    assert set(by_name) == {e["name"] for e in before["elements"]}, "elements lost or added"
+    for element in before["elements"]:
+        assert by_name[element["name"]] == element, f"{element['name']} changed"
 
 
 # --------------------------------------------------------------------------
@@ -287,6 +302,155 @@ class TestFlowLevel:
         assert conditions[0].right.number_value == 42
         assert conditions[1].right.boolean_value is True
         assert conditions[2].right.string_value == "42"
+
+
+class TestFaultPaths:
+    """
+    A fault connector used to be read as if it were not there, drawn as if it
+    were not there, and deleted on the next deploy.
+    """
+
+    @pytest.mark.parametrize("element", [
+        GetRecords(name="E", label="E", object="Account", next="H", fault_next="H"),
+        RecordUpdate(name="E", label="E", object="Account",
+                     fields=[FieldValue(field="Rating", value=Value(string_value="Hot"))],
+                     next="H", fault_next="H"),
+        RecordDelete(name="E", label="E", object="Task", next="H", fault_next="H"),
+        Subflow(name="E", label="E", flow_name="Other", next="H", fault_next="H"),
+        ActionCall(name="E", label="E", action_name="A", action_type="apex",
+                   next="H", fault_next="H"),
+    ])
+    def test_it_survives_the_round_trip(self, element):
+        assert_survives(_flow(
+            element,
+            RecordCreate(name="H", label="Handle", object="Task",
+                         fields=[FieldValue(field="Subject",
+                                            value=Value(string_value="failed"))]),
+        ))
+
+    def test_it_reaches_the_xml(self):
+        flow = _flow(
+            GetRecords(name="Get", label="Get", object="Account", fault_next="H"),
+            RecordCreate(name="H", label="Handle", object="Task",
+                         fields=[FieldValue(field="Subject",
+                                            value=Value(string_value="x"))]),
+        )
+        assert "<faultConnector>" in generate(flow)
+
+
+class TestStartFlag:
+    def test_only_when_changed_survives(self):
+        # Decides whether the flow runs on every save or only on the transition.
+        flow = _flow(
+            GetRecords(name="Get", label="Get", object="Account"),
+            start=Start(object="Account", record_trigger_type="Update",
+                        trigger_type="RecordAfterSave",
+                        only_when_changed_to_meet_criteria=True, next="Get"),
+        )
+        assert_survives(flow)
+        assert "doesRequireRecordChangedToMeetCriteria" in generate(flow)
+
+
+class TestElementDescription:
+    def test_an_admins_note_is_not_deleted(self):
+        assert_survives(_flow(
+            GetRecords(name="Get", label="Get", object="Account",
+                       description="Kept deliberately: see ticket SF-412."),
+        ))
+
+
+class TestNestedUnknownsAreRefused:
+    """
+    Checking only the root let anything nested through. Each of these was
+    silently dropped before, then deleted on the next deploy.
+    """
+
+    def _flow_xml(self, body: str, start_extra: str = "") -> str:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>62.0</apiVersion><label>X</label>"
+            "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+            f"{body}"
+            "<start><connector><targetReference>E</targetReference></connector>"
+            "<object>Account</object><recordTriggerType>Update</recordTriggerType>"
+            f"<triggerType>RecordAfterSave</triggerType>{start_extra}</start>"
+            "</Flow>"
+        )
+
+    def _lookup(self, extra: str = "") -> str:
+        return (
+            "<recordLookups><name>E</name><label>E</label>"
+            f"<object>Account</object>{extra}</recordLookups>"
+        )
+
+    @pytest.mark.parametrize("extra,expected", [
+        ("<queriedFields>Id</queriedFields>", "hand-picked field list"),
+        ("<outputReference>v_Acc</outputReference>", "manual output storage"),
+        ("<limit>5</limit>", "a record limit"),
+        ("<outputAssignments><name>a</name></outputAssignments>", "manually assigned"),
+    ])
+    def test_unknown_child_of_an_element(self, extra, expected):
+        with pytest.raises(UnsupportedFlow) as caught:
+            parse_flow(self._flow_xml(self._lookup(extra)))
+        assert expected in str(caught.value)
+        assert "E uses" in str(caught.value), "the message should name the element"
+
+    @pytest.mark.parametrize("extra,expected", [
+        ("<scheduledPaths><name>L</name></scheduledPaths>", "scheduled paths"),
+        ("<filterFormula>x</filterFormula>", "formula-based entry condition"),
+    ])
+    def test_unknown_child_of_the_start(self, extra, expected):
+        with pytest.raises(UnsupportedFlow, match=expected):
+            parse_flow(self._flow_xml(self._lookup(), start_extra=extra))
+
+    def test_unknown_child_of_a_variable(self):
+        body = self._lookup() + (
+            "<variables><name>v_X</name><dataType>String</dataType>"
+            "<value><stringValue>default</stringValue></value></variables>"
+        )
+        with pytest.raises(UnsupportedFlow, match="a default value"):
+            parse_flow(self._flow_xml(body))
+
+    def test_a_clean_element_still_parses(self):
+        parse_flow(self._flow_xml(self._lookup()))
+
+    def test_every_supported_element_has_a_child_allowlist(self):
+        # A new element type without one would silently ignore everything
+        # inside it - the exact hole this closes.
+        from flowtool.parse import _ELEMENT_CHILDREN, _READERS
+
+        assert set(_READERS) == set(_ELEMENT_CHILDREN)
+
+    def test_the_allowlists_cover_what_the_compiler_writes(self):
+        """
+        Anything xmlgen emits must be readable back, or the round trip breaks
+        the moment that field is used.
+        """
+        import xml.etree.ElementTree as ET
+        from flowtool.parse import _ELEMENT_CHILDREN
+        from flowtool.xmlgen import METADATA_NS
+
+        flow = _flow(
+            GetRecords(name="Get", label="Get", object="Account",
+                       description="note", next="Act", fault_next="Act",
+                       filters=[RecordFilter(field="Id", operator="EqualTo",
+                                             value=Value(string_value="x"))],
+                       sort_field="Name", sort_order="Asc"),
+            ActionCall(name="Act", label="Act", action_name="A", action_type="apex",
+                       store_output_automatically=True,
+                       input_parameters=[InputAssignment(
+                           name="p", value=Value(string_value="v"))]),
+        )
+        root = ET.fromstring(generate(flow))
+        problems = []
+        for tag, allowed in _ELEMENT_CHILDREN.items():
+            for node in root.findall(f"{{{METADATA_NS}}}{tag}"):
+                for child in node:
+                    name = child.tag.split("}")[-1]
+                    if name not in allowed:
+                        problems.append(f"{tag}.{name} is written but not readable")
+        assert not problems, problems
 
 
 class TestUnsupported:

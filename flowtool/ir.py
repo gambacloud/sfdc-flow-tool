@@ -130,6 +130,9 @@ class Variable(BaseModel):
 class BaseElement(BaseModel):
     name: str = Field(description="API name — unique within the flow")
     label: str
+    # An admin's own note on the element. Modelled rather than ignored: dropping
+    # it would delete their documentation on the next deploy.
+    description: Optional[str] = None
     next: Optional[str] = Field(
         default=None,
         description="Name of the next element. None means the path ends here — "
@@ -140,6 +143,18 @@ class BaseElement(BaseModel):
     @classmethod
     def valid_name(cls, v: str) -> str:
         return _check_api_name(v, "element name")
+
+
+class FaultCapable(BaseElement):
+    """
+    Elements that can leave the flow's transaction, and so can fail. Salesforce
+    allows a faultConnector on exactly these; Assignment, Decision and Loop
+    cannot fail and have none.
+    """
+
+    fault_next: Optional[str] = Field(
+        default=None, description="Where to go if this element fails."
+    )
 
 
 class AssignmentItem(BaseModel):
@@ -197,7 +212,7 @@ class InputAssignment(BaseModel):
     value: Value
 
 
-class GetRecords(BaseElement):
+class GetRecords(FaultCapable):
     type: Literal["GetRecords"] = "GetRecords"
     object: str
     filters: List[RecordFilter] = Field(default_factory=list)
@@ -208,7 +223,7 @@ class GetRecords(BaseElement):
     sort_order: Optional[Literal["Asc", "Desc"]] = None
 
 
-class RecordCreate(BaseElement):
+class RecordCreate(FaultCapable):
     type: Literal["RecordCreate"] = "RecordCreate"
     # Required in field mode; omitted when creating from a variable, because
     # Salesforce takes the object from the variable and the XML carries no
@@ -237,7 +252,7 @@ class RecordCreate(BaseElement):
         return self
 
 
-class RecordUpdate(BaseElement):
+class RecordUpdate(FaultCapable):
     type: Literal["RecordUpdate"] = "RecordUpdate"
     # Either update a record already in memory (input_reference, e.g. '$Record')
     # or find records by filter (object + filters).
@@ -273,7 +288,7 @@ class RecordUpdate(BaseElement):
         return self
 
 
-class RecordDelete(BaseElement):
+class RecordDelete(FaultCapable):
     type: Literal["RecordDelete"] = "RecordDelete"
     input_reference: Optional[str] = None
     object: Optional[str] = None
@@ -298,7 +313,7 @@ class Loop(BaseElement):
     # `next` is the no-more-values connector (what runs after the loop).
 
 
-class ActionCall(BaseElement):
+class ActionCall(FaultCapable):
     """
     Any invocable action: an email alert, Send Email, an Apex @InvocableMethod,
     Post to Chatter, Submit for Approval. They differ only by `action_type`.
@@ -319,12 +334,9 @@ class ActionCall(BaseElement):
     )
     input_parameters: List["InputAssignment"] = Field(default_factory=list)
     store_output_automatically: bool = False
-    # Where to go if the action fails. Actions are the elements most likely to,
-    # since they leave the flow's own transaction.
-    fault_next: Optional[str] = None
 
 
-class Subflow(BaseElement):
+class Subflow(FaultCapable):
     type: Literal["Subflow"] = "Subflow"
     flow_name: str
     input_assignments: List[InputAssignment] = Field(default_factory=list)
@@ -367,6 +379,9 @@ class Start(BaseModel):
     ] = None
     filters: List[RecordFilter] = Field(default_factory=list)
     filter_logic: Literal["and", "or"] = "and"
+    # "Only when a record is updated to meet the condition requirements".
+    # Changes when the flow runs, so it cannot be dropped silently.
+    only_when_changed_to_meet_criteria: bool = False
 
     @model_validator(mode="after")
     def trigger_consistency(self) -> "Start":
@@ -410,8 +425,9 @@ class Flow(BaseModel):
             targets.extend(oc.next for oc in element.outcomes if oc.next)
         if isinstance(element, Loop) and element.first_element:
             targets.append(element.first_element)
-        if isinstance(element, ActionCall) and element.fault_next:
-            targets.append(element.fault_next)
+        fault = getattr(element, "fault_next", None)
+        if fault:
+            targets.append(fault)
         if element.next:
             targets.append(element.next)
         return targets
@@ -436,12 +452,11 @@ class Flow(BaseModel):
                     f"  {element.name} each -> {element.first_element or '(nothing)'}"
                 )
                 lines.append(f"  {element.name} done -> {element.next or '(ends)'}")
-            elif isinstance(element, ActionCall):
-                lines.append(f"  {element.name} -> {element.next or '(ends)'}")
-                if element.fault_next:
-                    lines.append(f"  {element.name} on fault -> {element.fault_next}")
             else:
                 lines.append(f"  {element.name} -> {element.next or '(ends)'}")
+            fault = getattr(element, "fault_next", None)
+            if fault:
+                lines.append(f"  {element.name} on fault -> {fault}")
         return "\n".join(lines)
 
     def reachable(self) -> set:
@@ -488,8 +503,7 @@ class Flow(BaseModel):
                     check(oc.next, f"{el.name}.{oc.name}.next")
             if isinstance(el, Loop):
                 check(el.first_element, f"{el.name}.first_element")
-            if isinstance(el, ActionCall):
-                check(el.fault_next, f"{el.name}.fault_next")
+            check(getattr(el, "fault_next", None), f"{el.name}.fault_next")
 
         if problems:
             raise ValueError("unresolved references: " + "; ".join(problems))

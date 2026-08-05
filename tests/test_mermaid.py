@@ -5,6 +5,8 @@ The diagram is what the user approves, so it must not misstate the logic.
 import pytest
 
 from flowtool.ir import (
+    FieldValue,
+    RecordCreate,
     Condition,
     Decision,
     Flow,
@@ -78,6 +80,24 @@ class TestDiagram:
                       right=Value(boolean_value=False))
         )
         assert "is not null" in to_markdown(flow)
+
+
+class TestFaultPaths:
+    def test_a_fault_path_is_drawn(self):
+        # Error handling the user cannot see is error handling they cannot
+        # approve, and the diagram is the approval screen.
+        flow = Flow(
+            api_name="F", label="F", start=Start(next="Get"),
+            elements=[
+                GetRecords(name="Get", label="Get", object="Account",
+                           fault_next="Log"),
+                RecordCreate(name="Log", label="Log", object="Task",
+                             fields=[FieldValue(field="Subject",
+                                                value=Value(string_value="x"))]),
+            ],
+        )
+        diagram = to_mermaid(flow)
+        assert "Get -.->|on error| Log" in diagram
 
 
 class TestLabels:

@@ -146,6 +146,13 @@ def _write_common(node: ET.Element, el: Element, xy: Tuple[int, int]) -> None:
     _sub(node, "label", el.label)
     _sub(node, "locationX", str(xy[0]))
     _sub(node, "locationY", str(xy[1]))
+    if el.description:
+        _sub(node, "description", el.description)
+
+
+def _fault(node: ET.Element, el: Element) -> None:
+    """Every fault-capable element writes its fault path the same way."""
+    _connector(node, "faultConnector", getattr(el, "fault_next", None))
 
 
 def _write_assignment(root: ET.Element, el: Assignment, xy) -> None:
@@ -183,6 +190,7 @@ def _write_get_records(root: ET.Element, el: GetRecords, xy) -> None:
     _write_common(node, el, xy)
     _sub(node, "assignNullValuesIfNoRecordsFound", "false")
     _connector(node, "connector", el.next)
+    _fault(node, el)
     if el.filters:
         _sub(node, "filterLogic", el.filter_logic)
         _filters(node, el.filters)
@@ -198,6 +206,7 @@ def _write_record_create(root: ET.Element, el: RecordCreate, xy) -> None:
     node = _sub(root, "recordCreates")
     _write_common(node, el, xy)
     _connector(node, "connector", el.next)
+    _fault(node, el)
     if el.input_reference:
         _sub(node, "inputReference", el.input_reference)
     else:
@@ -213,6 +222,7 @@ def _write_record_update(root: ET.Element, el: RecordUpdate, xy) -> None:
     node = _sub(root, "recordUpdates")
     _write_common(node, el, xy)
     _connector(node, "connector", el.next)
+    _fault(node, el)
     if el.filters:
         _sub(node, "filterLogic", el.filter_logic)
         _filters(node, el.filters)
@@ -230,6 +240,7 @@ def _write_record_delete(root: ET.Element, el: RecordDelete, xy) -> None:
     node = _sub(root, "recordDeletes")
     _write_common(node, el, xy)
     _connector(node, "connector", el.next)
+    _fault(node, el)
     if el.filters:
         _filters(node, el.filters)
     if el.input_reference:
@@ -253,7 +264,7 @@ def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
     _sub(node, "actionName", el.action_name)
     _sub(node, "actionType", el.action_type)
     _connector(node, "connector", el.next)
-    _connector(node, "faultConnector", el.fault_next)
+    _fault(node, el)
     for parameter in el.input_parameters:
         ip = _sub(node, "inputParameters")
         _sub(ip, "name", parameter.name)
@@ -266,6 +277,7 @@ def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
     _connector(node, "connector", el.next)
+    _fault(node, el)
     _sub(node, "flowName", el.flow_name)
     for assignment in el.input_assignments:
         ia = _sub(node, "inputAssignments")
@@ -335,6 +347,8 @@ def generate(flow: Flow) -> str:
         _filters(start, flow.start.filters)
     if flow.start.object:
         _sub(start, "object", flow.start.object)
+    if flow.start.only_when_changed_to_meet_criteria:
+        _sub(start, "doesRequireRecordChangedToMeetCriteria", "true")
     if flow.start.record_trigger_type:
         _sub(start, "recordTriggerType", flow.start.record_trigger_type)
     if flow.start.trigger_type:
