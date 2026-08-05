@@ -94,6 +94,93 @@ class TestCounting:
         assert survey.element_counts["RecordUpdate"] == 1
 
 
+class TestWhatWouldActuallyHelp:
+    """
+    Counting how often a blocker appears answers the wrong question. A flow
+    blocked by five things is freed by none of them individually, and the first
+    real survey recommended a fix that would have unblocked nothing.
+    """
+
+    def test_a_code_that_never_stands_alone_frees_nothing(self):
+        survey = Survey()
+        survey.add("Two_Problems", xml(
+            "<screens><name>S</name></screens><waits><name>W</name></waits>"
+        ))
+        assert survey.codes["element:screens"] == 1, "it is still counted as seen"
+        assert survey.would_unblock()["element:screens"] == 0, "but it frees nothing"
+
+    def test_a_sole_blocker_frees_its_flow(self):
+        survey = Survey()
+        survey.add("One_Problem", xml("<screens><name>S</name></screens>"))
+        assert survey.would_unblock()["element:screens"] == 1
+
+    def test_managed_flows_do_not_drive_the_recommendation(self):
+        # The first real survey's top answer was a Salesforce-installed flow
+        # nobody can edit.
+        survey = Survey()
+        survey.add("sfdc_default_Something", xml("<waits><name>W</name></waits>"))
+        assert survey.codes["element:waits"] == 1
+        assert survey.would_unblock()["element:waits"] == 0
+        assert "sfdc_default_Something" in survey.managed
+
+    @pytest.mark.parametrize("name,managed", [
+        ("sfdc_default_ReportExport_Protection_Flow", True),
+        ("acme__Vendor_Flow", True),
+        ("Welcom_Potentials", False),
+        ("My_Flow_2", False),
+    ])
+    def test_which_flows_count_as_managed(self, name, managed):
+        from survey import is_managed
+
+        assert is_managed(name) is managed
+
+    def test_the_report_says_so_when_nothing_helps_alone(self, capsys):
+        survey = Survey()
+        survey.add("Two_Problems", xml(
+            "<screens><name>S</name></screens><waits><name>W</name></waits>"
+        ))
+        report(survey, verbose=False)
+        out = capsys.readouterr().out
+        assert "No single addition unblocks anything" in out
+        assert "Cheapest flows to reach" in out
+
+
+class TestLegacyStart:
+    def test_a_flow_with_no_start_element_still_parses(self):
+        """
+        Flows written before Flow Builder name their first element at the root
+        and have no <start> at all. Three of the five flows in the first real
+        survey were refused for this alone.
+        """
+        from flowtool.parse import parse_flow
+
+        legacy = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>62.0</apiVersion><label>Old</label>"
+            "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+            + LOOKUP.format("")
+            + "<startElementReference>E</startElementReference></Flow>"
+        )
+        flow = parse_flow(legacy, api_name="Old")
+        assert flow.start.next == "E"
+
+    def test_a_modern_start_connector_still_wins(self):
+        from flowtool.parse import parse_flow
+
+        both = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>62.0</apiVersion><label>Both</label>"
+            "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+            + LOOKUP.format("")
+            + "<startElementReference>Stale</startElementReference>"
+            "<start><connector><targetReference>E</targetReference></connector></start>"
+            "</Flow>"
+        )
+        assert parse_flow(both, api_name="Both").start.next == "E"
+
+
 class TestRoundTrip:
     def test_a_clean_flow_reports_no_round_trip_failure(self):
         survey = Survey()

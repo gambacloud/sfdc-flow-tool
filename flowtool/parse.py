@@ -88,6 +88,9 @@ _IGNORED = {
     "isTemplate", "sourceTemplate", "runInMode", "segment", "fullName",
     "areMetricsLoggedToDataCloud", "isOverridable", "overriddenFlow",
     "migratedFromWorkflowRuleName", "triggerOrder", "timeZoneSidKey",
+    # Older flows name their first element at the root instead of on the
+    # start connector. Same meaning, read below.
+    "startElementReference",
 }
 
 # Element collections this module can turn into IR.
@@ -508,8 +511,16 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
 
+    # Flows written before Flow Builder have no <start> at all and name their
+    # first element at the root. It is the same fact in an older spelling, so it
+    # is read rather than refused - though writing the flow back emits the
+    # modern form, which is what Salesforce itself does on save.
+    legacy_start = _text(root, "m:startElementReference")
     start = Start(
-        next=_target(start_node, "connector") if start_node is not None else None,
+        next=(
+            (_target(start_node, "connector") if start_node is not None else None)
+            or legacy_start
+        ),
         object=_text(start_node, "m:object"),
         record_trigger_type=_text(start_node, "m:recordTriggerType"),
         trigger_type=_text(start_node, "m:triggerType"),

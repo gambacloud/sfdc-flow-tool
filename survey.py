@@ -40,6 +40,15 @@ BAR_WIDTH = 28
 # --------------------------------------------------------------------------
 
 
+def is_managed(api_name: str) -> bool:
+    """
+    Flows nobody in this org authored: Salesforce's own defaults, and anything
+    carrying a package namespace. They cannot be edited, so counting them in a
+    "what should we build next" recommendation points at work with no payoff.
+    """
+    return api_name.startswith("sfdc_default_") or "__" in api_name
+
+
 class Survey:
     def __init__(self) -> None:
         self.parsed: List[str] = []
@@ -48,8 +57,11 @@ class Survey:
         self.flows_by_code: Dict[str, List[str]] = defaultdict(list)
         self.round_trip_failures: List[Tuple[str, str]] = []
         self.element_counts: Counter = Counter()
+        self.managed: set = set()
 
     def add(self, api_name: str, xml: str) -> None:
+        if is_managed(api_name):
+            self.managed.add(api_name)
         try:
             flow = parse_flow(xml, api_name=api_name)
         except UnsupportedFlow as exc:
@@ -91,6 +103,29 @@ class Survey:
     def total(self) -> int:
         return len(self.parsed) + len(self.refused)
 
+    def blockers_by_flow(self) -> Dict[str, set]:
+        by_flow: Dict[str, set] = defaultdict(set)
+        for code, names in self.flows_by_code.items():
+            for name in names:
+                by_flow[name].add(code)
+        return by_flow
+
+    def would_unblock(self) -> Counter:
+        """
+        How many flows each code would actually free if it alone were supported.
+
+        Counting how often a code *appears* answers a different question and
+        overstates it: a flow blocked by six things is freed by none of them
+        individually. This counts only flows where the code is the sole blocker.
+        """
+        freed: Counter = Counter()
+        for name, codes in self.blockers_by_flow().items():
+            if name in self.managed:
+                continue
+            if len(codes) == 1:
+                freed[next(iter(codes))] += 1
+        return freed
+
 
 # --------------------------------------------------------------------------
 # Report
@@ -114,12 +149,22 @@ def report(survey: Survey, verbose: bool) -> None:
     print()
     print(f"{total} flows:  {parsed} parse, {len(survey.refused)} refused "
           f"({parsed * 100 // total}% covered)")
+    if survey.managed:
+        print(f"{len(survey.managed)} of them are managed or Salesforce's own "
+              "and are excluded from the recommendation below.")
 
     if survey.codes:
-        print("\nWhat blocks them, by how many flows each blocks:\n")
+        freed = survey.would_unblock()
+        print("\nWhat blocks them:\n")
+        print(f"  {'seen':>4}  {'frees':>5}  {'':<{BAR_WIDTH}}")
         largest = survey.codes.most_common(1)[0][1]
         for code, count in survey.codes.most_common():
-            print(f"  {count:>4}  {bar(count, largest):<{BAR_WIDTH}}  {code}")
+            print(
+                f"  {count:>4}  {freed[code]:>5}  "
+                f"{bar(count, largest):<{BAR_WIDTH}}  {code}"
+            )
+        print("\n  seen  = flows this appears in")
+        print("  frees = flows that would parse if only this were supported")
 
         print("\nEach of those, spelled out:\n")
         for code, count in survey.codes.most_common():
@@ -153,9 +198,19 @@ def report(survey: Survey, verbose: bool) -> None:
                 print(f"      - {reason}")
 
     if survey.codes:
-        top, count = survey.codes.most_common(1)[0]
-        print(f"\nBiggest single win: supporting {top} would unblock "
-              f"{count} of {total} flows.")
+        freed = survey.would_unblock()
+        if freed:
+            top, count = freed.most_common(1)[0]
+            print(f"\nBiggest single win: supporting {top} would unblock "
+                  f"{count} of {total} flows on its own.")
+        else:
+            print("\nNo single addition unblocks anything: every refused flow "
+                  "needs more than one.")
+            print("Cheapest flows to reach, by how many additions each needs:\n")
+            by_flow = survey.blockers_by_flow()
+            for name, codes in sorted(by_flow.items(), key=lambda kv: len(kv[1])):
+                tag = "  (managed)" if name in survey.managed else ""
+                print(f"  {len(codes)}  {name}{tag}: {', '.join(sorted(codes))}")
 
 
 def as_json(survey: Survey) -> dict:
@@ -170,6 +225,8 @@ def as_json(survey: Survey) -> dict:
             for name, detail in survey.round_trip_failures
         ],
         "element_counts": dict(survey.element_counts.most_common()),
+        "would_unblock": dict(survey.would_unblock().most_common()),
+        "managed": sorted(survey.managed),
     }
 
 

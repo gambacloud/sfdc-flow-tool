@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-184 tests, none of which need a key, a network, or an org.
+194 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -143,15 +143,26 @@ actually blocks the ones it can't take:
 ```
 47 flows:  31 parse, 16 refused (65% covered)
 
-What blocks them, by how many flows each blocks:
+What blocks them:
 
-     9  ############################  element:screens
-     4  ############                  element:formulas
-     2  ######                        child:queriedFields
-     1  ###                           element:waits
+  seen  frees
+     9      6  ############################  element:screens
+     4      1  ############                  element:formulas
+     2      0  ######                        child:queriedFields
+     1      0  ###                           element:waits
 
-Biggest single win: supporting element:screens would unblock 9 of 47 flows.
+  seen  = flows this appears in
+  frees = flows that would parse if only this were supported
+
+Biggest single win: supporting element:screens would unblock 6 of 47 flows on its own.
 ```
+
+The two columns differ because a flow blocked by several things is freed by
+none of them individually. **`frees` is the one to plan from** — the first real
+survey's headline recommended a blocker that appeared in three flows and would
+have unblocked none. Flows nobody in the org authored (Salesforce's own, or
+anything with a package namespace) are counted but kept out of the
+recommendation.
 
 Read-only — nothing is written to the org. `--save DIR` keeps the retrieved
 files so later runs can go offline with `--dir`, and `--json` writes the whole
