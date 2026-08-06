@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-312 tests, none of which need a key, a network, or an org.
+327 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -251,6 +251,18 @@ and rejects `default` and `discriminator`. `flowtool/llm.py` has an adapter per
 dialect, and the tests assert each one emits only keywords that provider
 documents — and that neither eats your field names on the way through.
 
+Providers also cap how *large* a response schema may be. Gemini's cap counts the
+schema with every `$ref` inlined, so a definition referenced from six places
+costs six times; the IR is past it, and the schema is sent as prompt text
+instead. It is **not** pruned to fit: anything missing from the schema cannot be
+emitted by the model, so refining an imported flow would delete exactly those
+parts on the way back out. Output is validated against the IR either way.
+
+The cap is undocumented — over it, the API says only "Request contains an invalid
+argument", naming neither the schema nor the size. `tests/test_gemini_budget.py`
+records what it actually counts, and `GEMINI_PROPERTY_BUDGET` is where to lower
+it if it moves.
+
 ## Troubleshooting
 
 | Symptom | Cause |
@@ -260,3 +272,5 @@ documents — and that neither eats your field names on the way through.
 | Org list empty | Same |
 | `INVALID_SESSION_ID` | Run `python diagnose.py --org dev`; it isolates which layer is failing |
 | A flow won't open | The refusal names the construct. That's a gap in the IR, not a broken flow |
+| `Request contains an invalid argument` (Gemini) | The response schema is over Gemini's undocumented size cap. Handled automatically; if you see it, lower `GEMINI_PROPERTY_BUDGET` in `flowtool/llm.py` |
+| `RESOURCE_EXHAUSTED` (Gemini) | Free tier is 20 requests per day per model. Wait, switch `--model`, or add billing |

@@ -404,6 +404,69 @@ _GEMINI_THINKING = {
     "max": "HIGH",
 }
 
+# Gemini caps how large a response_json_schema may be, and it counts the schema
+# with every $ref inlined - so a definition referenced from six places costs six
+# times. Over the cap the whole request is rejected with a flat
+# "Request contains an invalid argument", which names neither the schema nor the
+# size, so the cause has to be recorded here instead.
+#
+# Measured against the API by bisection: 220 expanded properties is accepted,
+# 221 is rejected. Neither the byte size, the number of $defs, nor the nesting
+# depth predicts it - a 23,000-character schema with 216 expanded properties is
+# fine while an 18,000-character one with 221 is not. The margin below the
+# measured limit is deliberate: the cap is undocumented and may move.
+GEMINI_PROPERTY_BUDGET = 210
+
+
+def _unfenced(text: str) -> str:
+    """
+    Strip a ```json fence if there is one.
+
+    A response schema guarantees bare JSON; the prompt-text fallback only asks
+    for it, and a model asked for JSON in prose sometimes fences it anyway.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    body = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+    return body.rsplit("```", 1)[0].strip()
+
+
+def expanded_property_count(schema: Dict[str, Any]) -> int:
+    """
+    Properties in the schema as Gemini counts them: every $ref replaced by what
+    it points at, so shared definitions are counted once per reference.
+
+    A definition already being expanded is not expanded again, so a recursive
+    schema terminates rather than counting forever.
+    """
+    defs = schema.get("$defs", {}) or {}
+
+    def walk(node: Any, seen: frozenset) -> int:
+        if isinstance(node, list):
+            return sum(walk(item, seen) for item in node)
+        if not isinstance(node, dict):
+            return 0
+        ref = node.get("$ref")
+        if ref:
+            name = ref.split("/")[-1]
+            if name in seen or name not in defs:
+                return 0
+            return walk(defs[name], seen | {name})
+        total = 0
+        for key, value in node.items():
+            if key == "$defs":
+                continue
+            if key == "properties" and isinstance(value, dict):
+                total += len(value)
+                for sub in value.values():
+                    total += walk(sub, seen)
+                continue
+            total += walk(value, seen)
+        return total
+
+    return walk({k: v for k, v in schema.items() if k != "$defs"}, frozenset())
+
 
 class GeminiProvider:
     """
@@ -443,6 +506,7 @@ class GeminiProvider:
         self.effort = effort
         self.max_tokens = max_tokens
         self.usage = Usage()
+        self._warned_about_budget = False
 
     def _record(self, response) -> None:
         meta = getattr(response, "usage_metadata", None)
@@ -507,11 +571,41 @@ class GeminiProvider:
         from google.genai import errors, types
 
         contents = self._contents(messages)
+        dialect = gemini_schema(schema)
+
+        # Over Gemini's cap the request is rejected outright, so the schema goes
+        # into the prompt instead of the response_json_schema field. That is a
+        # weaker guarantee - the model is asked to follow the shape rather than
+        # held to it - but it is the only lossless option. Pruning the schema to
+        # fit would make whatever was pruned unrepresentable, and refining an
+        # imported flow would then delete exactly those parts on the way back
+        # out. Everything is validated against the real IR either way, and the
+        # repair loop feeds any mistake back.
+        cost = expanded_property_count(dialect)
+        constrained = cost <= GEMINI_PROPERTY_BUDGET
+        if not constrained:
+            # Once per provider, not once per repair round: it is a fact about
+            # the build, and repeating it buries the errors that are not.
+            if not self._warned_about_budget:
+                self._warned_about_budget = True
+                log.warning(
+                    "schema is %d expanded properties, over Gemini's limit of "
+                    "~%d - sending it as text instead of a response schema. "
+                    "Output is validated and repaired as usual, but expect more "
+                    "repair rounds.",
+                    cost, GEMINI_PROPERTY_BUDGET,
+                )
+            system = (
+                f"{system}\n\n## The exact shape to return\n\n"
+                "Return a single JSON object matching this JSON Schema. Return "
+                "nothing else - no prose, no code fence.\n\n"
+                f"{json.dumps(dialect)}"
+            )
 
         config = types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",
-            response_json_schema=gemini_schema(schema),
+            response_json_schema=dialect if constrained else None,
             max_output_tokens=self.max_tokens,
             thinking_config=types.ThinkingConfig(
                 thinking_level=_GEMINI_THINKING.get(self.effort, "HIGH")
@@ -528,6 +622,20 @@ class GeminiProvider:
                 hint = f"\nModels available to this key:\n  " + "\n  ".join(available) \
                     if available else ""
                 raise LLMError(f"Model {self.model!r} is not available.{hint}") from exc
+            # "Request contains an invalid argument" is all the API says when the
+            # response schema is too large - it names neither the schema nor the
+            # size. If that happens while a schema was attached, the cap has
+            # moved below the budget above, so say so rather than passing on a
+            # message nobody can act on.
+            if constrained and "invalid argument" in str(exc.message).lower():
+                raise LLMError(
+                    f"Gemini rejected the response schema ({cost} expanded "
+                    f"properties, believed to be within its limit of "
+                    f"~{GEMINI_PROPERTY_BUDGET}). The limit is undocumented and "
+                    "appears to have moved: lower GEMINI_PROPERTY_BUDGET in "
+                    "flowtool/llm.py and the schema will be sent as prompt text "
+                    "instead."
+                ) from exc
             raise LLMError(f"Gemini rejected the request: {exc.message}") from exc
         except errors.ServerError as exc:
             raise LLMError(f"Gemini server error: {exc.message}") from exc
@@ -554,7 +662,7 @@ class GeminiProvider:
             raise LLMError(f"Gemini returned no JSON (finish reason: {reason or 'unknown'}).")
 
         try:
-            return json.loads(text)
+            return json.loads(_unfenced(text))
         except json.JSONDecodeError as exc:
             raise LLMError(
                 f"Gemini returned malformed JSON (finish reason: {reason or 'unknown'}): "
