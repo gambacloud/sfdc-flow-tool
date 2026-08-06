@@ -15,7 +15,9 @@ from xml.dom import minidom
 from .ir import (
     ActionCall,
     Assignment,
+    Choice,
     Decision,
+    DynamicChoiceSet,
     Element,
     Flow,
     GetRecords,
@@ -274,6 +276,40 @@ def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
         _sub(node, "storeOutputAutomatically", "true")
 
 
+def _write_choice(root: ET.Element, choice: Choice) -> None:
+    """A resource, not an element: no name/label pair, no coordinates, no connector."""
+    node = _sub(root, "choices")
+    _sub(node, "name", choice.name)
+    _sub(node, "choiceText", choice.choice_text)
+    _sub(node, "dataType", choice.data_type)
+    if choice.value is not None:
+        _value_el(node, "value", choice.value)
+
+
+def _write_choice_set(root: ET.Element, choice_set: DynamicChoiceSet) -> None:
+    node = _sub(root, "dynamicChoiceSets")
+    _sub(node, "name", choice_set.name)
+    _sub(node, "dataType", choice_set.data_type)
+    if choice_set.display_field:
+        _sub(node, "displayField", choice_set.display_field)
+    if choice_set.filters:
+        _sub(node, "filterLogic", choice_set.filter_logic)
+        _filters(node, choice_set.filters)
+    if choice_set.limit is not None:
+        _sub(node, "limit", str(choice_set.limit))
+    if choice_set.object:
+        _sub(node, "object", choice_set.object)
+    if choice_set.picklist_field:
+        _sub(node, "picklistField", choice_set.picklist_field)
+    if choice_set.picklist_object:
+        _sub(node, "picklistObject", choice_set.picklist_object)
+    if choice_set.sort_field:
+        _sub(node, "sortField", choice_set.sort_field)
+        _sub(node, "sortOrder", "Desc" if choice_set.sort_order == "Desc" else "Asc")
+    if choice_set.value_field:
+        _sub(node, "valueField", choice_set.value_field)
+
+
 def _write_screen(root: ET.Element, el: Screen, xy) -> None:
     node = _sub(root, "screens")
     _write_common(node, el, xy)
@@ -284,6 +320,8 @@ def _write_screen(root: ET.Element, el: Screen, xy) -> None:
     for screen_field in el.fields:
         f = _sub(node, "fields")
         _sub(f, "name", screen_field.name)
+        for reference in screen_field.choice_references:
+            _sub(f, "choiceReferences", reference)
         if screen_field.data_type:
             _sub(f, "dataType", screen_field.data_type)
         _sub(f, "fieldText", screen_field.field_text)
@@ -321,11 +359,17 @@ _WRITERS = {
     Subflow: ("subflows", _write_subflow),
 }
 
-# The order Salesforce emits Flow children in.
+# The order Salesforce emits Flow children in. Alphabetical, which interleaves
+# the two resource tags among the elements - they are written by name below
+# rather than from a bucket, since nothing connects to them.
+_RESOURCE_TAGS = ("choices", "dynamicChoiceSets")
+
 _ROOT_ORDER = [
     "actionCalls",
     "assignments",
+    "choices",
     "decisions",
+    "dynamicChoiceSets",
     "loops",
     "recordCreates",
     "recordDeletes",
@@ -352,6 +396,14 @@ def generate(flow: Flow) -> str:
         buckets[tag].append(el)
 
     for tag in _ROOT_ORDER:
+        if tag == "choices":
+            for choice in flow.choices:
+                _write_choice(root, choice)
+            continue
+        if tag == "dynamicChoiceSets":
+            for choice_set in flow.dynamic_choice_sets:
+                _write_choice_set(root, choice_set)
+            continue
         for el in buckets[tag]:
             _, writer = _WRITERS[type(el)]
             writer(root, el, coords[el.name])

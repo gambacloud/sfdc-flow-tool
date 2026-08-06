@@ -308,14 +308,14 @@ class TestTheParserRefuses:
         assert screen.fields[0].data_type == "String"
 
     @pytest.mark.parametrize("kind", [
-        "RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "ComponentInstance",
-        "PasswordField", "RegionContainer",
+        "ComponentInstance", "PasswordField", "RegionContainer", "Region",
+        "ObjectProvided", "ComponentInput",
     ])
     def test_a_field_type_this_build_lacks_is_refused_by_name(self, kind):
         """
         These have exactly the same children as an InputField, so nothing
-        structural notices them. Without this check a picker would be read as a
-        text box, drawn as one, and deployed as one.
+        structural notices them. Without this check one would be read as a text
+        box, drawn as one, and deployed as one.
         """
         xml = org_xml(
             f"<fields><name>Pick</name><fieldText>Pick</fieldText>"
@@ -327,7 +327,6 @@ class TestTheParserRefuses:
         assert "Ask.Pick" in str(caught.value)
 
     @pytest.mark.parametrize("tag,expected", [
-        ("choiceReferences", "a choice picker"),
         ("extensionName", "a custom LWC or Aura component"),
         ("visibilityRule", "conditional visibility"),
         ("defaultValue", "a prefilled default"),
@@ -349,15 +348,6 @@ class TestTheParserRefuses:
             parse_flow(org_xml(PLAIN_FIELD, screen_extra=f"<{tag}>x</{tag}>"),
                        api_name="Ask")
         assert "Ask" in str(caught.value)
-
-    def test_choices_and_choice_sets_are_still_refused(self):
-        """Stage 2. A build with only stage 1 must say so rather than approximate."""
-        for tag in ("choices", "dynamicChoiceSets"):
-            xml = org_xml(PLAIN_FIELD).replace(
-                "<start>", f"<{tag}><name>C</name></{tag}><start>"
-            )
-            with pytest.raises(UnsupportedFlow):
-                parse_flow(xml, api_name="Ask")
 
     def test_a_screen_in_an_autolaunched_flow_is_reported_not_crashed(self):
         """

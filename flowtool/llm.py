@@ -182,12 +182,41 @@ No `data_type`.
 `data_type` says what it holds (String, Number, Currency, Date, DateTime, \
 Boolean).
   - `LargeTextArea` - a multi-line box. `field_text` is its label, no `data_type`.
+  - `RadioButtons` and `DropdownBox` - pick one from a list.
+  - `MultiSelectCheckboxes` and `MultiSelectPicklist` - pick several. Their \
+`data_type` is still the type of one option, usually `String`; Salesforce joins \
+the several answers into it.
 - Read what the user entered by the field's own name: a field named \
 `Customer_Email` is referenced as `Customer_Email`, not as `Screen1.Customer_Email`.
-- Pickers, radio buttons, checkboxes, dropdowns, lookups and custom LWC \
-components are not available yet. If the request needs one, use the closest of \
-the three kinds above and say so in the flow's `description` - do not invent a \
-field type.
+- Lookups and custom LWC or Aura components are not available yet. If the \
+request needs one, use the closest kind above and say so in the flow's \
+`description` - do not invent a field type.
+
+## Options for a picker
+
+The four picker types show options, and every option must be defined as a \
+resource that the field names in `choice_references`. There are two kinds.
+
+- `choices` - a fixed option you write out. `choice_text` is what the user sees; \
+`value` is what selecting it stores, and defaults to the text. Use these when \
+the options are a known short list.
+- `dynamic_choice_sets` - options built when the flow runs, in one of two ways, \
+never both:
+  - From records: `object`, `display_field` (what the user sees), and \
+`value_field` (what is stored, usually `Id`). Optionally `filters`, `sort_field`, \
+`sort_order` and `limit`. Use this for "pick an Account", "choose one of the \
+open Cases".
+  - From a picklist: `picklist_object` and `picklist_field`, with the choice \
+set's own `data_type` set to `Picklist`. Use this when the options should be \
+exactly the values already defined on a picklist field, so they stay in step \
+with the field.
+
+Choices and choice sets are resources, not elements: nothing connects to them \
+and they need no `next`. Their names share the one namespace with elements, \
+variables and screen fields.
+
+A picker with no `choice_references` shows the user an empty list, so the IR \
+refuses it. Define the options first, then name them.
 
 ## Not your decision
 

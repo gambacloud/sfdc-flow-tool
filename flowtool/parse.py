@@ -20,8 +20,10 @@ from .ir import (
     ActionCall,
     Assignment,
     AssignmentItem,
+    Choice,
     Condition,
     Decision,
+    DynamicChoiceSet,
     Element,
     FieldValue,
     Flow,
@@ -101,6 +103,10 @@ _SUPPORTED_ELEMENTS = {
     "recordLookups", "recordUpdates", "screens", "subflows",
 }
 
+# Resources rather than elements: nothing connects to them, screen fields name
+# them. Read alongside the elements, checked with their own allowlists below.
+_SUPPORTED_RESOURCES = {"choices", "dynamicChoiceSets"}
+
 # Recognised Flow constructs the IR has no equivalent for. Named individually so
 # the message tells the user what is actually in their flow.
 _KNOWN_UNSUPPORTED = {
@@ -116,8 +122,6 @@ _KNOWN_UNSUPPORTED = {
     "formulas": "formula resources",
     "constants": "constant resources",
     "textTemplates": "text templates",
-    "dynamicChoiceSets": "dynamic choice sets",
-    "choices": "choices",
     "scheduledPaths": "scheduled paths",
     "exitRules": "exit rules",
     "filters": "top-level filters",
@@ -177,12 +181,23 @@ _ELEMENT_CHILDREN = {
 # whose field list was read but whose choices, components or visibility rules
 # were not would draw as a plain input box and lose them on the next deploy.
 _SCREEN_FIELD_CHILDREN = {
-    "name", "dataType", "fieldText", "fieldType", "isRequired",
+    "name", "dataType", "fieldText", "fieldType", "isRequired", "choiceReferences",
 }
 
-# Everything else on a screen - pickers, radio groups, LWC components - is a
-# later stage. Refused by name so a survey can count which one is worth building.
-_SUPPORTED_SCREEN_FIELD_TYPES = {"DisplayText", "InputField", "LargeTextArea"}
+# Everything else on a screen - LWC and Aura components, region containers - is
+# a later stage. Refused by name so a survey can count which is worth building.
+_SUPPORTED_SCREEN_FIELD_TYPES = {
+    "DisplayText", "InputField", "LargeTextArea",
+    "RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "MultiSelectPicklist",
+}
+
+_CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataValues"}
+
+_CHOICE_SET_CHILDREN = {
+    "name", "dataType", "displayField", "valueField", "object", "filters",
+    "filterLogic", "limit", "sortField", "sortOrder",
+    "picklistField", "picklistObject", "processMetadataValues",
+}
 
 _START_CHILDREN = {
     "locationX", "locationY", "connector", "object", "recordTriggerType",
@@ -214,7 +229,6 @@ _CHILD_MEANING = {
     "elementSubtype": "an element subtype this build does not model",
     "storeOutputAutomatically": "automatic output storage",
     # On a screen field.
-    "choiceReferences": "a choice picker",
     "extensionName": "a custom LWC or Aura component",
     "inputParameters": "component input parameters",
     "defaultValue": "a prefilled default",
@@ -224,6 +238,8 @@ _CHILD_MEANING = {
     "fields": "nested sections or columns",
     "objectFieldReference": "a bound record field",
     "inputsOnNextNavToAssocScrn": "revisit behaviour",
+    "userInput": "a choice that lets the user type their own answer",
+    "collectionReference": "options built from a collection",
     # On a screen.
     "pausedText": "custom pause text",
     "nextOrFinishButtonLabel": "a custom button label",
@@ -441,6 +457,33 @@ def _read_action_call(node: ET.Element) -> ActionCall:
     )
 
 
+def _read_choice(node: ET.Element) -> Choice:
+    return Choice(
+        name=_text(node, "m:name") or "",
+        choice_text=_text(node, "m:choiceText") or "",
+        data_type=_text(node, "m:dataType") or "String",
+        value=_value(node.find("m:value", NS)),
+    )
+
+
+def _read_choice_set(node: ET.Element) -> DynamicChoiceSet:
+    limit = _text(node, "m:limit")
+    return DynamicChoiceSet(
+        name=_text(node, "m:name") or "",
+        data_type=_text(node, "m:dataType") or "String",
+        object=_text(node, "m:object"),
+        display_field=_text(node, "m:displayField"),
+        value_field=_text(node, "m:valueField"),
+        filters=_filters(node),
+        filter_logic=_text(node, "m:filterLogic") or "and",
+        sort_field=_text(node, "m:sortField"),
+        sort_order=_text(node, "m:sortOrder"),
+        limit=int(limit) if limit else None,
+        picklist_object=_text(node, "m:picklistObject"),
+        picklist_field=_text(node, "m:picklistField"),
+    )
+
+
 def _read_screen(node: ET.Element) -> Screen:
     fields = []
     for item in node.findall("m:fields", NS):
@@ -451,6 +494,9 @@ def _read_screen(node: ET.Element) -> Screen:
                 field_text=_text(item, "m:fieldText") or "",
                 data_type=_text(item, "m:dataType"),
                 is_required=_bool(item, "m:isRequired"),
+                choice_references=[
+                    (ref.text or "") for ref in item.findall("m:choiceReferences", NS)
+                ],
             )
         )
     return Screen(
@@ -523,7 +569,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     seen_unsupported = set()
     for child in root:
         tag = child.tag.split("}")[-1]
-        if tag in _IGNORED or tag in _SUPPORTED_ELEMENTS:
+        if tag in _IGNORED or tag in _SUPPORTED_ELEMENTS or tag in _SUPPORTED_RESOURCES:
             continue
         if tag in seen_unsupported:
             continue
@@ -539,6 +585,17 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         for node in root.findall(f"m:{tag}", NS):
             name = _text(node, "m:name") or tag
             reasons.extend(_unknown_children(node, allowed, name))
+
+    # Resources get the same treatment: a choice read without its userInput would
+    # lose the user's own typed answer on the next deploy.
+    for tag, allowed in (
+        ("choices", _CHOICE_CHILDREN),
+        ("dynamicChoiceSets", _CHOICE_SET_CHILDREN),
+    ):
+        for node in root.findall(f"m:{tag}", NS):
+            reasons.extend(
+                _unknown_children(node, allowed, _text(node, "m:name") or tag)
+            )
 
     # And one level below that, for the fields on each screen.
     for node in root.findall("m:screens", NS):
@@ -617,6 +674,23 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             )
         )
 
+    choices, choice_sets = [], []
+    for node in root.findall("m:choices", NS):
+        try:
+            choices.append(_read_choice(node))
+        except ValueError as exc:
+            reasons.append(Gap("ir_mismatch", f"choice does not fit the model: {exc}"))
+    for node in root.findall("m:dynamicChoiceSets", NS):
+        try:
+            choice_sets.append(_read_choice_set(node))
+        except ValueError as exc:
+            reasons.append(
+                Gap("ir_mismatch", f"choice set does not fit the model: {exc}")
+            )
+
+    if reasons:
+        raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
+
     label = _text(root, "m:label") or api_name or "Untitled"
     try:
         return Flow(
@@ -629,6 +703,8 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             start=start,
             elements=elements,
             variables=variables,
+            choices=choices,
+            dynamic_choice_sets=choice_sets,
         )
     except ValueError as exc:
         # The flow deployed, so this means the IR is stricter than Salesforce.

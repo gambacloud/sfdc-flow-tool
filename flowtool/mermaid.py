@@ -283,6 +283,10 @@ _FIELD_LABEL = {
     "DisplayText": "text",
     "InputField": "input",
     "LargeTextArea": "long text",
+    "RadioButtons": "radio buttons",
+    "DropdownBox": "dropdown",
+    "MultiSelectCheckboxes": "checkboxes",
+    "MultiSelectPicklist": "multi-select",
 }
 
 
@@ -351,7 +355,12 @@ def _element_detail(element: Element) -> str:
                 kind += f", {screen_field.data_type}"
             if screen_field.is_required:
                 kind += ", required"
-            parts.append(f"`{screen_field.name}` ({kind})")
+            detail = f"`{screen_field.name}` ({kind})"
+            if screen_field.choice_references:
+                detail += " from " + ", ".join(
+                    f"`{ref}`" for ref in screen_field.choice_references
+                )
+            parts.append(detail)
         return "<br>".join(parts)
 
     if isinstance(element, Subflow):
@@ -408,6 +417,35 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
             next_label = f"`{element.next}`" if element.next else "End"
         lines.append(f"| `{element.name}` | {type_label} | {detail} | {next_label} |")
     lines.append("")
+
+    # A picker whose options are not listed is a picker approved unseen.
+    if flow.choices or flow.dynamic_choice_sets:
+        lines += ["## Options", "", "| Name | Kind | What it offers |", "|---|---|---|"]
+        for choice in flow.choices:
+            shown = f'"{choice.choice_text}"'
+            if choice.value is not None:
+                shown += f" (stores {value_text(choice.value)})"
+            lines.append(f"| `{choice.name}` | Choice | {shown} |")
+        for choice_set in flow.dynamic_choice_sets:
+            if choice_set.picklist_field:
+                offers = (
+                    f"the values of `{choice_set.picklist_object}."
+                    f"{choice_set.picklist_field}`"
+                )
+            else:
+                offers = (
+                    f"one per `{choice_set.object}` record, showing "
+                    f"`{choice_set.display_field}`, storing `{choice_set.value_field}`"
+                )
+                if choice_set.filters:
+                    offers += " where " + _join(
+                        (filter_text(f) for f in choice_set.filters),
+                        choice_set.filter_logic,
+                    )
+                if choice_set.limit is not None:
+                    offers += f", first {choice_set.limit}"
+            lines.append(f"| `{choice_set.name}` | Choice set | {offers} |")
+        lines.append("")
 
     if flow.variables:
         lines += ["## Variables", "", "| Name | Type | Collection | Input | Output |",

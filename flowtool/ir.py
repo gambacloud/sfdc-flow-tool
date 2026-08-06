@@ -342,16 +342,149 @@ class Subflow(FaultCapable):
     input_assignments: List[InputAssignment] = Field(default_factory=list)
 
 
-ScreenFieldType = Literal["DisplayText", "InputField", "LargeTextArea"]
+ScreenFieldType = Literal[
+    "DisplayText",
+    "InputField",
+    "LargeTextArea",
+    "RadioButtons",
+    "DropdownBox",
+    "MultiSelectCheckboxes",
+    "MultiSelectPicklist",
+]
 
 # Screen inputs hold a value, and the value has a type. DisplayText shows text
 # and holds nothing, which is why data_type is optional and checked below.
-ScreenDataType = Literal["String", "Number", "Currency", "Date", "DateTime", "Boolean"]
+#
+# Picklist and Multipicklist are deliberately absent. They are types a *choice
+# set* has, not types a screen field has: the org rejects both outright here,
+# including on a multi-select, which stores its several answers as a String.
+ScreenDataType = Literal[
+    "String", "Number", "Currency", "Date", "DateTime", "Boolean",
+]
+
+# The field types that present a list of options rather than a free-text box.
+# Each one needs at least one choice to show, and nothing else may carry choices.
+CHOICE_FIELD_TYPES = frozenset(
+    {"RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "MultiSelectPicklist"}
+)
+
+# Types that hold no value at all.
+_NO_VALUE_FIELD_TYPES = frozenset({"DisplayText", "LargeTextArea"})
+
+
+class Choice(BaseModel):
+    """
+    One fixed option, defined once and referenced by name from any number of
+    screen fields. It is a resource, not an element - nothing connects to it.
+    """
+
+    name: str
+    choice_text: str = Field(description="What the user sees for this option.")
+    data_type: Literal["String", "Number", "Currency", "Date", "DateTime", "Boolean"] = (
+        "String"
+    )
+    value: Optional[Value] = Field(
+        default=None,
+        description="What selecting it stores. Defaults to the text shown.",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "choice name")
+
+
+class DynamicChoiceSet(BaseModel):
+    """
+    Options built when the flow runs, in one of two ways: from records, or from
+    a picklist field's values. The two are exclusive - a choice set drawn from
+    records has no picklist to read, and vice versa.
+    """
+
+    name: str
+    data_type: Literal[
+        "String", "Number", "Currency", "Date", "DateTime", "Boolean",
+        "Picklist", "Multipicklist",
+    ] = "String"
+
+    # Record mode: one option per matching record.
+    object: Optional[str] = None
+    display_field: Optional[str] = Field(
+        default=None, description="Record field shown to the user, e.g. 'Name'."
+    )
+    value_field: Optional[str] = Field(
+        default=None, description="Record field stored, e.g. 'Id'."
+    )
+    filters: List["RecordFilter"] = Field(default_factory=list)
+    filter_logic: Literal["and", "or"] = "and"
+    sort_field: Optional[str] = None
+    sort_order: Optional[Literal["Asc", "Desc"]] = None
+    limit: Optional[int] = None
+
+    # Picklist mode: one option per value defined on a picklist field.
+    picklist_object: Optional[str] = None
+    picklist_field: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "choice set name")
+
+    @model_validator(mode="after")
+    def one_mode_or_the_other(self) -> "DynamicChoiceSet":
+        record_mode = any(
+            (self.object, self.display_field, self.value_field, self.filters,
+             self.sort_field, self.limit)
+        )
+        picklist_mode = any((self.picklist_object, self.picklist_field))
+        if record_mode and picklist_mode:
+            raise ValueError(
+                f"choice set {self.name!r}: options come either from records "
+                "(object + display_field + value_field) or from a picklist "
+                "(picklist_object + picklist_field), not both."
+            )
+        if picklist_mode:
+            if not (self.picklist_object and self.picklist_field):
+                raise ValueError(
+                    f"choice set {self.name!r}: a picklist choice set needs both "
+                    "picklist_object and picklist_field."
+                )
+            # The org rejects any other type here outright: "The data type of
+            # 'X' can't be 'String'". Multipicklist is allowed, but only against
+            # a picklist field that is itself multi-select.
+            if self.data_type not in ("Picklist", "Multipicklist"):
+                raise ValueError(
+                    f"choice set {self.name!r}: a choice set built from a picklist "
+                    "has data_type 'Picklist' - or 'Multipicklist' when the "
+                    f"picklist field itself is multi-select - not {self.data_type!r}."
+                )
+            return self
+        if not record_mode:
+            raise ValueError(
+                f"choice set {self.name!r}: needs either records "
+                "(object + display_field + value_field) or a picklist "
+                "(picklist_object + picklist_field) to build its options from."
+            )
+        missing = [
+            field for field, value in (
+                ("object", self.object),
+                ("display_field", self.display_field),
+                ("value_field", self.value_field),
+            ) if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"choice set {self.name!r}: a record choice set needs {missing} - "
+                "which object to read, which field the user sees, and which field "
+                "is stored."
+            )
+        return self
 
 
 class ScreenField(BaseModel):
     """
-    One thing on a screen: a paragraph of text, or a box the user types into.
+    One thing on a screen: a paragraph of text, a box the user types into, or a
+    list of options to pick from.
 
     The name is not local to the screen. Flow puts screen fields in the same
     namespace as elements and variables, so `{!Customer_Name}` anywhere later in
@@ -363,12 +496,19 @@ class ScreenField(BaseModel):
     name: str
     field_type: ScreenFieldType
     field_text: str = Field(
-        description="For DisplayText, the text shown. For an input, its label."
+        description="For DisplayText, the text shown. For any input, its label."
     )
     data_type: Optional[ScreenDataType] = Field(
-        default=None, description="Required for InputField; not carried by the others."
+        default=None,
+        description="Required for InputField and for any field with choices.",
     )
     is_required: bool = False
+    choice_references: List[str] = Field(
+        default_factory=list,
+        description="Names of Choice or DynamicChoiceSet resources, in the order "
+        "they are shown. Only for RadioButtons, DropdownBox, "
+        "MultiSelectCheckboxes and MultiSelectPicklist.",
+    )
 
     @field_validator("name")
     @classmethod
@@ -377,17 +517,33 @@ class ScreenField(BaseModel):
 
     @model_validator(mode="after")
     def shape_matches_type(self) -> "ScreenField":
-        if self.field_type == "InputField":
-            if not self.data_type:
-                raise ValueError(
-                    f"screen field {self.name!r}: an InputField holds a value, so it "
-                    "needs a data_type"
-                )
-        elif self.data_type:
+        takes_choices = self.field_type in CHOICE_FIELD_TYPES
+
+        if takes_choices and not self.choice_references:
             raise ValueError(
-                f"screen field {self.name!r}: a {self.field_type} carries no "
-                "data_type. Use field_type 'InputField' to collect a typed value."
+                f"screen field {self.name!r}: a {self.field_type} shows a list of "
+                "options, so it needs at least one entry in choice_references "
+                "naming a Choice or a DynamicChoiceSet."
             )
+        if self.choice_references and not takes_choices:
+            raise ValueError(
+                f"screen field {self.name!r}: a {self.field_type} has nowhere to "
+                f"show options, so it cannot carry choice_references. Use one of "
+                f"{sorted(CHOICE_FIELD_TYPES)} to let the user pick."
+            )
+
+        if self.field_type in _NO_VALUE_FIELD_TYPES:
+            if self.data_type:
+                raise ValueError(
+                    f"screen field {self.name!r}: a {self.field_type} carries no "
+                    "data_type. Use field_type 'InputField' to collect a typed value."
+                )
+        elif not self.data_type:
+            raise ValueError(
+                f"screen field {self.name!r}: a {self.field_type} holds a value, so "
+                "it needs a data_type"
+            )
+
         if self.field_type == "DisplayText" and self.is_required:
             raise ValueError(
                 f"screen field {self.name!r}: DisplayText shows text and collects "
@@ -484,6 +640,9 @@ class Flow(BaseModel):
     start: Start
     elements: List[Element] = Field(default_factory=list)
     variables: List[Variable] = Field(default_factory=list)
+    # Resources, not elements: nothing connects to them, screen fields name them.
+    choices: List[Choice] = Field(default_factory=list)
+    dynamic_choice_sets: List[DynamicChoiceSet] = Field(default_factory=list)
 
     @field_validator("api_name")
     @classmethod
@@ -662,6 +821,38 @@ class Flow(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def choice_references_resolve(self) -> "Flow":
+        """
+        Every option a screen offers must be defined. Salesforce reports a
+        dangling choice reference as a deploy failure naming only the screen, so
+        it is worth catching here where the field itself can be named.
+        """
+        defined = {c.name for c in self.choices} | {
+            cs.name for cs in self.dynamic_choice_sets
+        }
+        problems: List[str] = []
+        for element in self.elements:
+            if not isinstance(element, Screen):
+                continue
+            for screen_field in element.fields:
+                for reference in screen_field.choice_references:
+                    if reference not in defined:
+                        problems.append(
+                            f"{element.name}.{screen_field.name} offers "
+                            f"{reference!r}"
+                        )
+        if problems:
+            known = sorted(defined) or "nothing"
+            raise ValueError(
+                "these screen fields offer options that are not defined: "
+                + "; ".join(problems)
+                + f". Defined choices and choice sets: {known}. Add a Choice (a "
+                "fixed option) or a DynamicChoiceSet (options built from records "
+                "or a picklist) for each one, or point the field at one that exists."
+            )
+        return self
+
+    @model_validator(mode="after")
     def names_are_unique(self) -> "Flow":
         """
         Elements, variables and screen fields share one namespace: `{!Total}` can
@@ -683,6 +874,10 @@ class Flow(BaseModel):
                     claim(screen_field.name, f"a field on screen {element.name}")
         for variable in self.variables:
             claim(variable.name, "a variable")
+        for choice in self.choices:
+            claim(choice.name, "a choice")
+        for choice_set in self.dynamic_choice_sets:
+            claim(choice_set.name, "a choice set")
 
         clashes = {
             name: kinds for name, kinds in owners.items() if len(kinds) > 1
