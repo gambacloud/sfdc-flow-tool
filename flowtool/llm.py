@@ -562,6 +562,7 @@ class FlowGenerator:
     def _validated(self, messages: List[Message]) -> GenerationResult:
         conversation = list(messages)
         last_error: Optional[str] = None
+        previous_names: Optional[set] = None
 
         for attempt in range(self.max_repairs + 1):
             log.info(
@@ -569,6 +570,42 @@ class FlowGenerator:
                 attempt + 1, self.max_repairs + 1, len(conversation),
             )
             payload = self.provider.complete_json(SYSTEM_PROMPT, conversation, self._schema)
+
+            # A model repairing a reachability error can "win" by deleting the
+            # orphaned elements instead of adding the connector that was asked
+            # for - a smaller flow trivially satisfies "everything is
+            # reachable". That is never the fix, so catch it before it reaches
+            # Flow.model_validate, which cannot tell a deliberate simplification
+            # from this kind of giving up. Compare counts, not just names - a
+            # repair that renames an element (e.g. to fix an invalid API name)
+            # changes its name without shrinking the flow, and that is fine.
+            current_names = {
+                e.get("name")
+                for e in payload.get("elements", []) or []
+                if isinstance(e, dict) and e.get("name")
+            }
+            dropped = set()
+            if previous_names is not None and len(current_names) < len(previous_names):
+                dropped = previous_names - current_names
+            previous_names = current_names
+
+            if dropped:
+                last_error = (
+                    f"elements {sorted(dropped)} are missing from this attempt, but "
+                    "were present in the one before it. Deleting an element is not "
+                    "a fix for a validation error about it - it just hides the "
+                    "problem. Restore them, and fix the actual connector the "
+                    "earlier error named."
+                )
+                log.warning("attempt %s rejected: %s", attempt + 1, last_error)
+                if attempt == self.max_repairs:
+                    break
+                conversation.append(
+                    Message(role="assistant", content=json.dumps(payload, indent=1))
+                )
+                conversation.append(Message(role="user", content=last_error))
+                continue
+
             try:
                 flow = Flow.model_validate(payload)
             except ValidationError as exc:

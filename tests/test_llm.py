@@ -125,6 +125,27 @@ class TestRepairLoop:
             FlowGenerator(provider, max_repairs=2).generate("...")
         assert not provider.payloads, "should have used its whole budget"
 
+    def test_deleting_the_orphan_instead_of_fixing_it_is_rejected(self):
+        # A model repairing "unreachable elements" can trivially satisfy the
+        # check by deleting the orphan instead of adding the missing
+        # connector. That must not be accepted as a fix.
+        shrunk = _with(elements=[])
+        provider = ScriptedProvider(DANGLING, shrunk, VALID)
+        result = FlowGenerator(provider).generate("...")
+        assert result.repairs == 2
+        assert [e.name for e in result.flow.elements] == ["Get_Account"]
+
+        complaint = provider.calls[2][-1].content
+        assert "Get_Account" in complaint
+        assert "not a fix" in complaint
+
+    def test_gives_up_when_the_model_only_ever_shrinks(self):
+        shrunk = _with(elements=[])
+        provider = ScriptedProvider(DANGLING, shrunk, shrunk)
+        with pytest.raises(LLMError, match="Could not get valid IR"):
+            FlowGenerator(provider, max_repairs=2).generate("...")
+        assert not provider.payloads, "should have used its whole budget"
+
 
 class TestRefine:
     def test_refinement_continues_the_conversation(self):
