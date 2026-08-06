@@ -256,6 +256,7 @@ async function design() {
       effort: $("effort").value,
       activate: $("activate").checked,
       api_version: $("apiVersion").value.trim() || "62.0",
+      api_key: $("apiKey").value.trim() || null,
     });
     state.validatedVersion = null;
     renderFlow(data);
@@ -300,6 +301,8 @@ async function importFlow() {
       api_name: apiName,
       org: $("org")?.value || null,
       effort: $("effort").value,
+      provider: $("provider").value || null,
+      api_key: $("apiKey").value.trim() || null,
     });
     state.validatedVersion = null;
     state.explanation = null;
@@ -422,6 +425,20 @@ async function deploy() {
 }
 
 // --------------------------------------------------------------------------
+// API key memory (browser-local only - never written to a file or sent
+// anywhere but the request that needs it)
+// --------------------------------------------------------------------------
+
+function apiKeyStorageKey(providerName) {
+  return `flowtool.apiKey.${providerName}`;
+}
+
+function loadStoredApiKey() {
+  const name = $("provider").value;
+  $("apiKey").value = (name && localStorage.getItem(apiKeyStorageKey(name))) || "";
+}
+
+// --------------------------------------------------------------------------
 // Boot
 // --------------------------------------------------------------------------
 
@@ -432,12 +449,25 @@ async function boot() {
     const config = await api("/api/config");
 
     const provider = $("provider");
-    if (config.providers.length) {
-      config.providers.forEach((name) => provider.add(new Option(name, name)));
+    const known = config.all_providers?.length ? config.all_providers : config.providers;
+    if (known.length) {
+      known.forEach((name) => {
+        const hasServerKey = config.providers.includes(name);
+        provider.add(new Option(hasServerKey ? `${name} (key set on server)` : name, name));
+      });
     } else {
-      provider.add(new Option("no key found", ""));
+      provider.add(new Option("no provider available", ""));
       $("designBtn").disabled = true;
     }
+    loadStoredApiKey();
+    provider.onchange = loadStoredApiKey;
+    $("apiKey").addEventListener("input", () => {
+      const name = provider.value;
+      if (!name) return;
+      const value = $("apiKey").value.trim();
+      if (value) localStorage.setItem(apiKeyStorageKey(name), value);
+      else localStorage.removeItem(apiKeyStorageKey(name));
+    });
 
     const org = $("org");
     if (config.orgs.length) {

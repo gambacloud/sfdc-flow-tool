@@ -149,13 +149,16 @@ def available_providers() -> List[str]:
     ]
 
 
-def build_provider(name: Optional[str], model: Optional[str], effort: str) -> Provider:
+def build_provider(
+    name: Optional[str], model: Optional[str], effort: str, api_key: Optional[str] = None
+) -> Provider:
     if not name:
         found = available_providers()
         if not found:
             raise LLMError(
-                "No LLM key found. Put GEMINI_API_KEY or ANTHROPIC_API_KEY in a "
-                f"{ROOT / '.env'} file and restart the server."
+                "No LLM key found. Either paste one in the UI's Options panel, or "
+                f"put GEMINI_API_KEY or ANTHROPIC_API_KEY in a {ROOT / '.env'} "
+                "file and restart the server."
             )
         name = found[0]
     if name not in PROVIDERS:
@@ -163,6 +166,8 @@ def build_provider(name: Optional[str], model: Optional[str], effort: str) -> Pr
     options: Dict[str, Any] = {"effort": effort}
     if model:
         options["model"] = model
+    if api_key:
+        options["api_key"] = api_key
     return PROVIDERS[name](**options)
 
 
@@ -189,6 +194,7 @@ class DesignRequest(BaseModel):
     effort: str = "high"
     activate: bool = False
     api_version: str = "62.0"
+    api_key: Optional[str] = None
 
 
 class RefineRequest(BaseModel):
@@ -217,6 +223,7 @@ class ImportRequest(BaseModel):
     model: Optional[str] = None
     effort: str = "high"
     api_version: str = "62.0"
+    api_key: Optional[str] = None
 
 
 class ExplainRequest(BaseModel):
@@ -242,6 +249,7 @@ def config() -> Dict[str, Any]:
         cli = False
     return {
         "providers": providers,
+        "all_providers": list(PROVIDERS),
         "default_provider": providers[0] if providers else None,
         "orgs": orgs,
         "sf_cli": cli,
@@ -254,7 +262,7 @@ def design(body: DesignRequest) -> Dict[str, Any]:
     if not body.request.strip():
         raise HTTPException(400, "Describe what the flow should do.")
     try:
-        provider = build_provider(body.provider, body.model, body.effort)
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
         generator = FlowGenerator(provider)
         result = generator.generate(body.request)
     except LLMError as exc:
@@ -316,7 +324,7 @@ async def import_flow(body: ImportRequest) -> Dict[str, Any]:
         raise HTTPException(422, str(exc)) from exc
 
     try:
-        provider = build_provider(body.provider, body.model, body.effort)
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
