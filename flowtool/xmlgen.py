@@ -24,6 +24,7 @@ from .ir import (
     RecordDelete,
     RecordFilter,
     RecordUpdate,
+    Screen,
     Subflow,
     Value,
 )
@@ -273,6 +274,28 @@ def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
         _sub(node, "storeOutputAutomatically", "true")
 
 
+def _write_screen(root: ET.Element, el: Screen, xy) -> None:
+    node = _sub(root, "screens")
+    _write_common(node, el, xy)
+    _sub(node, "allowBack", _bool(el.allow_back))
+    _sub(node, "allowFinish", _bool(el.allow_finish))
+    _sub(node, "allowPause", _bool(el.allow_pause))
+    _connector(node, "connector", el.next)
+    for screen_field in el.fields:
+        f = _sub(node, "fields")
+        _sub(f, "name", screen_field.name)
+        if screen_field.data_type:
+            _sub(f, "dataType", screen_field.data_type)
+        _sub(f, "fieldText", screen_field.field_text)
+        _sub(f, "fieldType", screen_field.field_type)
+        # DisplayText collects nothing, so isRequired would be meaningless on it -
+        # and Salesforce omits it there too.
+        if screen_field.field_type != "DisplayText":
+            _sub(f, "isRequired", _bool(screen_field.is_required))
+    _sub(node, "showFooter", _bool(el.show_footer))
+    _sub(node, "showHeader", _bool(el.show_header))
+
+
 def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
@@ -294,6 +317,7 @@ _WRITERS = {
     RecordDelete: ("recordDeletes", _write_record_delete),
     GetRecords: ("recordLookups", _write_get_records),
     RecordUpdate: ("recordUpdates", _write_record_update),
+    Screen: ("screens", _write_screen),
     Subflow: ("subflows", _write_subflow),
 }
 
@@ -307,6 +331,7 @@ _ROOT_ORDER = [
     "recordDeletes",
     "recordLookups",
     "recordUpdates",
+    "screens",
     "subflows",
 ]
 

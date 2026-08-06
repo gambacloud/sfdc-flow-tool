@@ -68,7 +68,9 @@ def show_flow(flow: Flow) -> None:
 def summarise(flow: Flow) -> str:
     """A prose reading of the flow, for people who don't read Mermaid source."""
     lines = []
-    if flow.start.object:
+    if flow.process_type == "Flow":
+        lines.append("Trigger: screen flow, run by a user")
+    elif flow.start.object:
         lines.append(
             f"Trigger: {flow.start.object} / {flow.start.record_trigger_type} "
             f"/ {flow.start.trigger_type}"

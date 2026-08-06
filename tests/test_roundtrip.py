@@ -468,7 +468,7 @@ class TestUnsupported:
         )
 
     @pytest.mark.parametrize("tag,expected", [
-        ("screens", "screen elements"),
+        ("recordRollbacks", "rollback elements"),
         ("waits", "wait / pause elements"),
         ("formulas", "formula resources"),
         ("collectionProcessors", "collection filter/sort"),
@@ -482,15 +482,17 @@ class TestUnsupported:
         with pytest.raises(UnsupportedFlow, match="somethingNew"):
             parse_flow(self._xml("<somethingNew><name>A</name></somethingNew>"))
 
-    def test_screen_flows_are_refused(self):
-        xml = self._xml("").replace("AutoLaunchedFlow", "Flow")
-        with pytest.raises(UnsupportedFlow, match="process type Flow"):
+    def test_migrated_workflow_rules_are_refused(self):
+        # Deliberately out of scope: a legacy migration artefact nobody authors.
+        xml = self._xml("").replace("AutoLaunchedFlow", "Workflow")
+        with pytest.raises(UnsupportedFlow, match="process type Workflow"):
             parse_flow(xml)
 
     def test_every_reason_is_listed_not_just_the_first(self):
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self._xml(
-                "<screens><name>A</name></screens><waits><name>B</name></waits>"
+                "<recordRollbacks><name>A</name></recordRollbacks>"
+                "<waits><name>B</name></waits>"
             ))
         assert len(caught.value.reasons) == 2
 

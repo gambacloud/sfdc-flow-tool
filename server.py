@@ -121,7 +121,9 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
         "api_version": flow.api_version,
         "element_count": len(flow.elements),
         "trigger": (
-            f"{flow.start.object} / {flow.start.record_trigger_type} "
+            "Screen flow (run by a user)"
+            if flow.process_type == "Flow"
+            else f"{flow.start.object} / {flow.start.record_trigger_type} "
             f"/ {flow.start.trigger_type}"
             if flow.start.object
             else "Autolaunched"

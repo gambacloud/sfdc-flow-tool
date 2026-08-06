@@ -158,6 +158,36 @@ criteria filtered on its Id.
 `trigger_type` on start. Autolaunched flows leave all three empty.
 - Reference the triggering record as `$Record` (for example `$Record.Amount`), \
 and a retrieved record by its element name (for example `Get_Account.Id`).
+- Element names, variable names and screen field names share one namespace. \
+Each name can be used once in the flow.
+
+## Screens
+
+Set `process_type` to `Flow` when the logic needs a person to see or type \
+something. Leave it `AutoLaunchedFlow` otherwise - that is the default and \
+covers both record-triggered and autolaunched flows.
+
+- A screen flow is started by a user, so its start has no `object`, \
+`record_trigger_type` or `trigger_type`, and there is no `$Record`. Take what \
+the flow needs from screen inputs or from input variables instead.
+- Only a screen flow may contain a Screen. A record-triggered or autolaunched \
+flow runs with nobody watching, and Salesforce rejects a screen in one.
+- A screen's `next` is what runs when the user clicks Next. A screen is not the \
+end of the flow unless you mean it to be - if the flow continues after the user \
+fills the screen in, set the screen's `next` to the element that continues it.
+- A screen's `fields` are, in order, what the user sees. There are three kinds:
+  - `DisplayText` - text shown to the user. `field_text` is the text itself. \
+No `data_type`.
+  - `InputField` - a box the user types in. `field_text` is its label, and \
+`data_type` says what it holds (String, Number, Currency, Date, DateTime, \
+Boolean).
+  - `LargeTextArea` - a multi-line box. `field_text` is its label, no `data_type`.
+- Read what the user entered by the field's own name: a field named \
+`Customer_Email` is referenced as `Customer_Email`, not as `Screen1.Customer_Email`.
+- Pickers, radio buttons, checkboxes, dropdowns, lookups and custom LWC \
+components are not available yet. If the request needs one, use the closest of \
+the three kinds above and say so in the flow's `description` - do not invent a \
+field type.
 
 ## Not your decision
 

@@ -342,6 +342,83 @@ class Subflow(FaultCapable):
     input_assignments: List[InputAssignment] = Field(default_factory=list)
 
 
+ScreenFieldType = Literal["DisplayText", "InputField", "LargeTextArea"]
+
+# Screen inputs hold a value, and the value has a type. DisplayText shows text
+# and holds nothing, which is why data_type is optional and checked below.
+ScreenDataType = Literal["String", "Number", "Currency", "Date", "DateTime", "Boolean"]
+
+
+class ScreenField(BaseModel):
+    """
+    One thing on a screen: a paragraph of text, or a box the user types into.
+
+    The name is not local to the screen. Flow puts screen fields in the same
+    namespace as elements and variables, so `{!Customer_Name}` anywhere later in
+    the flow reads what was typed here. That is why it must be a valid API name
+    and unique flow-wide, and it is what makes a screen input usable as the
+    `left` of a condition or the value of an assignment.
+    """
+
+    name: str
+    field_type: ScreenFieldType
+    field_text: str = Field(
+        description="For DisplayText, the text shown. For an input, its label."
+    )
+    data_type: Optional[ScreenDataType] = Field(
+        default=None, description="Required for InputField; not carried by the others."
+    )
+    is_required: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "screen field name")
+
+    @model_validator(mode="after")
+    def shape_matches_type(self) -> "ScreenField":
+        if self.field_type == "InputField":
+            if not self.data_type:
+                raise ValueError(
+                    f"screen field {self.name!r}: an InputField holds a value, so it "
+                    "needs a data_type"
+                )
+        elif self.data_type:
+            raise ValueError(
+                f"screen field {self.name!r}: a {self.field_type} carries no "
+                "data_type. Use field_type 'InputField' to collect a typed value."
+            )
+        if self.field_type == "DisplayText" and self.is_required:
+            raise ValueError(
+                f"screen field {self.name!r}: DisplayText shows text and collects "
+                "nothing, so it cannot be required."
+            )
+        return self
+
+
+class Screen(BaseElement):
+    """
+    A screen shown to a user.
+
+    Only a screen flow can hold one. A record-triggered or autolaunched flow runs
+    with nobody watching, and Salesforce rejects a screen in either — the check
+    is on Flow, where the process type lives.
+
+    Screens cannot fail the way a DML element can, so there is no fault path.
+    """
+
+    type: Literal["Screen"] = "Screen"
+    fields: List[ScreenField] = Field(default_factory=list)
+    # Runtime chrome. Modelled rather than assumed, because these are what the
+    # user sees and dropping them would turn Back and Pause back on for an admin
+    # who deliberately turned them off.
+    allow_back: bool = True
+    allow_finish: bool = True
+    allow_pause: bool = True
+    show_header: bool = True
+    show_footer: bool = True
+
+
 Element = Annotated[
     Union[
         ActionCall,
@@ -352,6 +429,7 @@ Element = Annotated[
         RecordUpdate,
         RecordDelete,
         Loop,
+        Screen,
         Subflow,
     ],
     Field(discriminator="type"),
@@ -399,7 +477,9 @@ class Flow(BaseModel):
     label: str
     description: Optional[str] = None
     api_version: str = "62.0"
-    process_type: Literal["AutoLaunchedFlow"] = "AutoLaunchedFlow"
+    # "Flow" is Salesforce's name for a screen flow — the one a user runs and
+    # watches. "AutoLaunchedFlow" covers both record-triggered and autolaunched.
+    process_type: Literal["AutoLaunchedFlow", "Flow"] = "AutoLaunchedFlow"
     status: Literal["Draft", "Active"] = "Draft"
     start: Start
     elements: List[Element] = Field(default_factory=list)
@@ -526,8 +606,24 @@ class Flow(BaseModel):
                 "element."
             )
 
-        orphans = {e.name for e in self.elements} - self.reachable()
+        reachable = self.reachable()
+        orphans = {e.name for e in self.elements} - reachable
         if orphans:
+            # Naming the orphans says what is stranded but not where the missing
+            # link starts, and a repair that cannot find the loose end just
+            # re-emits the same flow. The loose end is always a reachable
+            # element whose path stops, so name those too.
+            by_name = self.by_name()
+            dead_ends = [
+                name for name in sorted(reachable) if not self.successors(by_name[name])
+            ]
+            hint = (
+                f"\nPaths that currently stop: {dead_ends}. The connector you are "
+                "missing almost certainly belongs to one of these - set its `next` "
+                "to whatever should run after it."
+                if dead_ends
+                else ""
+            )
             raise ValueError(
                 f"unreachable elements: {sorted(orphans)}. No path from Start "
                 "reaches them. Here is every connector as it stands:\n"
@@ -535,6 +631,68 @@ class Flow(BaseModel):
                 "Set the connector that should lead to each unreachable element. "
                 "For a Decision, that is the outcome's own `next` - an outcome "
                 "with next=null ends the path instead of continuing to the "
-                "element you meant."
+                f"element you meant.{hint}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def screens_belong_to_a_screen_flow(self) -> "Flow":
+        """
+        Salesforce will not run a screen where nobody is watching, and it will
+        not start a screen flow from a record change. Both are rejected at
+        deploy; both are cheaper to catch here.
+        """
+        screens = sorted(e.name for e in self.elements if isinstance(e, Screen))
+        if screens and self.process_type != "Flow":
+            raise ValueError(
+                f"screens {screens} need process_type 'Flow'. A "
+                f"{self.process_type} runs in the background with no user to show "
+                "them to, so Salesforce refuses a screen in one. Either set "
+                "process_type to 'Flow' and drop the record trigger, or build the "
+                "logic without screens."
+            )
+        if self.process_type == "Flow" and self.start.object:
+            raise ValueError(
+                "a screen flow is launched by a user, not by a record change, so "
+                f"start.object ({self.start.object!r}), record_trigger_type and "
+                "trigger_type must all be empty. To react to a record change, use "
+                "process_type 'AutoLaunchedFlow' - but note that such a flow "
+                "cannot contain screens."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def names_are_unique(self) -> "Flow":
+        """
+        Elements, variables and screen fields share one namespace: `{!Total}` can
+        only mean one thing, so a screen input named after a variable makes the
+        reference ambiguous and Salesforce rejects the flow.
+
+        Duplicate element names are caught earlier with a more specific message;
+        this is the check that spans the three kinds.
+        """
+        owners: Dict[str, List[str]] = {}
+
+        def claim(name: str, owner: str) -> None:
+            owners.setdefault(name, []).append(owner)
+
+        for element in self.elements:
+            claim(element.name, "an element")
+            if isinstance(element, Screen):
+                for screen_field in element.fields:
+                    claim(screen_field.name, f"a field on screen {element.name}")
+        for variable in self.variables:
+            claim(variable.name, "a variable")
+
+        clashes = {
+            name: kinds for name, kinds in owners.items() if len(kinds) > 1
+        }
+        if clashes:
+            detail = "; ".join(
+                f"{name!r} is {' and '.join(kinds)}" for name, kinds in sorted(clashes.items())
+            )
+            raise ValueError(
+                "elements, variables and screen fields share one namespace, so "
+                f"each name can be used once: {detail}. Rename one of them."
             )
         return self

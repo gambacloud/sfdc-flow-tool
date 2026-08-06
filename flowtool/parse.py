@@ -33,6 +33,8 @@ from .ir import (
     RecordDelete,
     RecordFilter,
     RecordUpdate,
+    Screen,
+    ScreenField,
     Start,
     Subflow,
     Value,
@@ -96,13 +98,12 @@ _IGNORED = {
 # Element collections this module can turn into IR.
 _SUPPORTED_ELEMENTS = {
     "actionCalls", "assignments", "decisions", "loops", "recordCreates", "recordDeletes",
-    "recordLookups", "recordUpdates", "subflows",
+    "recordLookups", "recordUpdates", "screens", "subflows",
 }
 
 # Recognised Flow constructs the IR has no equivalent for. Named individually so
 # the message tells the user what is actually in their flow.
 _KNOWN_UNSUPPORTED = {
-    "screens": "screen elements",
     "waits": "wait / pause elements",
     "apexPluginCalls": "Apex plugin calls",
     "recordRollbacks": "rollback elements",
@@ -166,7 +167,22 @@ _ELEMENT_CHILDREN = {
     "actionCalls": _ELEMENT_COMMON | _FAULT | {
         "actionName", "actionType", "inputParameters", "storeOutputAutomatically",
     },
+    # No faultConnector: a screen cannot fail the way a DML element can.
+    "screens": _ELEMENT_COMMON | {
+        "fields", "allowBack", "allowFinish", "allowPause", "showFooter", "showHeader",
+    },
 }
+
+# Two levels below the root, and the reason this pass exists at all: a screen
+# whose field list was read but whose choices, components or visibility rules
+# were not would draw as a plain input box and lose them on the next deploy.
+_SCREEN_FIELD_CHILDREN = {
+    "name", "dataType", "fieldText", "fieldType", "isRequired",
+}
+
+# Everything else on a screen - pickers, radio groups, LWC components - is a
+# later stage. Refused by name so a survey can count which one is worth building.
+_SUPPORTED_SCREEN_FIELD_TYPES = {"DisplayText", "InputField", "LargeTextArea"}
 
 _START_CHILDREN = {
     "locationX", "locationY", "connector", "object", "recordTriggerType",
@@ -197,6 +213,22 @@ _CHILD_MEANING = {
     "apexClass": "an Apex type",
     "elementSubtype": "an element subtype this build does not model",
     "storeOutputAutomatically": "automatic output storage",
+    # On a screen field.
+    "choiceReferences": "a choice picker",
+    "extensionName": "a custom LWC or Aura component",
+    "inputParameters": "component input parameters",
+    "defaultValue": "a prefilled default",
+    "visibilityRule": "conditional visibility",
+    "validationRule": "a validation rule",
+    "helpText": "help text",
+    "fields": "nested sections or columns",
+    "objectFieldReference": "a bound record field",
+    "inputsOnNextNavToAssocScrn": "revisit behaviour",
+    # On a screen.
+    "pausedText": "custom pause text",
+    "nextOrFinishButtonLabel": "a custom button label",
+    "backButtonLabel": "a custom button label",
+    "pauseButtonLabel": "a custom button label",
 }
 
 
@@ -409,6 +441,31 @@ def _read_action_call(node: ET.Element) -> ActionCall:
     )
 
 
+def _read_screen(node: ET.Element) -> Screen:
+    fields = []
+    for item in node.findall("m:fields", NS):
+        fields.append(
+            ScreenField(
+                name=_text(item, "m:name") or "",
+                field_type=_text(item, "m:fieldType") or "DisplayText",
+                field_text=_text(item, "m:fieldText") or "",
+                data_type=_text(item, "m:dataType"),
+                is_required=_bool(item, "m:isRequired"),
+            )
+        )
+    return Screen(
+        **_common(node),
+        fields=fields,
+        # Salesforce's own defaults, so a screen that omits them round-trips to
+        # the same flow rather than one with Back and Pause switched off.
+        allow_back=_bool(node, "m:allowBack", True),
+        allow_finish=_bool(node, "m:allowFinish", True),
+        allow_pause=_bool(node, "m:allowPause", True),
+        show_footer=_bool(node, "m:showFooter", True),
+        show_header=_bool(node, "m:showHeader", True),
+    )
+
+
 def _read_subflow(node: ET.Element) -> Subflow:
     inputs = []
     for item in node.findall("m:inputAssignments", NS):
@@ -432,6 +489,7 @@ _READERS = {
     "recordDeletes": _read_record_delete,
     "recordLookups": _read_get_records,
     "recordUpdates": _read_record_update,
+    "screens": _read_screen,
     "subflows": _read_subflow,
 }
 
@@ -454,11 +512,11 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
 
     reasons: List[Gap] = []
 
-    process_type = _text(root, "m:processType")
-    if process_type and process_type != "AutoLaunchedFlow":
+    process_type = _text(root, "m:processType") or "AutoLaunchedFlow"
+    if process_type not in ("AutoLaunchedFlow", "Flow"):
         reasons.append(Gap(
             f"process_type:{process_type}",
-            f"process type {process_type} (only record-triggered and "
+            f"process type {process_type} (only screen, record-triggered and "
             "autolaunched flows are supported)",
         ))
 
@@ -481,6 +539,21 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         for node in root.findall(f"m:{tag}", NS):
             name = _text(node, "m:name") or tag
             reasons.extend(_unknown_children(node, allowed, name))
+
+    # And one level below that, for the fields on each screen.
+    for node in root.findall("m:screens", NS):
+        screen_name = _text(node, "m:name") or "a screen"
+        for item in node.findall("m:fields", NS):
+            where = f"{screen_name}.{_text(item, 'm:name') or 'a field'}"
+            reasons.extend(_unknown_children(item, _SCREEN_FIELD_CHILDREN, where))
+            # The tag is allowed; the value may not be. A RadioButtons field has
+            # exactly the same children as an InputField, so nothing above would
+            # notice it - and it would silently become a text box.
+            kind = _text(item, "m:fieldType")
+            if kind and kind not in _SUPPORTED_SCREEN_FIELD_TYPES:
+                reasons.append(Gap(
+                    f"screen_field:{kind}", f"{where} is a {kind} field"
+                ))
 
     start_node = root.find("m:start", NS)
     if start_node is not None:
@@ -551,6 +624,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             label=label,
             description=_text(root, "m:description"),
             api_version=_text(root, "m:apiVersion") or "62.0",
+            process_type=process_type,
             status=_text(root, "m:status") or "Draft",
             start=start,
             elements=elements,

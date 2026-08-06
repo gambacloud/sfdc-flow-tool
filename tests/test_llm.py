@@ -248,6 +248,13 @@ class TestGeminiDialect:
         assert not found, found
 
     def test_the_union_of_element_types_is_intact(self):
+        # Counted from the IR rather than hard-coded, so adding an element type
+        # cannot make this test pass by describing the old union.
+        from typing import get_args
+
+        from flowtool.ir import Element
+
+        expected = len(get_args(get_args(Element)[0]))
         elements = gemini_schema(RAW)["properties"]["elements"]["items"]
         branches = elements.get("anyOf") or elements.get("oneOf")
-        assert branches and len(branches) == 9, "lost element types from the union"
+        assert branches and len(branches) == expected, "lost element types from the union"

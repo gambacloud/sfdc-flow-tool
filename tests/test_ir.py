@@ -206,6 +206,27 @@ class TestReferences:
         assert "D outcome Yes -> (ends)" in message, "must show the broken link"
         assert "Orphan -> (ends)" in message
 
+    def test_the_error_names_the_reachable_paths_that_stop(self):
+        """
+        The connector map says what is stranded but not where the loose end is.
+        A repair that cannot find the loose end just re-emits the same flow, so
+        the reachable elements whose path stops are named outright - the missing
+        connector belongs to one of them.
+        """
+        with pytest.raises(ValidationError) as caught:
+            _flow(
+                start=Start(next="First"),
+                elements=[
+                    GetRecords(name="First", label="First", object="Account"),
+                    GetRecords(name="Orphan", label="Orphan", object="Contact"),
+                ],
+            )
+        message = str(caught.value)
+        assert "Paths that currently stop: ['First']" in message
+        assert "Orphan" not in message.split("Paths that currently stop")[1], (
+            "an unreachable element is not a loose end to connect from"
+        )
+
     def test_elements_reached_through_a_decision_outcome_count(self):
         _flow(
             start=Start(next="D"),

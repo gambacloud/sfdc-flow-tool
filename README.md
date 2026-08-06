@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-194 tests, none of which need a key, a network, or an org.
+251 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -123,10 +123,10 @@ validate and deploy refuse unless the version you approved is still current.
 SFDC Flow Tool retrieves the metadata, parses it back into IR, and draws it. From
 there it behaves like any other flow — explain, refine, approve, redeploy.
 
-A flow using screens, waits, formula resources, or other constructs the IR can't
-hold is **refused, not drawn approximately**, naming what it found. Skipping
-those parts would show a diagram of a different flow than the one in the org, and
-editing from that diagram would delete them on deploy.
+A flow using waits, formula resources, or other constructs the IR can't hold is
+**refused, not drawn approximately**, naming what it found. Skipping those parts
+would show a diagram of a different flow than the one in the org, and editing
+from that diagram would delete them on deploy.
 
 `parse(generate(ir)) == ir` is asserted for every element type in
 `tests/test_roundtrip.py`. That property is what makes an edit round-trip safe.
@@ -146,15 +146,15 @@ actually blocks the ones it can't take:
 What blocks them:
 
   seen  frees
-     9      6  ############################  element:screens
+     9      6  ############################  element:waits
      4      1  ############                  element:formulas
      2      0  ######                        child:queriedFields
-     1      0  ###                           element:waits
+     1      0  ###                           screen_field:RadioButtons
 
   seen  = flows this appears in
   frees = flows that would parse if only this were supported
 
-Biggest single win: supporting element:screens would unblock 6 of 47 flows on its own.
+Biggest single win: supporting element:waits would unblock 6 of 47 flows on its own.
 ```
 
 The two columns differ because a flow blocked by several things is freed by
@@ -174,7 +174,7 @@ should always be empty.
 
 ## What it covers
 
-Record-triggered and autolaunched flows:
+Record-triggered, autolaunched, and screen flows:
 
 | | |
 |---|---|
@@ -184,6 +184,7 @@ Record-triggered and autolaunched flows:
 | Loop | |
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
+| **Screen** | Display text, input fields, long text areas |
 
 Formula **fields** on an object work anywhere a reference does (`$Record.Margin__c`).
 Formula **resources** defined inside a flow do not.
@@ -195,17 +196,21 @@ migration artefact, not something anyone authors today, and supporting them
 would mean carrying their shape forever. A survey will keep counting them; the
 count is expected to sit there.
 
-**Screen flows are in scope and not yet built** — the next planned addition.
-Roughly, in the order they pay off:
+**Screen flows** are built as far as stage 1 of three:
 
-1. `processType: Flow`, plus screens carrying display text and input fields.
-   Covers most of what a simple screen flow does.
+1. ✅ `processType: Flow`, plus screens carrying display text, input fields, and
+   long text areas. Covers most of what a simple screen flow does.
 2. Choices and dynamic choice sets, for pickers and radio groups.
 3. LWC and Aura extensions on a screen.
 
-Everything the IR cannot yet hold is refused rather than approximated, so a
-partial implementation is safe to ship: a screen flow using stage 2 features
-is refused by a build that only has stage 1.
+Everything the IR cannot yet hold is refused rather than approximated, which is
+what makes a partial implementation safe to ship: a `RadioButtons` field has
+exactly the same shape as a text input, so it is refused **by name** rather than
+read as one and silently deployed as one.
+
+A screen input is referenced by its own name (`{!Customer_Email}`), so screen
+fields, elements and variables share a single namespace. The IR enforces that,
+because a collision is only reported by Salesforce at deploy time.
 
 ## Layout
 

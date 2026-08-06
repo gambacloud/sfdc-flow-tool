@@ -24,6 +24,7 @@ from .ir import (
     RecordDelete,
     RecordFilter,
     RecordUpdate,
+    Screen,
     Subflow,
     Value,
 )
@@ -141,6 +142,9 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
         return f'{name}[/"{text}"/]'
     if isinstance(element, Subflow):
         return f'{name}[["{text}"]]'
+    if isinstance(element, Screen):
+        # Hexagon: the only place the flow stops and waits for a person.
+        return f'{name}{{{{"{text}"}}}}'
     if isinstance(element, ActionCall):
         # Mermaid's trapezoid ends with a literal backslash, hence the raw string.
         return rf'{name}[/"{text}"\]'
@@ -174,10 +178,19 @@ def _element_caption(element: Element) -> str:
         return f"{element.label}\nFor each {element.collection_reference}"
     if isinstance(element, Subflow):
         return f"{element.label}\nCall {element.flow_name}"
+    if isinstance(element, Screen):
+        inputs = [f.name for f in element.fields if f.field_type != "DisplayText"]
+        if inputs:
+            detail = "Asks for " + ", ".join(inputs)
+        else:
+            detail = "Shows text"
+        return f"{element.label}\n{detail}"
     return element.label
 
 
 def _start_caption(flow: Flow) -> str:
+    if flow.process_type == "Flow":
+        return "Start\nRun by a user"
     if not flow.start.object:
         return "Start\nAutolaunched"
     trigger = {
@@ -261,8 +274,15 @@ _TYPE_LABEL = {
     RecordUpdate: "Update Records",
     RecordDelete: "Delete Records",
     Loop: "Loop",
+    Screen: "Screen",
     Subflow: "Subflow",
     ActionCall: "Action",
+}
+
+_FIELD_LABEL = {
+    "DisplayText": "text",
+    "InputField": "input",
+    "LargeTextArea": "long text",
 }
 
 
@@ -321,6 +341,19 @@ def _element_detail(element: Element) -> str:
             f"body starts at `{element.first_element or 'nothing'}`"
         )
 
+    if isinstance(element, Screen):
+        if not element.fields:
+            return "no fields"
+        parts = []
+        for screen_field in element.fields:
+            kind = _FIELD_LABEL.get(screen_field.field_type, screen_field.field_type)
+            if screen_field.data_type:
+                kind += f", {screen_field.data_type}"
+            if screen_field.is_required:
+                kind += ", required"
+            parts.append(f"`{screen_field.name}` ({kind})")
+        return "<br>".join(parts)
+
     if isinstance(element, Subflow):
         detail = f"calls `{element.flow_name}`"
         if element.input_assignments:
@@ -341,7 +374,11 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
         lines += [flow.description, ""]
 
     lines += ["## Trigger", ""]
-    if flow.start.object:
+    if flow.process_type == "Flow":
+        lines.append(
+            "- **Screen flow** — run by a user, from an app, a record page, or a link."
+        )
+    elif flow.start.object:
         lines.append(
             f"- **Object**: `{flow.start.object}`"
         )

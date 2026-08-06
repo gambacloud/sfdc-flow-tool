@@ -49,30 +49,30 @@ class TestCounting:
         assert survey.total == 1
 
     def test_a_blocker_counts_once_per_flow_not_once_per_occurrence(self):
-        # Three screens in one flow is one flow blocked by screens.
+        # Three waits in one flow is one flow blocked by waits.
         survey = Survey()
         survey.add("Screeny", xml(
-            "<screens><name>A</name></screens>"
-            "<screens><name>B</name></screens>"
-            "<screens><name>C</name></screens>"
+            "<waits><name>A</name></waits>"
+            "<waits><name>B</name></waits>"
+            "<waits><name>C</name></waits>"
         ))
-        assert survey.codes["element:screens"] == 1
+        assert survey.codes["element:waits"] == 1
 
     def test_every_blocker_in_a_flow_is_counted(self):
         survey = Survey()
         survey.add("Both", xml(
-            "<screens><name>A</name></screens><waits><name>W</name></waits>"
+            "<formulas><name>F</name></formulas><waits><name>W</name></waits>"
         ))
-        assert survey.codes["element:screens"] == 1
+        assert survey.codes["element:formulas"] == 1
         assert survey.codes["element:waits"] == 1
         assert survey.flows_by_code["element:waits"] == ["Both"]
 
     def test_counts_add_up_across_flows(self):
         survey = Survey()
         for name in ("A", "B", "C"):
-            survey.add(name, xml("<screens><name>S</name></screens>"))
+            survey.add(name, xml("<waits><name>W</name></waits>"))
         survey.add("D", clean_flow_xml())
-        assert survey.codes["element:screens"] == 3
+        assert survey.codes["element:waits"] == 3
         assert survey.total == 4
         assert len(survey.parsed) == 1
 
@@ -81,15 +81,15 @@ class TestCounting:
         survey.add("Picky", xml(lookup_extra="<queriedFields>Id</queriedFields>"))
         assert survey.codes["child:queriedFields"] == 1
 
-    def test_a_screen_flow_is_counted_by_its_process_type(self):
+    def test_an_unsupported_process_type_is_counted(self):
         survey = Survey()
-        survey.add("Screeny", xml(process_type="Flow"))
-        assert survey.codes["process_type:Flow"] == 1
+        survey.add("Legacy", xml(process_type="Workflow"))
+        assert survey.codes["process_type:Workflow"] == 1
 
     def test_elements_are_tallied_only_for_flows_that_parse(self):
         survey = Survey()
         survey.add("Good", clean_flow_xml())
-        survey.add("Bad", xml("<screens><name>S</name></screens>"))
+        survey.add("Bad", xml("<waits><name>W</name></waits>"))
         assert survey.element_counts["GetRecords"] == 1
         assert survey.element_counts["RecordUpdate"] == 1
 
@@ -104,15 +104,15 @@ class TestWhatWouldActuallyHelp:
     def test_a_code_that_never_stands_alone_frees_nothing(self):
         survey = Survey()
         survey.add("Two_Problems", xml(
-            "<screens><name>S</name></screens><waits><name>W</name></waits>"
+            "<formulas><name>F</name></formulas><waits><name>W</name></waits>"
         ))
-        assert survey.codes["element:screens"] == 1, "it is still counted as seen"
-        assert survey.would_unblock()["element:screens"] == 0, "but it frees nothing"
+        assert survey.codes["element:formulas"] == 1, "it is still counted as seen"
+        assert survey.would_unblock()["element:formulas"] == 0, "but it frees nothing"
 
     def test_a_sole_blocker_frees_its_flow(self):
         survey = Survey()
-        survey.add("One_Problem", xml("<screens><name>S</name></screens>"))
-        assert survey.would_unblock()["element:screens"] == 1
+        survey.add("One_Problem", xml("<waits><name>W</name></waits>"))
+        assert survey.would_unblock()["element:waits"] == 1
 
     def test_managed_flows_do_not_drive_the_recommendation(self):
         # The first real survey's top answer was a Salesforce-installed flow
@@ -137,7 +137,7 @@ class TestWhatWouldActuallyHelp:
     def test_the_report_says_so_when_nothing_helps_alone(self, capsys):
         survey = Survey()
         survey.add("Two_Problems", xml(
-            "<screens><name>S</name></screens><waits><name>W</name></waits>"
+            "<formulas><name>F</name></formulas><waits><name>W</name></waits>"
         ))
         report(survey, verbose=False)
         out = capsys.readouterr().out
@@ -241,20 +241,20 @@ class TestOutput:
     def test_the_report_names_the_biggest_win(self, capsys):
         survey = Survey()
         for name in ("A", "B"):
-            survey.add(name, xml("<screens><name>S</name></screens>"))
+            survey.add(name, xml("<formulas><name>F</name></formulas>"))
         survey.add("C", xml("<waits><name>W</name></waits>"))
         report(survey, verbose=False)
         out = capsys.readouterr().out
         assert "3 flows" in out
         assert "Biggest single win" in out
-        assert "element:screens" in out
+        assert "element:formulas" in out
 
     def test_json_is_serialisable_and_complete(self):
         survey = Survey()
         survey.add("Good", clean_flow_xml())
-        survey.add("Bad", xml("<screens><name>S</name></screens>"))
+        survey.add("Bad", xml("<waits><name>W</name></waits>"))
         payload = json.loads(json.dumps(as_json(survey)))
         assert payload["total"] == 2
         assert payload["parsed"] == ["Good"]
-        assert payload["codes"]["element:screens"] == 1
-        assert payload["flows_by_code"]["element:screens"] == ["Bad"]
+        assert payload["codes"]["element:waits"] == 1
+        assert payload["flows_by_code"]["element:waits"] == ["Bad"]
