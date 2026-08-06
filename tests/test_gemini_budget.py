@@ -152,3 +152,36 @@ class TestUnfencing:
 
     def test_a_fence_with_no_body_does_not_crash(self):
         assert _unfenced("```") == ""
+
+
+class TestModelOrdering:
+    """
+    The picker's first entries are the ones anyone will actually read, so the
+    ordering is part of the feature rather than cosmetics.
+    """
+
+    def test_versions_compare_as_numbers(self):
+        from flowtool.llm import _descending
+
+        names = ["gemini-3-flash-preview", "gemini-3.5-flash", "gemini-3.6-flash",
+                 "gemini-3.1-pro-preview", "gemini-2.5-pro"]
+        assert sorted(names, key=_descending) == [
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-2.5-pro",
+        ]
+
+    def test_a_decimal_version_outranks_its_bare_major(self):
+        # Splitting on digits alone made "3.5" sort below "3-preview", because
+        # "-" precedes "." in ASCII.
+        from flowtool.llm import _descending
+
+        assert _descending("gemini-3.5-flash") < _descending("gemini-3-flash-preview")
+
+    def test_non_text_models_are_named_not_guessed(self):
+        from flowtool.llm import _GEMINI_NOT_TEXT
+
+        for word in ("embedding", "image", "tts", "veo", "robotics", "computer-use"):
+            assert word in _GEMINI_NOT_TEXT

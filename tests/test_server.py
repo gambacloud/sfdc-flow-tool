@@ -342,3 +342,71 @@ class TestDeploy:
         ).json()
         assert result["success"] is True
         assert calls == [True, False], "expected checkOnly then a real deploy"
+
+
+class TestModelPicker:
+    """
+    A picker whose choice never reaches the request is decoration, and a baked-in
+    list goes stale silently - a retired model would only show up as a failure
+    several seconds into a design.
+    """
+
+    def test_models_come_from_the_provider(self, client, monkeypatch):
+        class Lister:
+            model = "gemini-3.6-flash"
+
+            def list_models(self):
+                return ["gemini-3.6-flash", "gemini-3.5-flash"]
+
+        monkeypatch.setattr(server, "build_provider", lambda *_a, **_k: Lister())
+        data = client.post("/api/models", json={"provider": "gemini"}).json()
+        assert data["models"] == ["gemini-3.6-flash", "gemini-3.5-flash"]
+        assert data["default"] == "gemini-3.6-flash"
+
+    def test_a_provider_that_cannot_list_is_not_an_error(self):
+        class Silent:
+            model = "whatever"
+
+        with TestClient(server.app) as anonymous:
+            server_build = server.build_provider
+            try:
+                server.build_provider = lambda *_a, **_k: Silent()
+                data = anonymous.post("/api/models", json={}).json()
+            finally:
+                server.build_provider = server_build
+        assert data["models"] == []
+        assert data["default"] == "whatever"
+
+    def test_a_bad_key_is_reported_not_swallowed(self, client, monkeypatch):
+        class Angry:
+            model = "m"
+
+            def list_models(self):
+                raise RuntimeError("API key not valid")
+
+        monkeypatch.setattr(server, "build_provider", lambda *_a, **_k: Angry())
+        response = client.post("/api/models", json={"provider": "gemini"})
+        assert response.status_code == 400
+        assert "API key not valid" in response.json()["detail"]
+
+    def test_the_chosen_model_reaches_the_provider(self, client, monkeypatch):
+        seen = {}
+
+        def spy(name, model, effort, api_key=None):
+            seen["model"] = model
+            return ScriptedProvider(VALID)
+
+        monkeypatch.setattr(server, "build_provider", spy)
+        design(client, model="gemini-3.5-flash")
+        assert seen["model"] == "gemini-3.5-flash", "the picker must not be decoration"
+
+    def test_no_choice_means_the_provider_default(self, client, monkeypatch):
+        seen = {}
+
+        def spy(name, model, effort, api_key=None):
+            seen["model"] = model
+            return ScriptedProvider(VALID)
+
+        monkeypatch.setattr(server, "build_provider", spy)
+        design(client)
+        assert seen["model"] is None

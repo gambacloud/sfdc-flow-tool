@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -299,6 +300,22 @@ class AnthropicProvider:
         )
         log.info("%s %s -> %s", self.name, self.model, self.usage)
 
+    # The SDK resolves credentials lazily, so listing is the first place a
+    # missing key shows up - as the same TypeError the completion path handles.
+    _NO_KEY = (
+        "No Anthropic credentials found. Set one of:\n"
+        "    $env:ANTHROPIC_API_KEY = 'sk-ant-...'   (PowerShell)\n"
+        "    ant auth login                          (OAuth profile)"
+    )
+
+    def list_models(self) -> List[str]:
+        try:
+            return [m.id for m in self._client.models.list(limit=100)]
+        except TypeError as exc:
+            if "authentication method" not in str(exc):
+                raise
+            raise LLMError(self._NO_KEY) from exc
+
     def complete_json(
         self, system: str, messages: List[Message], schema: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -328,11 +345,7 @@ class AnthropicProvider:
             # here as a TypeError rather than at construction.
             if "authentication method" not in str(exc):
                 raise
-            raise LLMError(
-                "No Anthropic credentials found. Set one of:\n"
-                "    $env:ANTHROPIC_API_KEY = 'sk-ant-...'   (PowerShell)\n"
-                "    ant auth login                          (OAuth profile)"
-            ) from exc
+            raise LLMError(self._NO_KEY) from exc
         except anthropic.AuthenticationError as exc:
             raise LLMError("Anthropic rejected the API key.") from exc
         except anthropic.NotFoundError as exc:
@@ -416,6 +429,34 @@ _GEMINI_THINKING = {
 # fine while an 18,000-character one with 221 is not. The margin below the
 # measured limit is deliberate: the cap is undocumented and may move.
 GEMINI_PROPERTY_BUDGET = 210
+
+# Substrings that mark a model as something other than a text generator. Gemini
+# lists images, speech, video and embeddings alongside the models that can write
+# a flow, and several of them accept generateContent.
+_GEMINI_NOT_TEXT = (
+    "embedding", "image", "tts", "-live", "lyria", "veo", "imagen",
+    "nano-banana", "aqa", "learnlm",
+    # Accept generateContent but are built for something else entirely.
+    "robotics", "computer-use",
+)
+
+
+_VERSION = re.compile(r"(\d+(?:\.\d+)?)")
+
+
+def _descending(name: str):
+    """
+    Sort key that puts later-looking names first.
+
+    Version numbers compare as numbers, including the decimal: split on digits
+    alone and "3.5" becomes 3, ".", 5, which sorts below "3-preview" because
+    "-" precedes "." in ASCII. That put gemini-3.5 under gemini-3.
+    """
+    parts = _VERSION.split(name)
+    return [
+        (-float(part), "") if _VERSION.fullmatch(part) else (0.0, part)
+        for part in parts
+    ]
 
 
 def _unfenced(text: str) -> str:
@@ -520,13 +561,34 @@ class GeminiProvider:
         )
         log.info("%s %s -> %s", self.name, self.model, self.usage)
 
+    def list_models(self) -> List[str]:
+        """
+        Text models this key can use, newest-looking first.
+
+        The raw list also carries image, speech and embedding models, none of
+        which can produce a flow - offering them would only invite a confusing
+        failure several seconds later.
+        """
+        models = []
+        for model in self._client.models.list():
+            name = (model.name or "").removeprefix("models/")
+            if not name or "generateContent" not in (model.supported_actions or []):
+                continue
+            if any(word in name for word in _GEMINI_NOT_TEXT):
+                continue
+            models.append(name)
+
+        # The default first, then the Gemini line newest-looking first, then
+        # everything else. Plain reverse-alphabetical buries gemini-3.6 under
+        # gemma-4, which is the one thing the list must not do.
+        def order(name: str):
+            return (name != self.model, not name.startswith("gemini-"), _descending(name))
+
+        return sorted(models, key=order)
+
     def _available_models(self) -> List[str]:
         try:
-            return sorted(
-                m.name.removeprefix("models/")
-                for m in self._client.models.list()
-                if m.name
-            )
+            return self.list_models()
         except Exception:  # listing is a nicety; never mask the original error
             return []
 

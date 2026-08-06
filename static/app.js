@@ -257,6 +257,7 @@ async function design() {
       activate: $("activate").checked,
       api_version: $("apiVersion").value.trim() || "62.0",
       api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
     });
     state.validatedVersion = null;
     renderFlow(data);
@@ -303,6 +304,7 @@ async function importFlow() {
       effort: $("effort").value,
       provider: $("provider").value || null,
       api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
     });
     state.validatedVersion = null;
     state.explanation = null;
@@ -439,6 +441,53 @@ function loadStoredApiKey() {
 }
 
 // --------------------------------------------------------------------------
+// Model picker
+// --------------------------------------------------------------------------
+
+// Asked of the provider rather than hard-coded, so a retired model stops being
+// offered instead of failing several seconds into a design. Also the way out of
+// a daily quota: switch model, keep working.
+async function loadModels() {
+  const select = $("model");
+  const providerName = $("provider").value;
+  const remembered =
+    (providerName && localStorage.getItem(`flowtool.model.${providerName}`)) || "";
+
+  select.innerHTML = "";
+  select.add(new Option("provider default", ""));
+  if (!providerName) return;
+
+  select.disabled = true;
+  try {
+    const data = await api("/api/models", {
+      provider: providerName,
+      api_key: $("apiKey").value.trim() || null,
+    });
+    (data.models || []).forEach((name) => {
+      const suffix = name === data.default ? " (default)" : "";
+      select.add(new Option(name + suffix, name));
+    });
+    // A remembered choice the key can no longer use must not be sent silently.
+    select.value = [...select.options].some((o) => o.value === remembered)
+      ? remembered
+      : "";
+  } catch {
+    // No key yet, or the key is bad. The default still works, and design()
+    // reports the real error properly.
+  } finally {
+    select.disabled = false;
+  }
+}
+
+function rememberModel() {
+  const providerName = $("provider").value;
+  if (!providerName) return;
+  const value = $("model").value;
+  if (value) localStorage.setItem(`flowtool.model.${providerName}`, value);
+  else localStorage.removeItem(`flowtool.model.${providerName}`);
+}
+
+// --------------------------------------------------------------------------
 // Boot
 // --------------------------------------------------------------------------
 
@@ -460,7 +509,12 @@ async function boot() {
       $("designBtn").disabled = true;
     }
     loadStoredApiKey();
-    provider.onchange = loadStoredApiKey;
+    loadModels();
+    provider.onchange = () => {
+      loadStoredApiKey();
+      loadModels();
+    };
+    $("model").onchange = rememberModel;
     $("apiKey").addEventListener("input", () => {
       const name = provider.value;
       if (!name) return;
@@ -468,6 +522,8 @@ async function boot() {
       if (value) localStorage.setItem(apiKeyStorageKey(name), value);
       else localStorage.removeItem(apiKeyStorageKey(name));
     });
+    // Refresh once the key is finished, not on every keystroke.
+    $("apiKey").addEventListener("change", loadModels);
 
     const org = $("org");
     if (config.orgs.length) {

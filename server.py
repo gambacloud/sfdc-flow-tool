@@ -233,6 +233,13 @@ class ExplainRequest(BaseModel):
     question: Optional[str] = None
 
 
+class ModelsRequest(BaseModel):
+    provider: Optional[str] = None
+    # POSTed rather than in a query string: a key does not belong in a URL,
+    # which is the one part of a request that gets logged everywhere.
+    api_key: Optional[str] = None
+
+
 # --------------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------------
@@ -257,6 +264,31 @@ def config() -> Dict[str, Any]:
         "sf_cli": cli,
         "env_file": str(ROOT / ".env"),
     }
+
+
+@app.post("/api/models")
+def models(body: ModelsRequest) -> Dict[str, Any]:
+    """
+    What this key can actually use, asked of the provider rather than hard-coded.
+
+    A baked-in list goes stale silently: a model is retired and the only sign is
+    a failure several seconds into a design. This also matters when a daily quota
+    runs out on one model and the work can continue on another.
+    """
+    try:
+        provider = build_provider(body.provider, None, "high", body.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    lister = getattr(provider, "list_models", None)
+    if lister is None:
+        return {"models": [], "default": getattr(provider, "model", None)}
+    try:
+        found = lister()
+    except Exception as exc:
+        # Usually a bad or missing key. Say so; do not echo the key back.
+        raise HTTPException(400, f"Could not list models: {exc}") from exc
+    return {"models": found, "default": getattr(provider, "model", None)}
 
 
 @app.post("/api/design")
