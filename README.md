@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-361 tests, none of which need a key, a network, or an org.
+371 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -189,7 +189,7 @@ Record-triggered, autolaunched, and screen flows:
 |---|---|
 | Assignment | Set variable values |
 | Decision | Branch on structured conditions |
-| Get / Create / Update / Delete Records | Get Records can name the fields it fetches |
+| Get / Create / Update / Delete Records | Get Records can name the fields it fetches; Create can save the new Id to a variable |
 | Loop | |
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |

@@ -167,6 +167,7 @@ _ELEMENT_CHILDREN = {
     },
     "recordCreates": _ELEMENT_COMMON | _FAULT | {
         "object", "inputAssignments", "inputReference", "storeOutputAutomatically",
+        "assignRecordIdToReference",
     },
     "recordUpdates": _ELEMENT_COMMON | _FAULT | {
         "object", "filters", "filterLogic", "inputAssignments", "inputReference",
@@ -223,7 +224,6 @@ _CHILD_MEANING = {
     "outputReference": "manual output storage",
     "outputAssignments": "manually assigned outputs",
     "outputParameters": "an action's output parameters",
-    "assignRecordIdToReference": "saving the new record Id to a variable",
     "assignNextValueToReference": "its own loop variable",
     "limit": "a record limit",
     "scheduledPaths": "scheduled paths",
@@ -417,6 +417,10 @@ def _read_record_create(node: ET.Element) -> RecordCreate:
         object=_text(node, "m:object"),
         fields=_field_values(node),
         input_reference=_text(node, "m:inputReference"),
+        assign_record_id_to_reference=_text(node, "m:assignRecordIdToReference"),
+        # Absent means off. It was allowed through the allowlist but never read,
+        # so a Create with automatic storage switched off came back with it on.
+        store_output_automatically=_bool(node, "m:storeOutputAutomatically"),
     )
 
 

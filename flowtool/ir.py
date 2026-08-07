@@ -248,6 +248,12 @@ class RecordCreate(FaultCapable):
     fields: List[FieldValue] = Field(default_factory=list)
     # When set, creates from an existing sObject variable instead of field-by-field.
     input_reference: Optional[str] = None
+    # The two ways to get at the record just created. Automatic storage puts the
+    # whole record in the element's own output; this puts only its Id into a
+    # variable you name. Real flows use one or the other - they never appear
+    # together - so the validator below keeps them apart.
+    assign_record_id_to_reference: Optional[str] = None
+    store_output_automatically: bool = True
 
     @model_validator(mode="after")
     def needs_fields_or_reference(self) -> "RecordCreate":
@@ -264,6 +270,40 @@ class RecordCreate(FaultCapable):
         if self.fields and not self.object:
             raise ValueError(
                 f"{self.name}: RecordCreate with fields needs an object"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def one_way_to_return_the_record(self) -> "RecordCreate":
+        """
+        There are two ways to get at the record just created, and they cannot be
+        combined. Creating from a variable allows neither: the record is already
+        in hand. All three rules come from the org rejecting the combination,
+        quoted below.
+
+        A flag nobody set is not a decision, so an unset one follows the shape
+        rather than making every caller restate what the shape already implies.
+        """
+        chose_a_shape = self.input_reference or self.assign_record_id_to_reference
+        if chose_a_shape:
+            if "store_output_automatically" not in self.model_fields_set:
+                self.store_output_automatically = False
+            elif self.store_output_automatically:
+                culprit = (
+                    "sObjectInputReference" if self.input_reference
+                    else "assignReturnIdToReference"
+                )
+                raise ValueError(
+                    f"{self.name}: \"You can't use the storeOutputAutomatically "
+                    f"field with the {culprit} field.\" Automatic storage puts "
+                    "the whole new record in this element's output; the other "
+                    "shapes replace it. Pick one."
+                )
+        if self.input_reference and self.assign_record_id_to_reference:
+            raise ValueError(
+                f"{self.name}: \"You can't use the sObjectInputReference field "
+                "with the assignReturnIdToReference field.\" A record created "
+                "from a variable is already in that variable, Id included."
             )
         return self
 

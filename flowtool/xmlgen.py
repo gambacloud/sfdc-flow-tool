@@ -210,6 +210,8 @@ def _write_get_records(root: ET.Element, el: GetRecords, xy) -> None:
 def _write_record_create(root: ET.Element, el: RecordCreate, xy) -> None:
     node = _sub(root, "recordCreates")
     _write_common(node, el, xy)
+    if el.assign_record_id_to_reference:
+        _sub(node, "assignRecordIdToReference", el.assign_record_id_to_reference)
     _connector(node, "connector", el.next)
     _fault(node, el)
     if el.input_reference:
@@ -220,6 +222,7 @@ def _write_record_create(root: ET.Element, el: RecordCreate, xy) -> None:
             _sub(ia, "field", assignment.field)
             _value_el(ia, "value", assignment.value)
         _sub(node, "object", el.object)
+    if el.store_output_automatically:
         _sub(node, "storeOutputAutomatically", "true")
 
 

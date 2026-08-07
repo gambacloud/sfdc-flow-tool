@@ -651,3 +651,90 @@ class TestQueriedFields:
         tags = [c.tag.split("}")[-1] for c in node]
         assert tags.index("object") < tags.index("queriedFields")
         assert tags.index("queriedFields") < tags.index("sortField")
+
+
+class TestCreateRecordsOutput:
+    """
+    Two ways to get at the record just created, and they cannot be combined.
+    Every rule here is the org's, quoted from what checkOnly said when the
+    combination was tried.
+    """
+
+    FIELDS = [FieldValue(field="Name", value=Value(string_value="Test"))]
+
+    def _create(self, **kw) -> Flow:
+        return _flow(RecordCreate(name="Make", label="Make", **kw))
+
+    def test_assigning_the_new_id_to_a_variable(self):
+        assert_survives(self._create(
+            object="Account", fields=self.FIELDS,
+            assign_record_id_to_reference="v_NewId",
+        ))
+
+    def test_automatic_storage(self):
+        assert_survives(self._create(object="Account", fields=self.FIELDS))
+
+    def test_neither(self):
+        assert_survives(self._create(
+            object="Account", fields=self.FIELDS, store_output_automatically=False,
+        ))
+
+    def test_automatic_storage_off_is_not_quietly_turned_back_on(self):
+        """
+        storeOutputAutomatically was allowed through the allowlist but never
+        read, while the compiler wrote it as true unconditionally. A Create with
+        it switched off came back switched on - and would deploy that way.
+        """
+        xml = self._flow_xml(
+            "<recordCreates><name>Make</name><label>Make</label>"
+            "<assignRecordIdToReference>v_NewId</assignRecordIdToReference>"
+            "<inputAssignments><field>Name</field>"
+            "<value><stringValue>Test</stringValue></value></inputAssignments>"
+            "<object>Account</object>"
+            "</recordCreates>"
+        )
+        element = parse_flow(xml).elements[0]
+        assert element.store_output_automatically is False
+        assert element.assign_record_id_to_reference == "v_NewId"
+        assert "<storeOutputAutomatically>" not in generate(parse_flow(xml))
+
+    def _flow_xml(self, body: str) -> str:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>62.0</apiVersion><label>X</label>"
+            "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+            f"{body}"
+            "<start><connector><targetReference>Make</targetReference></connector></start>"
+            "</Flow>"
+        )
+
+    @pytest.mark.parametrize("kw,expected", [
+        (dict(object="Account", assign_record_id_to_reference="v_Id",
+              store_output_automatically=True), "storeOutputAutomatically"),
+        (dict(input_reference="v_Rec", store_output_automatically=True),
+         "storeOutputAutomatically"),
+        (dict(input_reference="v_Rec", assign_record_id_to_reference="v_Id"),
+         "sObjectInputReference"),
+    ])
+    def test_the_combinations_the_org_rejects_are_not_representable(self, kw, expected):
+        from pydantic import ValidationError
+
+        if "fields" not in kw and kw.get("object"):
+            kw["fields"] = self.FIELDS
+        with pytest.raises(ValidationError, match=expected):
+            RecordCreate(name="Make", label="Make", **kw)
+
+    @pytest.mark.parametrize("kw,expected", [
+        (dict(object="Account", fields=FIELDS), True),
+        (dict(object="Account", fields=FIELDS,
+              assign_record_id_to_reference="v_Id"), False),
+        (dict(input_reference="v_Rec"), False),
+    ])
+    def test_an_unset_flag_follows_the_shape(self, kw, expected):
+        """
+        A flag nobody set is not a decision. Requiring it would mean restating
+        what the shape already implies, on every call.
+        """
+        assert RecordCreate(name="Make", label="Make", **kw).store_output_automatically \
+            is expected
