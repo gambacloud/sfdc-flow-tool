@@ -279,3 +279,70 @@ class TestGeminiDialect:
         elements = gemini_schema(RAW)["properties"]["elements"]["items"]
         branches = elements.get("anyOf") or elements.get("oneOf")
         assert branches and len(branches) == expected, "lost element types from the union"
+
+
+class TestShrinkingForGoodReasons:
+    """
+    The anti-shrink guard exists because a model "repaired" an unreachable
+    element by deleting it. But a flow shrinks for legitimate reasons too - the
+    user asked for a step to go, two updates were merged - and rejecting every
+    shrink turned a valid answer into a wasted repair round with an instruction
+    to restore what the user had asked to remove.
+
+    The rule that separates them: only elements the previous error actually
+    named are suspicious.
+    """
+
+    SMALLER = _with(elements=[
+        {
+            "type": "GetRecords",
+            "name": "Get_Account",
+            "label": "Get Account",
+            "object": "Account",
+            "next": None,
+        }
+    ])
+
+    def test_a_removal_asked_for_is_accepted_first_try(self):
+        """No previous attempt to compare against, so nothing is suspicious."""
+        provider = ScriptedProvider(VALID, self.SMALLER)
+        generator = FlowGenerator(provider)
+        first = generator.generate("build it")
+        after = generator.refine(first, "drop the account lookup")
+        assert after.repairs == 0
+        assert [e.name for e in after.flow.elements] == ["Get_Account"]
+
+    def test_shrinking_past_an_unrelated_error_is_not_evasion(self):
+        """
+        Attempt 1 fails on a dangling reference to something else entirely;
+        attempt 2 fixes it and also drops an element nobody complained about.
+        That is the requested change landing, not the error being dodged.
+        """
+        two_elements = _with(elements=[
+            {"type": "GetRecords", "name": "Get_Account", "label": "G",
+             "object": "Account", "next": "Nowhere"},
+            {"type": "GetRecords", "name": "Get_Contact", "label": "C",
+             "object": "Contact", "next": None},
+        ])
+        provider = ScriptedProvider(two_elements, self.SMALLER)
+        result = FlowGenerator(provider).generate("...")
+        assert result.repairs == 1, "one real repair, not one wasted on the guard"
+        assert [e.name for e in result.flow.elements] == ["Get_Account"]
+
+    def test_deleting_the_element_the_error_named_is_still_caught(self):
+        """The original failure must stay caught: the error names Get_Account."""
+        provider = ScriptedProvider(DANGLING, _with(elements=[]), VALID)
+        result = FlowGenerator(provider).generate("...")
+        assert result.repairs == 2
+        complaint = provider.calls[2][-1].content
+        assert "Get_Account" in complaint
+        assert "not a fix" in complaint
+
+    def test_the_complaint_says_the_error_named_them(self):
+        provider = ScriptedProvider(DANGLING, _with(elements=[]), VALID)
+        FlowGenerator(provider).generate("...")
+        complaint = provider.calls[2][-1].content
+        assert "names them" in complaint, (
+            "the model must be told why this deletion is different from a "
+            "legitimate one"
+        )

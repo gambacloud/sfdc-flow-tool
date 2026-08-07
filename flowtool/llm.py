@@ -774,10 +774,21 @@ class FlowGenerator:
             # orphaned elements instead of adding the connector that was asked
             # for - a smaller flow trivially satisfies "everything is
             # reachable". That is never the fix, so catch it before it reaches
-            # Flow.model_validate, which cannot tell a deliberate simplification
-            # from this kind of giving up. Compare counts, not just names - a
-            # repair that renames an element (e.g. to fix an invalid API name)
-            # changes its name without shrinking the flow, and that is fine.
+            # Flow.model_validate, which cannot tell it from a deliberate
+            # simplification. Compare counts, not just names - a repair that
+            # renames an element (e.g. to fix an invalid API name) changes its
+            # name without shrinking the flow, and that is fine.
+            #
+            # Only elements the previous complaint actually named count. A flow
+            # can shrink for good reasons - the user asked for a step to go, or
+            # two updates were merged into one - and those elements are ones no
+            # error mentioned. Rejecting every shrink cost a repair round on a
+            # legitimate "remove the urgency check" and told the model to put
+            # back exactly what it had been asked to delete.
+            #
+            # The baseline is the previous attempt in this loop, not the flow
+            # being refined, so a refinement that removes something is compared
+            # against nothing and passes on its first attempt.
             current_names = {
                 e.get("name")
                 for e in payload.get("elements", []) or []
@@ -785,16 +796,19 @@ class FlowGenerator:
             }
             dropped = set()
             if previous_names is not None and len(current_names) < len(previous_names):
-                dropped = previous_names - current_names
+                dropped = {
+                    name for name in previous_names - current_names
+                    if last_error and name in last_error
+                }
             previous_names = current_names
 
             if dropped:
                 last_error = (
                     f"elements {sorted(dropped)} are missing from this attempt, but "
-                    "were present in the one before it. Deleting an element is not "
-                    "a fix for a validation error about it - it just hides the "
-                    "problem. Restore them, and fix the actual connector the "
-                    "earlier error named."
+                    "were present in the one before it, and the error you were "
+                    "given names them. Deleting an element is not a fix for a "
+                    "validation error about it - it just hides the problem. "
+                    "Restore them and fix what the error actually named."
                 )
                 log.warning("attempt %s rejected: %s", attempt + 1, last_error)
                 if attempt == self.max_repairs:

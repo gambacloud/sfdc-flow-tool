@@ -412,6 +412,18 @@ class TestModelPicker:
         assert seen["model"] is None
 
 
+@pytest.fixture
+def no_cli(monkeypatch):
+    """
+    /api/config shells out to the sf CLI to list orgs, which costs seconds and
+    drags a real tool into a suite that promises to need neither an org nor a
+    network. The orgs are not what these tests are about.
+    """
+    import flowtool.orgs
+
+    monkeypatch.setattr(flowtool.orgs, "list_orgs", lambda: ["dev"])
+
+
 class TestProviderDefault:
     """
     The Options panel lists every provider the build knows, not only the ones
@@ -421,7 +433,7 @@ class TestProviderDefault:
     The browser now follows default_provider, so it has to mean what it says.
     """
 
-    def test_the_default_provider_is_one_that_has_a_key(self, client, monkeypatch):
+    def test_the_default_provider_is_one_that_has_a_key(self, client, monkeypatch, no_cli):
         monkeypatch.setattr(server, "available_providers", lambda: ["gemini"])
         config = client.get("/api/config").json()
         assert config["default_provider"] == "gemini"
@@ -431,13 +443,13 @@ class TestProviderDefault:
             "the usable one"
         )
 
-    def test_every_known_provider_is_still_offered(self, client, monkeypatch):
+    def test_every_known_provider_is_still_offered(self, client, monkeypatch, no_cli):
         """Listing them all is the point: a key can be pasted for any of them."""
         monkeypatch.setattr(server, "available_providers", lambda: ["gemini"])
         config = client.get("/api/config").json()
         assert set(config["all_providers"]) == set(server.PROVIDERS)
 
-    def test_no_key_anywhere_leaves_no_default(self, client, monkeypatch):
+    def test_no_key_anywhere_leaves_no_default(self, client, monkeypatch, no_cli):
         monkeypatch.setattr(server, "available_providers", lambda: [])
         config = client.get("/api/config").json()
         assert config["default_provider"] is None
