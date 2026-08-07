@@ -78,8 +78,8 @@ class TestCounting:
 
     def test_a_nested_blocker_is_counted_too(self):
         survey = Survey()
-        survey.add("Picky", xml(lookup_extra="<queriedFields>Id</queriedFields>"))
-        assert survey.codes["child:queriedFields"] == 1
+        survey.add("Picky", xml(lookup_extra="<outputReference>v_Rec</outputReference>"))
+        assert survey.codes["child:outputReference"] == 1
 
     def test_an_unsupported_process_type_is_counted(self):
         survey = Survey()
@@ -258,3 +258,50 @@ class TestOutput:
         assert payload["parsed"] == ["Good"]
         assert payload["codes"]["element:waits"] == 1
         assert payload["flows_by_code"]["element:waits"] == ["Bad"]
+
+
+class TestOutOfScopeIsNeverRecommended:
+    """
+    Migrated Workflow Rules are refused by decision, not by gap. The report kept
+    naming them as the biggest available win - the line people read first,
+    saying the same thing every run, recommending work already ruled out.
+
+    They stay counted: the count is the evidence for the decision.
+    """
+
+    def test_it_is_still_counted(self):
+        survey = Survey()
+        survey.add("Legacy", xml(process_type="Workflow"))
+        assert survey.codes["process_type:Workflow"] == 1
+
+    def test_it_never_frees_anything(self):
+        survey = Survey()
+        survey.add("Legacy", xml(process_type="Workflow"))
+        assert survey.would_unblock()["process_type:Workflow"] == 0
+
+    def test_a_real_gap_still_wins_the_recommendation(self, capsys):
+        survey = Survey()
+        # Two flows blocked only by a legacy process type, one by a real gap.
+        for name in ("Legacy_A", "Legacy_B"):
+            survey.add(name, xml(process_type="Workflow"))
+        survey.add("Fixable", xml("<waits><name>W</name></waits>"))
+        report(survey, verbose=False)
+        out = capsys.readouterr().out
+        assert "Biggest single win: supporting element:waits" in out, (
+            "the recommendation must skip what was decided against, even when "
+            "it appears in more flows"
+        )
+
+    def test_the_report_marks_it(self, capsys):
+        survey = Survey()
+        survey.add("Legacy", xml(process_type="Workflow"))
+        report(survey, verbose=False)
+        out = capsys.readouterr().out
+        assert "out of scope" in out
+        assert "counted, never recommended" in out
+
+    def test_the_scope_decision_lives_with_the_refusals(self):
+        """One list, next to the code that produces the codes it names."""
+        from flowtool.parse import OUT_OF_SCOPE
+
+        assert "process_type:Workflow" in OUT_OF_SCOPE

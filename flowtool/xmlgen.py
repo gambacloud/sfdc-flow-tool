@@ -199,6 +199,8 @@ def _write_get_records(root: ET.Element, el: GetRecords, xy) -> None:
         _filters(node, el.filters)
     _sub(node, "getFirstRecordOnly", _bool(el.first_record_only))
     _sub(node, "object", el.object)
+    for field_name in el.queried_fields:
+        _sub(node, "queriedFields", field_name)
     if el.sort_field:
         _sub(node, "sortField", el.sort_field)
         _sub(node, "sortOrder", "Asc" if el.sort_order != "Desc" else "Desc")

@@ -47,6 +47,13 @@ from .xmlgen import METADATA_NS
 NS = {"m": METADATA_NS}
 
 
+# Refused by decision, not by gap. These will not be supported, so a survey
+# should keep counting them - the count is the evidence for the decision - but
+# never recommend building them. Without this the report kept naming migrated
+# Workflow Rules as the biggest available win, survey after survey.
+OUT_OF_SCOPE = frozenset({"process_type:Workflow"})
+
+
 @dataclass(frozen=True)
 class Gap:
     """
@@ -156,7 +163,7 @@ _ELEMENT_CHILDREN = {
     "recordLookups": _ELEMENT_COMMON | _FAULT | {
         "object", "filters", "filterLogic", "getFirstRecordOnly",
         "storeOutputAutomatically", "assignNullValuesIfNoRecordsFound",
-        "sortField", "sortOrder",
+        "sortField", "sortOrder", "queriedFields",
     },
     "recordCreates": _ELEMENT_COMMON | _FAULT | {
         "object", "inputAssignments", "inputReference", "storeOutputAutomatically",
@@ -213,7 +220,6 @@ _VARIABLE_CHILDREN = {
 # Plain-language names for the nested things we know about but cannot hold, so
 # the refusal says what the flow actually uses rather than naming a tag.
 _CHILD_MEANING = {
-    "queriedFields": "a hand-picked field list",
     "outputReference": "manual output storage",
     "outputAssignments": "manually assigned outputs",
     "outputParameters": "an action's output parameters",
@@ -393,6 +399,9 @@ def _read_get_records(node: ET.Element) -> GetRecords:
     return GetRecords(
         **_fault_common(node),
         object=_text(node, "m:object") or "",
+        queried_fields=[
+            (f.text or "") for f in node.findall("m:queriedFields", NS)
+        ],
         filters=_filters(node),
         filter_logic=_text(node, "m:filterLogic") or "and",
         first_record_only=_bool(node, "m:getFirstRecordOnly", True),

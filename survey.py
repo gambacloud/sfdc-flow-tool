@@ -29,7 +29,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from flowtool.config import load_env
-from flowtool.parse import UnsupportedFlow, parse_flow
+from flowtool.parse import OUT_OF_SCOPE, UnsupportedFlow, parse_flow
 from flowtool.xmlgen import generate
 
 BAR_WIDTH = 28
@@ -117,13 +117,20 @@ class Survey:
         Counting how often a code *appears* answers a different question and
         overstates it: a flow blocked by six things is freed by none of them
         individually. This counts only flows where the code is the sole blocker.
+
+        Codes that will not be supported are left out entirely. A recommendation
+        to build something already ruled out is worse than no recommendation:
+        it is the line people read first, and it would say the same thing every
+        run forever.
         """
         freed: Counter = Counter()
         for name, codes in self.blockers_by_flow().items():
             if name in self.managed:
                 continue
             if len(codes) == 1:
-                freed[next(iter(codes))] += 1
+                code = next(iter(codes))
+                if code not in OUT_OF_SCOPE:
+                    freed[code] += 1
         return freed
 
 
@@ -159,12 +166,15 @@ def report(survey: Survey, verbose: bool) -> None:
         print(f"  {'seen':>4}  {'frees':>5}  {'':<{BAR_WIDTH}}")
         largest = survey.codes.most_common(1)[0][1]
         for code, count in survey.codes.most_common():
+            tag = "  (out of scope)" if code in OUT_OF_SCOPE else ""
             print(
                 f"  {count:>4}  {freed[code]:>5}  "
-                f"{bar(count, largest):<{BAR_WIDTH}}  {code}"
+                f"{bar(count, largest):<{BAR_WIDTH}}  {code}{tag}"
             )
         print("\n  seen  = flows this appears in")
         print("  frees = flows that would parse if only this were supported")
+        if any(code in OUT_OF_SCOPE for code in survey.codes):
+            print("  out of scope = decided against; counted, never recommended")
 
         print("\nEach of those, spelled out:\n")
         for code, count in survey.codes.most_common():
@@ -209,7 +219,13 @@ def report(survey: Survey, verbose: bool) -> None:
             print("Cheapest flows to reach, by how many additions each needs:\n")
             by_flow = survey.blockers_by_flow()
             for name, codes in sorted(by_flow.items(), key=lambda kv: len(kv[1])):
-                tag = "  (managed)" if name in survey.managed else ""
+                if name in survey.managed:
+                    tag = "  (managed)"
+                elif codes <= OUT_OF_SCOPE:
+                    # Not cheap, unreachable: nothing left to build for it.
+                    tag = "  (out of scope)"
+                else:
+                    tag = ""
                 print(f"  {len(codes)}  {name}{tag}: {', '.join(sorted(codes))}")
 
 

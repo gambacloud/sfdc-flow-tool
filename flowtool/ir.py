@@ -232,6 +232,11 @@ class GetRecords(FaultCapable):
     store_output_automatically: bool = True
     sort_field: Optional[str] = None
     sort_order: Optional[Literal["Asc", "Desc"]] = None
+    # Which fields to fetch. Empty means all of them, which is what Flow
+    # Builder does by default. Naming them is a real choice an admin makes -
+    # it is what the query actually asks for - and it sits alongside automatic
+    # storage rather than replacing it.
+    queried_fields: List[str] = Field(default_factory=list)
 
 
 class RecordCreate(FaultCapable):

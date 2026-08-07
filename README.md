@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-350 tests, none of which need a key, a network, or an org.
+361 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -189,7 +189,7 @@ Record-triggered, autolaunched, and screen flows:
 |---|---|
 | Assignment | Set variable values |
 | Decision | Branch on structured conditions |
-| Get / Create / Update / Delete Records | |
+| Get / Create / Update / Delete Records | Get Records can name the fields it fetches |
 | Loop | |
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
@@ -203,8 +203,10 @@ Formula **resources** defined inside a flow do not.
 
 **Migrated Workflow Rules** (`processType: Workflow`). They are a legacy
 migration artefact, not something anyone authors today, and supporting them
-would mean carrying their shape forever. A survey will keep counting them; the
-count is expected to sit there.
+would mean carrying their shape forever. A survey keeps counting them — the
+count is the evidence for the decision — but marks them `(out of scope)` and
+never recommends them. Before that, the headline recommended building them
+every single run.
 
 **Screen flows** are built as far as stage 2 of three:
 

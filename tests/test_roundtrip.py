@@ -385,7 +385,7 @@ class TestNestedUnknownsAreRefused:
         )
 
     @pytest.mark.parametrize("extra,expected", [
-        ("<queriedFields>Id</queriedFields>", "hand-picked field list"),
+        ("<outputReference>v_Rec</outputReference>", "manual output storage"),
         ("<outputReference>v_Acc</outputReference>", "manual output storage"),
         ("<limit>5</limit>", "a record limit"),
         ("<outputAssignments><name>a</name></outputAssignments>", "manually assigned"),
@@ -598,3 +598,56 @@ class TestVariableAttributes:
         assert tags[1] == "name"
         assert tags[-1] == "value"
         assert tags.index("scale") > tags.index("dataType")
+
+
+class TestQueriedFields:
+    """
+    A Get Records may name the fields it fetches instead of taking all of them.
+    Three of fifteen public sample-app flows do, and it was the sole remaining
+    blocker on two of them.
+
+    It sits alongside automatic storage rather than replacing it - the real
+    metadata carries queriedFields and storeOutputAutomatically together, which
+    is not what the names suggest.
+    """
+
+    def _get(self, **fields) -> Flow:
+        return _flow(GetRecords(name="Get", label="Get", object="Booking__c", **fields))
+
+    def test_a_chosen_field_list(self):
+        assert_survives(self._get(queried_fields=["Id", "Experience_Name__c", "Date__c"]))
+
+    def test_order_is_preserved(self):
+        """The list is what the query asks for, in order, not a set."""
+        flow = self._get(queried_fields=["Name", "Id", "Date__c"])
+        assert roundtrip(flow).elements[0].queried_fields == ["Name", "Id", "Date__c"]
+
+    def test_no_list_means_all_fields(self):
+        flow = self._get()
+        assert "<queriedFields>" not in generate(flow)
+        assert roundtrip(flow).elements[0].queried_fields == []
+
+    def test_it_coexists_with_automatic_storage(self):
+        assert_survives(self._get(
+            queried_fields=["Id", "Name"], store_output_automatically=True,
+        ))
+
+    def test_it_survives_alongside_everything_else_on_a_lookup(self):
+        assert_survives(self._get(
+            queried_fields=["Id", "Name"],
+            filters=[RecordFilter(field="Id", operator="EqualTo",
+                                  value=Value(string_value="x"))],
+            first_record_only=False, sort_field="Name", sort_order="Desc",
+            description="note",
+        ))
+
+    def test_it_is_written_where_salesforce_writes_it(self):
+        import xml.etree.ElementTree as ET
+        from flowtool.xmlgen import METADATA_NS
+
+        xml = generate(self._get(queried_fields=["Id"], sort_field="Name",
+                                 sort_order="Asc"))
+        node = ET.fromstring(xml).find(f"{{{METADATA_NS}}}recordLookups")
+        tags = [c.tag.split("}")[-1] for c in node]
+        assert tags.index("object") < tags.index("queriedFields")
+        assert tags.index("queriedFields") < tags.index("sortField")
