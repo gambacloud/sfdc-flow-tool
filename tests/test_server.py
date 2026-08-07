@@ -410,3 +410,35 @@ class TestModelPicker:
         monkeypatch.setattr(server, "build_provider", spy)
         design(client)
         assert seen["model"] is None
+
+
+class TestProviderDefault:
+    """
+    The Options panel lists every provider the build knows, not only the ones
+    with a key - so the first entry is whichever the server defines first, and
+    the page used to open on it regardless. Picking Gemini and being told "No
+    Anthropic credentials found" was that: the dropdown still said anthropic.
+    The browser now follows default_provider, so it has to mean what it says.
+    """
+
+    def test_the_default_provider_is_one_that_has_a_key(self, client, monkeypatch):
+        monkeypatch.setattr(server, "available_providers", lambda: ["gemini"])
+        config = client.get("/api/config").json()
+        assert config["default_provider"] == "gemini"
+        assert config["default_provider"] in config["providers"]
+        assert config["all_providers"][0] != config["default_provider"], (
+            "the regression only shows when the first listed provider is not "
+            "the usable one"
+        )
+
+    def test_every_known_provider_is_still_offered(self, client, monkeypatch):
+        """Listing them all is the point: a key can be pasted for any of them."""
+        monkeypatch.setattr(server, "available_providers", lambda: ["gemini"])
+        config = client.get("/api/config").json()
+        assert set(config["all_providers"]) == set(server.PROVIDERS)
+
+    def test_no_key_anywhere_leaves_no_default(self, client, monkeypatch):
+        monkeypatch.setattr(server, "available_providers", lambda: [])
+        config = client.get("/api/config").json()
+        assert config["default_provider"] is None
+        assert config["providers"] == []

@@ -458,6 +458,7 @@ async function loadModels() {
   if (!providerName) return;
 
   select.disabled = true;
+  showError($("options"), "");
   try {
     const data = await api("/api/models", {
       provider: providerName,
@@ -471,9 +472,13 @@ async function loadModels() {
     select.value = [...select.options].some((o) => o.value === remembered)
       ? remembered
       : "";
-  } catch {
-    // No key yet, or the key is bad. The default still works, and design()
-    // reports the real error properly.
+  } catch (err) {
+    // Almost always a missing or bad key. Swallowing it meant the page looked
+    // fine and only said so at design time, by which point the message names a
+    // provider the user has since forgotten they were on.
+    showError($("options"), `${providerName}: ${err.message}`);
+    $("options").open = true; // an error inside a collapsed panel is no error
+
   } finally {
     select.disabled = false;
   }
@@ -504,6 +509,11 @@ async function boot() {
         const hasServerKey = config.providers.includes(name);
         provider.add(new Option(hasServerKey ? `${name} (key set on server)` : name, name));
       });
+      // Listing every provider means the first one is whichever the server
+      // happens to define first, not one that has a key - so the page opened on
+      // a provider with no credentials and said so only at design time. The
+      // server already worked out which one is usable; use its answer.
+      provider.value = config.default_provider || known[0];
     } else {
       provider.add(new Option("no provider available", ""));
       $("designBtn").disabled = true;
