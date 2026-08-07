@@ -407,10 +407,26 @@ class TestNestedUnknownsAreRefused:
     def test_unknown_child_of_a_variable(self):
         body = self._lookup() + (
             "<variables><name>v_X</name><dataType>String</dataType>"
-            "<value><stringValue>default</stringValue></value></variables>"
+            "<apexClass>Some.Type</apexClass></variables>"
         )
-        with pytest.raises(UnsupportedFlow, match="a default value"):
+        with pytest.raises(UnsupportedFlow, match="an Apex type"):
             parse_flow(self._flow_xml(body))
+
+    def test_a_variables_own_attributes_are_no_longer_unknown(self):
+        """
+        description, scale and a default value were the three most common
+        blockers across public sample apps - and none of them is a feature.
+        """
+        body = self._lookup() + (
+            "<variables><description>A note</description><name>v_X</name>"
+            "<dataType>Number</dataType><scale>2</scale>"
+            "<value><numberValue>0</numberValue></value></variables>"
+        )
+        flow = parse_flow(self._flow_xml(body))
+        variable = flow.variables[0]
+        assert variable.description == "A note"
+        assert variable.scale == 2
+        assert variable.value.number_value == 0
 
     def test_a_clean_element_still_parses(self):
         parse_flow(self._flow_xml(self._lookup()))
@@ -516,3 +532,69 @@ class TestUnsupported:
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self._xml(body))
         assert "Update_It does not fit" in str(caught.value)
+
+
+class TestVariableAttributes:
+    """
+    A survey of fifteen flows from Salesforce's own public sample apps found
+    these three to be the top blockers - seen in 8, 7 and 6 flows. None of them
+    is a feature: a note on a variable, its decimal places, and what it holds
+    before anything runs. The whole flow was refused for a note.
+    """
+
+    def _with_variable(self, **fields) -> Flow:
+        return Flow(
+            api_name="Vars", label="Vars",
+            start=Start(next="Get"),
+            elements=[GetRecords(name="Get", label="Get", object="Account")],
+            variables=[Variable(name="v_X", data_type="Number", **fields)],
+        )
+
+    def test_a_description(self):
+        assert_survives(self._with_variable(description="What this holds."))
+
+    def test_decimal_places(self):
+        assert_survives(self._with_variable(scale=2))
+
+    def test_a_literal_default(self):
+        assert_survives(self._with_variable(value=Value(number_value=7)))
+
+    def test_a_referenced_default(self):
+        """
+        Observed in the wild: a DateTime defaulting to $Flow.CurrentDateTime.
+        A default is not always a literal, which is why it is a full Value.
+        """
+        assert_survives(Flow(
+            api_name="Vars", label="Vars",
+            start=Start(next="Get"),
+            elements=[GetRecords(name="Get", label="Get", object="Account")],
+            variables=[Variable(
+                name="v_When", data_type="DateTime",
+                value=Value(element_reference="$Flow.CurrentDateTime"),
+            )],
+        ))
+
+    def test_all_three_together(self):
+        assert_survives(self._with_variable(
+            description="Running total.", scale=2, value=Value(number_value=0),
+        ))
+
+    def test_a_scale_of_zero_is_not_dropped(self):
+        """0 is falsy, and `if var.scale:` would silently lose it."""
+        flow = self._with_variable(scale=0)
+        assert "<scale>0</scale>" in generate(flow)
+        assert_survives(flow)
+
+    def test_they_are_written_where_salesforce_writes_them(self):
+        import xml.etree.ElementTree as ET
+        from flowtool.xmlgen import METADATA_NS
+
+        xml = generate(self._with_variable(
+            description="note", scale=2, value=Value(number_value=1),
+        ))
+        node = ET.fromstring(xml).find(f"{{{METADATA_NS}}}variables")
+        tags = [child.tag.split("}")[-1] for child in node]
+        assert tags[0] == "description", "Salesforce emits the inherited fields first"
+        assert tags[1] == "name"
+        assert tags[-1] == "value"
+        assert tags.index("scale") > tags.index("dataType")

@@ -448,15 +448,22 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
         lines.append("")
 
     if flow.variables:
-        lines += ["## Variables", "", "| Name | Type | Collection | Input | Output |",
-                  "|---|---|---|---|---|"]
+        lines += ["## Variables", "",
+                  "| Name | Type | Collection | Input | Output | Default | Notes |",
+                  "|---|---|---|---|---|---|---|"]
         for variable in flow.variables:
             data_type = variable.data_type
             if variable.object_type:
                 data_type += f" ({variable.object_type})"
+            if variable.scale is not None:
+                data_type += f", {variable.scale} dp"
+            # A default is not documentation - it is what the variable holds
+            # before anything runs, so it belongs where the flow is approved.
+            default = value_text(variable.value) if variable.value else "—"
             lines.append(
                 f"| `{variable.name}` | {data_type} | {'yes' if variable.is_collection else 'no'} "
-                f"| {'yes' if variable.is_input else 'no'} | {'yes' if variable.is_output else 'no'} |"
+                f"| {'yes' if variable.is_input else 'no'} | {'yes' if variable.is_output else 'no'} "
+                f"| {default} | {variable.description or ''} |"
             )
         lines.append("")
 

@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-327 tests, none of which need a key, a network, or an org.
+350 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -167,6 +167,15 @@ recommendation.
 Read-only — nothing is written to the org. `--save DIR` keeps the retrieved
 files so later runs can go offline with `--dir`, and `--json` writes the whole
 report for tracking coverage over time.
+
+**No org handy?** `--dir` reads any SFDX checkout, so public repos work as a
+corpus — Salesforce's own [sample apps](https://github.com/trailheadapps) carry
+real flows under `force-app/main/default/flows/`. Fifteen of them is what showed
+that the top three blockers were not features at all but three unmodelled
+attributes of `variables`, and that the screen components planned next would
+have freed nothing. Pool several checkouts into one directory and survey it in
+one go — but watch for two orgs using the same flow name, which silently
+overwrites.
 
 The line to watch is **"parsed but did NOT survive a round trip"**. That means a
 flow looks editable and isn't: something would be lost on the way back out. It

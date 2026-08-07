@@ -161,6 +161,9 @@ criteria filtered on its Id.
 and a retrieved record by its element name (for example `Get_Account.Id`).
 - Element names, variable names and screen field names share one namespace. \
 Each name can be used once in the flow.
+- A variable may carry a `value`, which is what it holds before anything \
+assigns to it. Use it only when the request calls for a starting value; an \
+unset variable is already empty.
 
 ## Screens
 

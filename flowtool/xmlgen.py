@@ -434,7 +434,11 @@ def generate(flow: Flow) -> str:
     _sub(root, "status", flow.status)
 
     for var in flow.variables:
+        # The order Salesforce itself emits: the inherited description and name
+        # first, then the variable's own fields alphabetically.
         node = _sub(root, "variables")
+        if var.description:
+            _sub(node, "description", var.description)
         _sub(node, "name", var.name)
         _sub(node, "dataType", var.data_type)
         _sub(node, "isCollection", _bool(var.is_collection))
@@ -442,6 +446,10 @@ def generate(flow: Flow) -> str:
         _sub(node, "isOutput", _bool(var.is_output))
         if var.object_type:
             _sub(node, "objectType", var.object_type)
+        if var.scale is not None:
+            _sub(node, "scale", str(var.scale))
+        if var.value is not None:
+            _value_el(node, "value", var.value)
 
     raw = ET.tostring(root, encoding="unicode")
     pretty = minidom.parseString(raw).toprettyxml(indent="    ")

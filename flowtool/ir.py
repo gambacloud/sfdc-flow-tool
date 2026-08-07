@@ -109,6 +109,17 @@ class Variable(BaseModel):
     object_type: Optional[str] = Field(
         default=None, description="Required when data_type is SObject"
     )
+    # The admin's own note. Modelled rather than ignored for the same reason an
+    # element's is: dropping it would delete their documentation on redeploy.
+    description: Optional[str] = None
+    # Decimal places. Salesforce writes it on Number and Currency; it is left
+    # unconstrained here because only Number was ever observed, and guessing
+    # which other types may carry it would refuse flows that already deploy.
+    scale: Optional[int] = None
+    # What the variable holds before anything assigns to it. Real defaults are
+    # not only literals - a DateTime commonly defaults to an element reference
+    # such as $Flow.CurrentDateTime - so this is a full Value.
+    value: Optional[Value] = None
 
     @field_validator("name")
     @classmethod

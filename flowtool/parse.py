@@ -207,6 +207,7 @@ _START_CHILDREN = {
 
 _VARIABLE_CHILDREN = {
     "name", "dataType", "isCollection", "isInput", "isOutput", "objectType",
+    "description", "scale", "value",
 }
 
 # Plain-language names for the nested things we know about but cannot hold, so
@@ -663,6 +664,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
 
     variables = []
     for node in root.findall("m:variables", NS):
+        scale = _text(node, "m:scale")
         variables.append(
             Variable(
                 name=_text(node, "m:name") or "",
@@ -671,6 +673,9 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                 is_input=_bool(node, "m:isInput"),
                 is_output=_bool(node, "m:isOutput"),
                 object_type=_text(node, "m:objectType"),
+                description=_text(node, "m:description"),
+                scale=int(scale) if scale else None,
+                value=_value(node.find("m:value", NS)),
             )
         )
 
