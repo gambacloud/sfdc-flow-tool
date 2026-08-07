@@ -163,7 +163,7 @@ _ELEMENT_CHILDREN = {
     "recordLookups": _ELEMENT_COMMON | _FAULT | {
         "object", "filters", "filterLogic", "getFirstRecordOnly",
         "storeOutputAutomatically", "assignNullValuesIfNoRecordsFound",
-        "sortField", "sortOrder", "queriedFields",
+        "sortField", "sortOrder", "queriedFields", "outputReference",
     },
     "recordCreates": _ELEMENT_COMMON | _FAULT | {
         "object", "inputAssignments", "inputReference", "storeOutputAutomatically",
@@ -279,6 +279,12 @@ def _text(node: Optional[ET.Element], path: str) -> Optional[str]:
 def _bool(node: Optional[ET.Element], path: str, default: bool = False) -> bool:
     raw = _text(node, path)
     return default if raw is None else raw.strip().lower() == "true"
+
+
+def _opt_bool(node: Optional[ET.Element], path: str) -> Optional[bool]:
+    """None when the flow never said, which is not the same as saying false."""
+    raw = _text(node, path)
+    return None if raw is None else raw.strip().lower() == "true"
 
 
 def _target(node: ET.Element, tag: str) -> Optional[str]:
@@ -404,8 +410,10 @@ def _read_get_records(node: ET.Element) -> GetRecords:
         ],
         filters=_filters(node),
         filter_logic=_text(node, "m:filterLogic") or "and",
-        first_record_only=_bool(node, "m:getFirstRecordOnly", True),
-        store_output_automatically=_bool(node, "m:storeOutputAutomatically", True),
+        first_record_only=_opt_bool(node, "m:getFirstRecordOnly"),
+        # Absent means off. Flows that store into a variable omit it entirely.
+        store_output_automatically=_bool(node, "m:storeOutputAutomatically"),
+        output_reference=_text(node, "m:outputReference"),
         sort_field=_text(node, "m:sortField"),
         sort_order=_text(node, "m:sortOrder"),
     )

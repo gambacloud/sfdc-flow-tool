@@ -385,9 +385,9 @@ class TestNestedUnknownsAreRefused:
         )
 
     @pytest.mark.parametrize("extra,expected", [
-        ("<outputReference>v_Rec</outputReference>", "manual output storage"),
-        ("<outputReference>v_Acc</outputReference>", "manual output storage"),
         ("<limit>5</limit>", "a record limit"),
+        ("<assignNextValueToReference>v</assignNextValueToReference>",
+         "its own loop variable"),
         ("<outputAssignments><name>a</name></outputAssignments>", "manually assigned"),
     ])
     def test_unknown_child_of_an_element(self, extra, expected):
@@ -738,3 +738,78 @@ class TestCreateRecordsOutput:
         """
         assert RecordCreate(name="Make", label="Make", **kw).store_output_automatically \
             is expected
+
+
+class TestGetRecordsOutput:
+    """
+    Manual storage puts the records in a variable instead of in the element's
+    own output. It was the sole remaining blocker on one public sample-app flow.
+    """
+
+    def _get(self, **kw) -> Flow:
+        return _flow(GetRecords(name="Get", label="Get", object="Account", **kw))
+
+    def test_into_a_variable(self):
+        assert_survives(self._get(output_reference="v_Accounts",
+                                  first_record_only=False))
+
+    def test_into_a_variable_with_named_fields(self):
+        assert_survives(self._get(output_reference="v_Accounts",
+                                  first_record_only=False,
+                                  queried_fields=["Id", "Name"]))
+
+    def test_automatic_storage_is_still_the_default(self):
+        assert self._get().elements[0].store_output_automatically is True
+
+    def test_the_flag_follows_the_shape(self):
+        assert self._get(output_reference="v_A").elements[0] \
+            .store_output_automatically is False
+
+    def test_both_at_once_is_not_representable(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="one or the other"):
+            GetRecords(name="Get", label="Get", object="Account",
+                       output_reference="v_A", store_output_automatically=True)
+
+
+class TestFirstRecordOnlyIsNotInvented:
+    """
+    Older flows omit getFirstRecordOnly and take the answer from the variable
+    they store into. Reading that as `true` - the old default - would turn a
+    query over many records into one over the first, and write it back that way.
+
+    Both public flows that use manual storage omit it, and both store into
+    collections, so this was live the moment output_reference landed.
+    """
+
+    XML = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+        "<apiVersion>62.0</apiVersion><label>X</label>"
+        "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+        "<recordLookups><name>Get</name><label>Get</label><object>Account</object>"
+        "<outputReference>v_Accounts</outputReference></recordLookups>"
+        "<start><connector><targetReference>Get</targetReference></connector></start>"
+        "</Flow>"
+    )
+
+    def test_an_omitted_flag_stays_unanswered(self):
+        assert parse_flow(self.XML).elements[0].first_record_only is None
+
+    def test_and_is_not_written_back(self):
+        assert "<getFirstRecordOnly>" not in generate(parse_flow(self.XML))
+
+    def test_a_stated_flag_is_kept(self):
+        for stated in (True, False):
+            xml = self.XML.replace(
+                "<outputReference>",
+                f"<getFirstRecordOnly>{str(stated).lower()}</getFirstRecordOnly>"
+                "<outputReference>",
+            )
+            assert parse_flow(xml).elements[0].first_record_only is stated
+
+    def test_a_flow_we_build_still_states_it(self):
+        """Only a flow that never said stays silent; ours always say."""
+        xml = generate(_flow(GetRecords(name="Get", label="Get", object="Account")))
+        assert "<getFirstRecordOnly>true</getFirstRecordOnly>" in xml

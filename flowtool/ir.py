@@ -228,8 +228,16 @@ class GetRecords(FaultCapable):
     object: str
     filters: List[RecordFilter] = Field(default_factory=list)
     filter_logic: Literal["and", "or"] = "and"
-    first_record_only: bool = True
+    # None means the flow never said. Older flows omit it and take their answer
+    # from the variable they store into, so writing a value back would decide
+    # something the flow left open - and "true" would turn a query over many
+    # records into one over the first.
+    first_record_only: Optional[bool] = True
     store_output_automatically: bool = True
+    # Manual storage: the records go into this variable instead of into the
+    # element's own output. The alternative to automatic storage, not an
+    # addition to it.
+    output_reference: Optional[str] = None
     sort_field: Optional[str] = None
     sort_order: Optional[Literal["Asc", "Desc"]] = None
     # Which fields to fetch. Empty means all of them, which is what Flow
@@ -237,6 +245,26 @@ class GetRecords(FaultCapable):
     # it is what the query actually asks for - and it sits alongside automatic
     # storage rather than replacing it.
     queried_fields: List[str] = Field(default_factory=list)
+
+
+    @model_validator(mode="after")
+    def one_way_to_store_the_records(self) -> "GetRecords":
+        """
+        Automatic storage keeps the records in this element's own output;
+        `output_reference` puts them in a variable instead. They are two answers
+        to the same question, so a flag nobody set follows the shape - as on
+        Create Records, and for the same reason.
+        """
+        if self.output_reference:
+            if "store_output_automatically" not in self.model_fields_set:
+                self.store_output_automatically = False
+            elif self.store_output_automatically:
+                raise ValueError(
+                    f"{self.name}: output_reference stores the records in a "
+                    "variable, which is what store_output_automatically would "
+                    "otherwise do here. Use one or the other."
+                )
+        return self
 
 
 class RecordCreate(FaultCapable):

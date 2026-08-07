@@ -197,14 +197,20 @@ def _write_get_records(root: ET.Element, el: GetRecords, xy) -> None:
     if el.filters:
         _sub(node, "filterLogic", el.filter_logic)
         _filters(node, el.filters)
-    _sub(node, "getFirstRecordOnly", _bool(el.first_record_only))
+    # A flow that never stated this is written back without it, rather than
+    # having an answer invented for it.
+    if el.first_record_only is not None:
+        _sub(node, "getFirstRecordOnly", _bool(el.first_record_only))
     _sub(node, "object", el.object)
+    if el.output_reference:
+        _sub(node, "outputReference", el.output_reference)
     for field_name in el.queried_fields:
         _sub(node, "queriedFields", field_name)
     if el.sort_field:
         _sub(node, "sortField", el.sort_field)
         _sub(node, "sortOrder", "Asc" if el.sort_order != "Desc" else "Desc")
-    _sub(node, "storeOutputAutomatically", _bool(el.store_output_automatically))
+    if el.store_output_automatically:
+        _sub(node, "storeOutputAutomatically", "true")
 
 
 def _write_record_create(root: ET.Element, el: RecordCreate, xy) -> None:

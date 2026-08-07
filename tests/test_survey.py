@@ -78,8 +78,8 @@ class TestCounting:
 
     def test_a_nested_blocker_is_counted_too(self):
         survey = Survey()
-        survey.add("Picky", xml(lookup_extra="<outputReference>v_Rec</outputReference>"))
-        assert survey.codes["child:outputReference"] == 1
+        survey.add("Picky", xml(lookup_extra="<limit>5</limit>"))
+        assert survey.codes["child:limit"] == 1
 
     def test_an_unsupported_process_type_is_counted(self):
         survey = Survey()
