@@ -434,6 +434,7 @@ ScreenFieldType = Literal[
     "DropdownBox",
     "MultiSelectCheckboxes",
     "MultiSelectPicklist",
+    "ComponentInstance",
 ]
 
 # Screen inputs hold a value, and the value has a type. DisplayText shows text
@@ -454,6 +455,12 @@ CHOICE_FIELD_TYPES = frozenset(
 
 # Types that hold no value at all.
 _NO_VALUE_FIELD_TYPES = frozenset({"DisplayText", "LargeTextArea"})
+
+# ComponentInstance is neither. A component declares its own inputs and outputs,
+# so the field needs no data_type - but the org accepts one, and refusing what
+# the org accepts would turn a deployable flow into an unopenable one. So it is
+# optional here: not required, not forbidden.
+_OPTIONAL_DATA_TYPE_FIELD_TYPES = frozenset({"ComponentInstance"})
 
 
 class Choice(BaseModel):
@@ -639,10 +646,29 @@ class TextTemplate(BaseModel):
         return _check_api_name(v, "text template name")
 
 
+class ComponentOutput(BaseModel):
+    """
+    One value a screen component hands back, and the variable it lands in.
+
+    The mirror image of an input: an input is named on the component and carries
+    a value in, an output is named on the component and names a flow resource to
+    write out to. Both names belong to the component's own signature, and the org
+    checks them - "We can't find this output attribute" - so a wrong one fails
+    validation rather than deploying and silently doing nothing.
+    """
+
+    name: str = Field(
+        description="The property the component exposes, e.g. 'value'."
+    )
+    assign_to_reference: str = Field(
+        description="The variable to store it in."
+    )
+
+
 class ScreenField(BaseModel):
     """
-    One thing on a screen: a paragraph of text, a box the user types into, or a
-    list of options to pick from.
+    One thing on a screen: a paragraph of text, a box the user types into, a
+    list of options to pick from, or a custom component.
 
     The name is not local to the screen. Flow puts screen fields in the same
     namespace as elements and variables, so `{!Customer_Name}` anywhere later in
@@ -653,8 +679,13 @@ class ScreenField(BaseModel):
 
     name: str
     field_type: ScreenFieldType
-    field_text: str = Field(
-        description="For DisplayText, the text shown. For any input, its label."
+    # Optional only because a ComponentInstance has none: the component draws
+    # its own labels. Every other type carries one in every flow observed, and
+    # the validator below keeps it that way.
+    field_text: Optional[str] = Field(
+        default=None,
+        description="For DisplayText, the text shown. For any input, its label. "
+        "A ComponentInstance has none - the component labels itself.",
     )
     data_type: Optional[ScreenDataType] = Field(
         default=None,
@@ -678,14 +709,106 @@ class ScreenField(BaseModel):
     # that already deploy.
     scale: Optional[int] = None
 
+    # ---- ComponentInstance only ------------------------------------------
+    # A custom LWC or Aura component dropped onto the screen. The four below
+    # travel together and mean nothing on any other field type.
+    extension_name: Optional[str] = Field(
+        default=None,
+        description="The component, as namespace:name - 'c:myComponent' for one "
+        "in this org, or a standard one such as 'flowruntime:slider' or "
+        "'forceContent:fileUpload'. Only ever name a component you know exists.",
+    )
+    input_parameters: List[InputAssignment] = Field(
+        default_factory=list,
+        description="Values passed into the component, keyed by the property "
+        "names it declares.",
+    )
+    output_parameters: List[ComponentOutput] = Field(
+        default_factory=list,
+        description="Values the component hands back, each into a named variable. "
+        "The alternative to store_output_automatically, never both.",
+    )
+    store_output_automatically: bool = Field(
+        default=False,
+        description="Keep every output under the field's own name instead of "
+        "assigning each one: {!fieldName.outputName}.",
+    )
+    # What a component already holding values does when the user navigates Back
+    # and then forward again. Only UseStoredValues appears in any flow seen, but
+    # the org accepts ResetValues too, so both are modelled. None means the flow
+    # never said - which is not the same as saying UseStoredValues.
+    inputs_on_revisit: Optional[Literal["UseStoredValues", "ResetValues"]] = Field(
+        default=None,
+        description="On returning to this screen: keep what was entered, or "
+        "recompute the inputs.",
+    )
+
     @field_validator("name")
     @classmethod
     def valid_name(cls, v: str) -> str:
         return _check_api_name(v, "screen field name")
 
+    @field_validator("extension_name")
+    @classmethod
+    def valid_extension_name(cls, v: Optional[str]) -> Optional[str]:
+        """
+        Salesforce names a component namespace-first. Without the namespace the
+        org reports only "We can't find an extension called ...", which reads
+        like the component is missing rather than misnamed.
+        """
+        if v is None:
+            return v
+        namespace, _, component = v.partition(":")
+        if not namespace or not component:
+            raise ValueError(
+                f"extension_name {v!r} needs a namespace: 'c:{v}' for a component "
+                "in this org, or the owning namespace for a standard one "
+                "('flowruntime:slider', 'forceContent:fileUpload')."
+            )
+        return v
+
     @model_validator(mode="after")
     def shape_matches_type(self) -> "ScreenField":
         takes_choices = self.field_type in CHOICE_FIELD_TYPES
+        is_component = self.field_type == "ComponentInstance"
+
+        if is_component and not self.extension_name:
+            raise ValueError(
+                f"screen field {self.name!r}: a ComponentInstance is a placeholder "
+                "for a component, so it needs extension_name to say which one."
+            )
+        if not is_component:
+            stray = [
+                attribute
+                for attribute, present in (
+                    ("extension_name", self.extension_name),
+                    ("input_parameters", self.input_parameters),
+                    ("output_parameters", self.output_parameters),
+                    ("store_output_automatically", self.store_output_automatically),
+                    ("inputs_on_revisit", self.inputs_on_revisit),
+                )
+                if present
+            ]
+            if stray:
+                raise ValueError(
+                    f"screen field {self.name!r}: {', '.join(stray)} describe a "
+                    f"custom component, and a {self.field_type} is not one. Use "
+                    "field_type 'ComponentInstance' to place a component."
+                )
+
+        # Verbatim from the org, which refuses the pair outright:
+        #   "You can't use the storeOutputAutomatically field with the
+        #    outputParameters field."
+        # Both shapes are valid alone. Together the flow does not deploy, and
+        # nothing about the two of them looks wrong until it is rejected.
+        if self.output_parameters and self.store_output_automatically:
+            raise ValueError(
+                f"screen field {self.name!r}: \"You can't use the "
+                "storeOutputAutomatically field with the outputParameters field.\" "
+                "Either assign each output to a variable, or set "
+                "store_output_automatically and read them as "
+                f"{{!{self.name}.outputName}}."
+            )
 
         if takes_choices and not self.choice_references:
             raise ValueError(
@@ -706,10 +829,25 @@ class ScreenField(BaseModel):
                     f"screen field {self.name!r}: a {self.field_type} carries no "
                     "data_type. Use field_type 'InputField' to collect a typed value."
                 )
-        elif not self.data_type:
+        elif self.field_type not in _OPTIONAL_DATA_TYPE_FIELD_TYPES:
+            if not self.data_type:
+                raise ValueError(
+                    f"screen field {self.name!r}: a {self.field_type} holds a value, "
+                    "so it needs a data_type"
+                )
+
+        # A component labels itself, so it needs no field_text - and no flow yet
+        # seen gives one. It is left permitted rather than refused for the same
+        # reason as data_type above: the org takes it, and a flow that deploys
+        # must stay openable.
+        #
+        # Everything else must say what it shows. Every non-component field in
+        # every flow examined carries one, so a missing label is a mistake.
+        if not is_component and not self.field_text:
             raise ValueError(
-                f"screen field {self.name!r}: a {self.field_type} holds a value, so "
-                "it needs a data_type"
+                f"screen field {self.name!r}: a {self.field_type} needs field_text "
+                + ("to say what it shows."
+                   if self.field_type == "DisplayText" else "for its label.")
             )
 
         if self.field_type == "DisplayText":
@@ -1038,6 +1176,45 @@ class Flow(BaseModel):
                 + f". Defined choices and choice sets: {known}. Add a Choice (a "
                 "fixed option) or a DynamicChoiceSet (options built from records "
                 "or a picklist) for each one, or point the field at one that exists."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def component_outputs_land_somewhere(self) -> "Flow":
+        """
+        Every component output must name a variable that exists.
+
+        This one is enforced here because nothing else enforces it anywhere. The
+        org accepts `assignToReference` pointing at a variable that was never
+        defined - checkOnly passes, the flow deploys, the component runs, and the
+        value it produces is dropped on the floor. The same silence as a dangling
+        choice reference, and for the same reason: there is no connector leading
+        to that name, so no other check ever looks at it.
+
+        The root before the first dot is what has to exist: `varRecord.Name`
+        writes to a field of `varRecord`.
+        """
+        variables = {v.name for v in self.variables}
+        problems: List[str] = []
+        for element in self.elements:
+            if not isinstance(element, Screen):
+                continue
+            for screen_field in element.fields:
+                for parameter in screen_field.output_parameters:
+                    root = parameter.assign_to_reference.split(".")[0]
+                    if root not in variables:
+                        problems.append(
+                            f"{element.name}.{screen_field.name} sends its "
+                            f"{parameter.name!r} output to "
+                            f"{parameter.assign_to_reference!r}"
+                        )
+        if problems:
+            known = sorted(variables) or "nothing"
+            raise ValueError(
+                "these component outputs are assigned to variables that do not "
+                "exist: " + "; ".join(problems) + f". Defined variables: {known}. "
+                "Salesforce deploys this without complaint and then discards the "
+                "value, so add the variable or point the output at one that exists."
             )
         return self
 

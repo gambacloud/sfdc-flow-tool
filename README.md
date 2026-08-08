@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-408 tests, none of which need a key, a network, or an org.
+443 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -148,8 +148,8 @@ What blocks them:
   seen  frees
      9      6  ############################  element:waits
      4      1  ############                  element:formulas
-     2      0  ######                        child:queriedFields
-     1      0  ###                           screen_field:ComponentInstance
+     2      0  ######                        child:visibilityRule
+     1      0  ###                           screen_field:RegionContainer
 
   seen  = flows this appears in
   frees = flows that would parse if only this were supported
@@ -180,10 +180,16 @@ for r in purealoe-lwc coral-cloud dreamhouse-lwc easy-spaces-lwc lwc-recipes; do
 .venv/Scripts/python.exe survey.py --dir flows -v
 ```
 
-Fifteen flows from that corpus drove six changes in a row. It showed that the
-top three blockers were not features at all but three unmodelled attributes of
-`variables`, and that the screen components planned next would have freed
-nothing — which was true, and still is.
+Fifteen flows from that corpus drove seven changes in a row, taking it from 0 to
+8. It showed that the top three blockers were not features at all but three
+unmodelled attributes of `variables`.
+
+It also showed the limit of the `frees` column. Screen components arrive as four
+blockers that always travel together, so each one scored `frees: 0` and the
+report said "no single addition unblocks anything" — correct, and useless as a
+plan. **Read `frees` alongside the cheapest-flows list underneath it**, which
+counts how many additions each refused flow needs and names them. Four blockers
+that appear on the same line of that list are one piece of work, not four.
 
 Two caveats. Pooling several checkouts into one directory is fine only while no
 two use the same flow name; a collision overwrites silently and undercounts. And
@@ -208,6 +214,7 @@ Record-triggered, autolaunched, and screen flows:
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 | **Screen** | Display text, input fields, long text areas, and pickers, with defaults |
 | **Choices** | Fixed options, or options built from records or a picklist |
+| **Screen components** | LWC and Aura components, with their inputs and outputs |
 | **Text templates** | Reusable text with merge fields, for an email body or a message |
 | **Constants and formulas** | A fixed value, or one recomputed from an expression |
 
@@ -230,31 +237,43 @@ count is the evidence for the decision — but marks them `(out of scope)` and
 never recommends them. Before that, the headline recommended building them
 every single run.
 
-**Screen flows** are built as far as stage 2 of three:
+**Screen flows** are built through all three planned stages:
 
 1. ✅ `processType: Flow`, plus screens carrying display text, input fields, and
    long text areas. Covers most of what a simple screen flow does.
 2. ✅ Choices and dynamic choice sets — radio buttons, dropdowns, checkboxes and
    multi-selects, with options written out or built from records or a picklist.
-3. LWC and Aura extensions on a screen.
+3. ✅ LWC and Aura components on a screen, with the values passed in and the
+   values handed back.
 
-Everything the IR cannot yet hold is refused rather than approximated, which is
-what makes a partial implementation safe to ship: a `ComponentInstance` field has
-exactly the same shape as a text input, so it is refused **by name** rather than
-read as one and silently deployed as one.
+What remains unmodelled — region containers, visibility rules, validation rules,
+help text — is refused rather than approximated. That is what makes a partial
+implementation safe to ship: every screen field has the same children, so a
+`RegionContainer` read as an input box would draw as one and deploy as one.
 
-Two references have no connector to travel along, so nothing else would catch
-them, and both are enforced in the IR:
+Three references have no connector to travel along, so nothing else would catch
+them, and all three are enforced in the IR:
 
 - A screen input is read by its own name (`{!Customer_Email}`), so screen fields,
   elements, variables, choices and choice sets share **one namespace**.
 - A picker names the options it offers. One that names an option the flow never
   defines is structurally fine and shows the user an empty list.
+- A component output names the variable it lands in. **Salesforce deploys a
+  missing one without complaining** and then discards the value — `checkOnly`
+  passes, the component runs, and the result goes nowhere.
 
 Where the metadata's own rules were not obvious, the org settled them under
 `checkOnly` rather than being guessed: a multi-select field's data type is
-`String`, not `Multipicklist`, and a picklist choice set's own data type must be
-`Picklist`.
+`String`, not `Multipicklist`; a picklist choice set's own data type must be
+`Picklist`; and a component returns its outputs either through
+`outputParameters` or through `storeOutputAutomatically`, never both — *"You
+can't use the storeOutputAutomatically field with the outputParameters field."*
+
+The org is stricter about components than about anything else, which is the one
+place that helps: it checks the component name, every input name and every
+output name against the component's real signature and rejects each by name. A
+component the model invents fails validation rather than deploying. The IR still
+tells it not to invent one.
 
 ## Layout
 

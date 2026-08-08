@@ -342,14 +342,29 @@ def _write_screen(root: ET.Element, el: Screen, xy) -> None:
                  screen_field.default_selected_choice)
         if screen_field.default_value is not None:
             _value_el(f, "defaultValue", screen_field.default_value)
-        _sub(f, "fieldText", screen_field.field_text)
+        if screen_field.extension_name:
+            _sub(f, "extensionName", screen_field.extension_name)
+        if screen_field.field_text is not None:
+            _sub(f, "fieldText", screen_field.field_text)
         _sub(f, "fieldType", screen_field.field_type)
+        for parameter in screen_field.input_parameters:
+            ip = _sub(f, "inputParameters")
+            _sub(ip, "name", parameter.name)
+            _value_el(ip, "value", parameter.value)
+        if screen_field.inputs_on_revisit:
+            _sub(f, "inputsOnNextNavToAssocScrn", screen_field.inputs_on_revisit)
         # DisplayText collects nothing, so isRequired would be meaningless on it -
         # and Salesforce omits it there too.
         if screen_field.field_type != "DisplayText":
             _sub(f, "isRequired", _bool(screen_field.is_required))
+        for parameter in screen_field.output_parameters:
+            op = _sub(f, "outputParameters")
+            _sub(op, "assignToReference", parameter.assign_to_reference)
+            _sub(op, "name", parameter.name)
         if screen_field.scale is not None:
             _sub(f, "scale", str(screen_field.scale))
+        if screen_field.store_output_automatically:
+            _sub(f, "storeOutputAutomatically", "true")
     _sub(node, "showFooter", _bool(el.show_footer))
     _sub(node, "showHeader", _bool(el.show_header))
 

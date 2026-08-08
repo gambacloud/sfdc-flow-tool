@@ -21,6 +21,7 @@ from .ir import (
     Assignment,
     AssignmentItem,
     Choice,
+    ComponentOutput,
     Condition,
     Constant,
     Decision,
@@ -193,13 +194,18 @@ _ELEMENT_CHILDREN = {
 _SCREEN_FIELD_CHILDREN = {
     "name", "dataType", "fieldText", "fieldType", "isRequired", "choiceReferences",
     "defaultValue", "defaultSelectedChoiceReference", "scale",
+    # A component and the four things that travel with it.
+    "extensionName", "inputParameters", "outputParameters",
+    "storeOutputAutomatically", "inputsOnNextNavToAssocScrn",
 }
 
-# Everything else on a screen - LWC and Aura components, region containers - is
-# a later stage. Refused by name so a survey can count which is worth building.
+# Everything else on a screen - region containers, and the field types that
+# arrange other fields - is a later stage. Refused by name so a survey can count
+# which is worth building.
 _SUPPORTED_SCREEN_FIELD_TYPES = {
     "DisplayText", "InputField", "LargeTextArea",
     "RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "MultiSelectPicklist",
+    "ComponentInstance",
 }
 
 _CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataValues"}
@@ -519,6 +525,28 @@ def _read_choice_set(node: ET.Element) -> DynamicChoiceSet:
     )
 
 
+def _read_component_inputs(item: ET.Element) -> List[InputAssignment]:
+    inputs = []
+    for parameter in item.findall("m:inputParameters", NS):
+        value = _value(parameter.find("m:value", NS))
+        if value is None:
+            continue
+        inputs.append(
+            InputAssignment(name=_text(parameter, "m:name") or "", value=value)
+        )
+    return inputs
+
+
+def _read_component_outputs(item: ET.Element) -> List[ComponentOutput]:
+    return [
+        ComponentOutput(
+            name=_text(parameter, "m:name") or "",
+            assign_to_reference=_text(parameter, "m:assignToReference") or "",
+        )
+        for parameter in item.findall("m:outputParameters", NS)
+    ]
+
+
 def _read_screen(node: ET.Element) -> Screen:
     fields = []
     for item in node.findall("m:fields", NS):
@@ -526,8 +554,17 @@ def _read_screen(node: ET.Element) -> Screen:
             ScreenField(
                 name=_text(item, "m:name") or "",
                 field_type=_text(item, "m:fieldType") or "DisplayText",
-                field_text=_text(item, "m:fieldText") or "",
+                # None, not "": a ComponentInstance has no fieldText at all, and
+                # an empty string would be written back as an empty tag.
+                field_text=_text(item, "m:fieldText"),
                 data_type=_text(item, "m:dataType"),
+                extension_name=_text(item, "m:extensionName"),
+                input_parameters=_read_component_inputs(item),
+                output_parameters=_read_component_outputs(item),
+                store_output_automatically=_bool(
+                    item, "m:storeOutputAutomatically"
+                ),
+                inputs_on_revisit=_text(item, "m:inputsOnNextNavToAssocScrn"),
                 is_required=_bool(item, "m:isRequired"),
                 choice_references=[
                     (ref.text or "") for ref in item.findall("m:choiceReferences", NS)

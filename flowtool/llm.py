@@ -189,7 +189,7 @@ flow runs with nobody watching, and Salesforce rejects a screen in one.
 - A screen's `next` is what runs when the user clicks Next. A screen is not the \
 end of the flow unless you mean it to be - if the flow continues after the user \
 fills the screen in, set the screen's `next` to the element that continues it.
-- A screen's `fields` are, in order, what the user sees. There are three kinds:
+- A screen's `fields` are, in order, what the user sees. The kinds are:
   - `DisplayText` - text shown to the user. `field_text` is the text itself. \
 No `data_type`.
   - `InputField` - a box the user types in. `field_text` is its label, and \
@@ -200,11 +200,33 @@ Boolean).
   - `MultiSelectCheckboxes` and `MultiSelectPicklist` - pick several. Their \
 `data_type` is still the type of one option, usually `String`; Salesforce joins \
 the several answers into it.
+  - `ComponentInstance` - a custom LWC or Aura component. See below.
 - Read what the user entered by the field's own name: a field named \
 `Customer_Email` is referenced as `Customer_Email`, not as `Screen1.Customer_Email`.
-- Lookups and custom LWC or Aura components are not available yet. If the \
-request needs one, use the closest kind above and say so in the flow's \
-`description` - do not invent a field type.
+
+## Components on a screen
+
+A `ComponentInstance` field places a component the org already has. \
+`extension_name` names it as `namespace:name`, and it has no `field_text` - \
+the component labels itself.
+
+**Never invent a component.** The org checks the name, the input names and the \
+output names against the component's real signature, and rejects all three by \
+name. Use one only when the user names it, when an imported flow already had \
+it, or when it is one of the standard ones: `flowruntime:lookup` (a record \
+lookup box), `flowruntime:slider`, `flowruntime:address`, \
+`forceContent:fileUpload`. If the request seems to need a component you cannot \
+name, build it from the ordinary field kinds above and say so in the flow's \
+`description`.
+
+- `input_parameters` pass values in, keyed by the properties the component \
+declares.
+- The component's outputs come back one of two ways, never both: \
+`output_parameters` assigns each one to a variable you have defined, or \
+`store_output_automatically` keeps them all under the field's own name, read as \
+`{!fieldName.outputName}`.
+- A variable named in `output_parameters` must exist. Salesforce deploys a \
+missing one without complaining and then throws the value away.
 
 ## Options for a picker
 

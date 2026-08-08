@@ -292,6 +292,7 @@ _FIELD_LABEL = {
     "DropdownBox": "dropdown",
     "MultiSelectCheckboxes": "checkboxes",
     "MultiSelectPicklist": "multi-select",
+    "ComponentInstance": "component",
 }
 
 
@@ -361,10 +362,27 @@ def _element_detail(element: Element) -> str:
             if screen_field.is_required:
                 kind += ", required"
             detail = f"`{screen_field.name}` ({kind})"
+            if screen_field.extension_name:
+                detail += f" `{screen_field.extension_name}`"
             if screen_field.choice_references:
                 detail += " from " + ", ".join(
                     f"`{ref}`" for ref in screen_field.choice_references
                 )
+            # A component's inputs and outputs are the whole of what it does
+            # from the flow's side, and they are the part a reviewer can
+            # actually check. The component's own behaviour is not in the flow.
+            if screen_field.input_parameters:
+                detail += " in: " + ", ".join(
+                    f"{p.name} = {value_text(p.value)}"
+                    for p in screen_field.input_parameters
+                )
+            if screen_field.output_parameters:
+                detail += " out: " + ", ".join(
+                    f"{p.name} → `{p.assign_to_reference}`"
+                    for p in screen_field.output_parameters
+                )
+            elif screen_field.store_output_automatically:
+                detail += f" out: `{{!{screen_field.name}.…}}`"
             parts.append(detail)
         return "<br>".join(parts)
 

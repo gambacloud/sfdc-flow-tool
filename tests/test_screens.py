@@ -308,7 +308,7 @@ class TestTheParserRefuses:
         assert screen.fields[0].data_type == "String"
 
     @pytest.mark.parametrize("kind", [
-        "ComponentInstance", "PasswordField", "RegionContainer", "Region",
+        "PasswordField", "RegionContainer", "Region",
         "ObjectProvided", "ComponentInput",
     ])
     def test_a_field_type_this_build_lacks_is_refused_by_name(self, kind):
@@ -327,7 +327,6 @@ class TestTheParserRefuses:
         assert "Ask.Pick" in str(caught.value)
 
     @pytest.mark.parametrize("tag,expected", [
-        ("extensionName", "a custom LWC or Aura component"),
         ("visibilityRule", "conditional visibility"),
         ("validationRule", "a validation rule"),
         ("helpText", "help text"),
