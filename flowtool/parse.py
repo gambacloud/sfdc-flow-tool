@@ -192,6 +192,7 @@ _ELEMENT_CHILDREN = {
 # were not would draw as a plain input box and lose them on the next deploy.
 _SCREEN_FIELD_CHILDREN = {
     "name", "dataType", "fieldText", "fieldType", "isRequired", "choiceReferences",
+    "defaultValue", "defaultSelectedChoiceReference", "scale",
 }
 
 # Everything else on a screen - LWC and Aura components, region containers - is
@@ -251,7 +252,6 @@ _CHILD_MEANING = {
     # On a screen field.
     "extensionName": "a custom LWC or Aura component",
     "inputParameters": "component input parameters",
-    "defaultValue": "a prefilled default",
     "visibilityRule": "conditional visibility",
     "validationRule": "a validation rule",
     "helpText": "help text",
@@ -532,6 +532,12 @@ def _read_screen(node: ET.Element) -> Screen:
                 choice_references=[
                     (ref.text or "") for ref in item.findall("m:choiceReferences", NS)
                 ],
+                default_value=_value(item.find("m:defaultValue", NS)),
+                default_selected_choice=_text(
+                    item, "m:defaultSelectedChoiceReference"
+                ),
+                scale=int(_text(item, "m:scale"))
+                if _text(item, "m:scale") else None,
             )
         )
     return Screen(

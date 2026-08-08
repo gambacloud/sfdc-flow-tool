@@ -329,7 +329,6 @@ class TestTheParserRefuses:
     @pytest.mark.parametrize("tag,expected", [
         ("extensionName", "a custom LWC or Aura component"),
         ("visibilityRule", "conditional visibility"),
-        ("defaultValue", "a prefilled default"),
         ("validationRule", "a validation rule"),
         ("helpText", "help text"),
     ])
@@ -394,3 +393,91 @@ class TestWhatTheUserSees:
         assert "Screen flow" in markdown
         assert "`Customer_Email` (input, String, required)" in markdown
         assert "`Intro` (text)" in markdown
+
+
+class TestFieldDefaults:
+    """
+    What a field already holds when the screen opens. `default_value` is what
+    the survey asked for - it was the sole remaining blocker on one public
+    sample-app flow. `scale` and the preselected choice sit in the same XML
+    block and were done with it; neither freed a flow on its own.
+    """
+
+    def test_a_literal_default(self):
+        assert_survives(one_screen(fields=[ScreenField(
+            name="Price", field_type="InputField", field_text="Price",
+            data_type="Currency", default_value=Value(number_value=100000),
+        )]))
+
+    def test_a_default_that_points_at_something(self):
+        """Observed in the wild: a default is often a reference, not a literal."""
+        assert_survives(screen_flow(
+            Screen(name="Ask", label="Ask", fields=[ScreenField(
+                name="Email_Field", field_type="InputField", field_text="Email",
+                data_type="String",
+                default_value=Value(element_reference="v_Known_Email"),
+            )]),
+            variables=[Variable(name="v_Known_Email", data_type="String")],
+        ))
+
+    def test_decimal_places(self):
+        assert_survives(one_screen(fields=[ScreenField(
+            name="Beds", field_type="InputField", field_text="Beds",
+            data_type="Number", scale=0, default_value=Value(number_value=4),
+        )]))
+
+    def test_a_scale_of_zero_is_not_dropped(self):
+        flow = one_screen(fields=[ScreenField(
+            name="Beds", field_type="InputField", field_text="Beds",
+            data_type="Number", scale=0,
+        )])
+        assert "<scale>0</scale>" in generate(flow)
+        assert_survives(flow)
+
+    def test_display_text_has_nothing_to_default(self):
+        with pytest.raises(ValidationError, match="nothing to default"):
+            ScreenField(name="Intro", field_type="DisplayText", field_text="Hi",
+                        default_value=Value(string_value="x"))
+
+    def test_the_fields_are_written_in_salesforce_order(self):
+        root = ET.fromstring(generate(one_screen(fields=[ScreenField(
+            name="Price", field_type="InputField", field_text="Price",
+            data_type="Currency", default_value=Value(number_value=1), scale=2,
+        )])))
+        tags = [c.tag.split("}")[-1] for c in root.find("m:screens/m:fields", NS)]
+        assert tags.index("dataType") < tags.index("defaultValue")
+        assert tags.index("defaultValue") < tags.index("fieldText")
+        assert tags[-1] == "scale"
+
+
+class TestPreselectedChoice:
+    """
+    Which option is already ticked. It is a reference, so it gets the same
+    treatment as choice_references: an undefined one is caught here rather than
+    showing the user a picker with nothing selected.
+    """
+
+    def _picker(self, **kw):
+        from flowtool.ir import Choice
+
+        return screen_flow(
+            Screen(name="Ask", label="Ask", fields=[ScreenField(
+                name="Colour", field_type="RadioButtons", field_text="Pick",
+                data_type="String", choice_references=["Red", "Blue"], **kw,
+            )]),
+            choices=[Choice(name="Red", choice_text="Red"),
+                     Choice(name="Blue", choice_text="Blue")],
+        )
+
+    def test_a_preselected_choice(self):
+        assert_survives(self._picker(default_selected_choice="Blue"))
+
+    def test_one_that_was_never_defined_is_caught(self):
+        with pytest.raises(ValidationError, match="starts with 'Green' selected"):
+            self._picker(default_selected_choice="Green")
+
+    def test_only_a_picker_can_have_one(self):
+        with pytest.raises(ValidationError, match="shows options"):
+            ScreenField(name="Email_Field", field_type="InputField",
+                        field_text="Email", data_type="String",
+                        default_selected_choice="Red")

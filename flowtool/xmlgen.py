@@ -337,12 +337,19 @@ def _write_screen(root: ET.Element, el: Screen, xy) -> None:
             _sub(f, "choiceReferences", reference)
         if screen_field.data_type:
             _sub(f, "dataType", screen_field.data_type)
+        if screen_field.default_selected_choice:
+            _sub(f, "defaultSelectedChoiceReference",
+                 screen_field.default_selected_choice)
+        if screen_field.default_value is not None:
+            _value_el(f, "defaultValue", screen_field.default_value)
         _sub(f, "fieldText", screen_field.field_text)
         _sub(f, "fieldType", screen_field.field_type)
         # DisplayText collects nothing, so isRequired would be meaningless on it -
         # and Salesforce omits it there too.
         if screen_field.field_type != "DisplayText":
             _sub(f, "isRequired", _bool(screen_field.is_required))
+        if screen_field.scale is not None:
+            _sub(f, "scale", str(screen_field.scale))
     _sub(node, "showFooter", _bool(el.show_footer))
     _sub(node, "showHeader", _bool(el.show_header))
 

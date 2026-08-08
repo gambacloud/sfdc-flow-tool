@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-400 tests, none of which need a key, a network, or an org.
+408 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -193,7 +193,7 @@ Record-triggered, autolaunched, and screen flows:
 | Loop | |
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
-| **Screen** | Display text, input fields, long text areas, and pickers |
+| **Screen** | Display text, input fields, long text areas, and pickers, with defaults |
 | **Choices** | Fixed options, or options built from records or a picklist |
 | **Text templates** | Reusable text with merge fields, for an email body or a message |
 | **Constants and formulas** | A fixed value, or one recomputed from an expression |

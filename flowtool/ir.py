@@ -667,6 +667,16 @@ class ScreenField(BaseModel):
         "they are shown. Only for RadioButtons, DropdownBox, "
         "MultiSelectCheckboxes and MultiSelectPicklist.",
     )
+    # What the field already holds when the screen opens. A full Value, because
+    # a default is often a reference to a variable rather than a literal.
+    default_value: Optional[Value] = None
+    # Which option is already selected on a picker. A reference, so it is
+    # checked against the defined choices alongside choice_references.
+    default_selected_choice: Optional[str] = None
+    # Decimal places, as on a variable, and left unconstrained for the same
+    # reason: refusing it on a type never seen carrying it would reject flows
+    # that already deploy.
+    scale: Optional[int] = None
 
     @field_validator("name")
     @classmethod
@@ -702,10 +712,22 @@ class ScreenField(BaseModel):
                 "it needs a data_type"
             )
 
-        if self.field_type == "DisplayText" and self.is_required:
+        if self.field_type == "DisplayText":
+            if self.is_required:
+                raise ValueError(
+                    f"screen field {self.name!r}: DisplayText shows text and "
+                    "collects nothing, so it cannot be required."
+                )
+            if self.default_value is not None:
+                raise ValueError(
+                    f"screen field {self.name!r}: DisplayText holds no value, so "
+                    "it has nothing to default. Its text is field_text."
+                )
+
+        if self.default_selected_choice and not takes_choices:
             raise ValueError(
-                f"screen field {self.name!r}: DisplayText shows text and collects "
-                "nothing, so it cannot be required."
+                f"screen field {self.name!r}: only a field that shows options can "
+                f"have one selected already. Use one of {sorted(CHOICE_FIELD_TYPES)}."
             )
         return self
 
@@ -1002,6 +1024,12 @@ class Flow(BaseModel):
                             f"{element.name}.{screen_field.name} offers "
                             f"{reference!r}"
                         )
+                preselected = screen_field.default_selected_choice
+                if preselected and preselected not in defined:
+                    problems.append(
+                        f"{element.name}.{screen_field.name} starts with "
+                        f"{preselected!r} selected"
+                    )
         if problems:
             known = sorted(defined) or "nothing"
             raise ValueError(
