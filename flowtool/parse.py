@@ -38,6 +38,7 @@ from .ir import (
     RecordDelete,
     RecordFilter,
     RecordUpdate,
+    ScheduledPath,
     Screen,
     ScreenField,
     Start,
@@ -132,7 +133,6 @@ _KNOWN_UNSUPPORTED = {
     "collectionProcessors": "collection filter/sort elements",
     "transforms": "transform elements",
     "customErrors": "custom error elements",
-    "scheduledPaths": "scheduled paths",
     "exitRules": "exit rules",
     "filters": "top-level filters",
 }
@@ -230,7 +230,13 @@ _CHOICE_SET_CHILDREN = {
 _START_CHILDREN = {
     "locationX", "locationY", "connector", "object", "recordTriggerType",
     "triggerType", "filters", "filterLogic",
-    "doesRequireRecordChangedToMeetCriteria",
+    "doesRequireRecordChangedToMeetCriteria", "scheduledPaths",
+}
+
+# A scheduled path is two shapes in one tag; pathType is what tells them apart.
+_SCHEDULED_PATH_CHILDREN = {
+    "name", "label", "connector", "offsetNumber", "offsetUnit", "timeSource",
+    "recordField", "maxBatchSize", "pathType",
 }
 
 _VARIABLE_CHILDREN = {
@@ -246,7 +252,6 @@ _CHILD_MEANING = {
     "outputParameters": "an action's output parameters",
     "assignNextValueToReference": "its own loop variable",
     "limit": "a record limit",
-    "scheduledPaths": "scheduled paths",
     "schedule": "a schedule",
     "filterFormula": "a formula-based entry condition",
     "flowTransactionModel": "an explicit transaction model",
@@ -548,6 +553,29 @@ def _read_choice_set(node: ET.Element) -> DynamicChoiceSet:
     )
 
 
+def _read_scheduled_paths(start_node: Optional[ET.Element]) -> List[ScheduledPath]:
+    if start_node is None:
+        return []
+    paths = []
+    for node in start_node.findall("m:scheduledPaths", NS):
+        offset = _text(node, "m:offsetNumber")
+        batch = _text(node, "m:maxBatchSize")
+        paths.append(ScheduledPath(
+            name=_text(node, "m:name") or "",
+            label=_text(node, "m:label"),
+            next=_target(node, "connector"),
+            # One value exists for this tag, and it changes the shape of
+            # everything else on the path, so it is read as the flag it is.
+            run_asynchronously=_text(node, "m:pathType") == "AsyncAfterCommit",
+            offset_number=int(offset) if offset else None,
+            offset_unit=_text(node, "m:offsetUnit"),
+            time_source=_text(node, "m:timeSource"),
+            record_field=_text(node, "m:recordField"),
+            max_batch_size=int(batch) if batch else None,
+        ))
+    return paths
+
+
 def _read_component_inputs(item: ET.Element) -> List[InputAssignment]:
     inputs = []
     for parameter in item.findall("m:inputParameters", NS):
@@ -719,6 +747,11 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     start_node = root.find("m:start", NS)
     if start_node is not None:
         reasons.extend(_unknown_children(start_node, _START_CHILDREN, "the trigger"))
+        for node in start_node.findall("m:scheduledPaths", NS):
+            where = f"scheduled path {_text(node, 'm:name') or '(unnamed)'}"
+            reasons.extend(
+                _unknown_children(node, _SCHEDULED_PATH_CHILDREN, where)
+            )
 
     for node in root.findall("m:variables", NS):
         name = _text(node, "m:name") or "a variable"
@@ -763,6 +796,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         only_when_changed_to_meet_criteria=_bool(
             start_node, "m:doesRequireRecordChangedToMeetCriteria"
         ),
+        scheduled_paths=_read_scheduled_paths(start_node),
     )
 
     variables = []

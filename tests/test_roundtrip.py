@@ -400,8 +400,10 @@ class TestNestedUnknownsAreRefused:
         assert "E uses" in str(caught.value), "the message should name the element"
 
     @pytest.mark.parametrize("extra,expected", [
-        ("<scheduledPaths><name>L</name></scheduledPaths>", "scheduled paths"),
+        # scheduledPaths used to be here. It is modelled now, and its own
+        # children get the same allowlist treatment - see test_scheduled_paths.
         ("<filterFormula>x</filterFormula>", "formula-based entry condition"),
+        ("<schedule><frequency>Daily</frequency></schedule>", "a schedule"),
     ])
     def test_unknown_child_of_the_start(self, extra, expected):
         with pytest.raises(UnsupportedFlow, match=expected):

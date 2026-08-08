@@ -127,6 +127,33 @@ def filter_text(record_filter: RecordFilter) -> str:
     return f"{record_filter.field} {operator} {value_text(record_filter.value)}"
 
 
+_UNIT_WORD = {"Minutes": "minute", "Hours": "hour", "Days": "day", "Months": "month"}
+
+
+def _path_timing(path) -> str:
+    """
+    When a scheduled path fires, in words.
+
+    The offset is a signed number in the metadata and "-2 Days" is not how
+    anyone says it, so the sign becomes before/after and the unit is
+    pluralised. This label is the only place the timing appears on the diagram.
+    """
+    if path.run_asynchronously:
+        return "right after saving, separately"
+    if path.offset_number is None or not path.offset_unit:
+        return path.label or path.name
+    size = abs(path.offset_number)
+    unit = _UNIT_WORD.get(path.offset_unit, path.offset_unit.lower())
+    when = "before" if path.offset_number < 0 else "after"
+    anchor = (
+        f"`{path.record_field}`" if path.time_source == "RecordField"
+        else "the trigger"
+    )
+    if size == 0:
+        return f"at {anchor}"
+    return f"{size} {unit}{'' if size == 1 else 's'} {when} {anchor}"
+
+
 def _join(parts: Iterable[str], logic: str) -> str:
     """
     Combine conditions the way the flow does.
@@ -264,6 +291,13 @@ def to_mermaid(flow: Flow) -> str:
     # "end of path" - a flow with no start target is simply empty.
     if flow.start.next:
         edge("START", flow.start.next)
+
+    # A scheduled path leaves the same Start node but is not a continuation of
+    # the immediate run: the flow finishes, and later Salesforce comes back and
+    # begins again here. Dotted, and labelled with when, because "3 days after
+    # Close Date" is the whole point of the branch and invisible otherwise.
+    for path in flow.start.scheduled_paths:
+        edge("START", path.next, _path_timing(path), dotted=True)
 
     for element in flow.elements:
         if isinstance(element, Decision):
@@ -458,6 +492,13 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
                 (filter_text(f) for f in flow.start.filters), flow.start.filter_logic
             )
             lines.append(f"- **Entry criteria**: {criteria}")
+        for path in flow.start.scheduled_paths:
+            name = path.label or path.name
+            lines.append(
+                f"- **Scheduled path** `{path.name}`: {_path_timing(path)} → "
+                f"`{path.next or 'nothing'}`"
+                + (f" ({name})" if path.label and path.label != path.name else "")
+            )
     else:
         lines.append("- **Autolaunched** — invoked from Apex, another flow, or a process.")
     lines += ["", f"- **API name**: `{flow.api_name}`", f"- **API version**: {flow.api_version}",

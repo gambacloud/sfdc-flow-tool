@@ -1113,6 +1113,127 @@ Element = Annotated[
 # --------------------------------------------------------------------------
 
 
+class ScheduledPath(BaseModel):
+    """
+    A branch of a record-triggered flow that runs later, or separately.
+
+    Two different things wear the same tag, and the org keeps them strictly
+    apart - "Label, TimeSource, OffsetUnit, OffsetNumber, RecordField,
+    MaxBatchSize cannot be set for ScheduledPath of PathType of
+    AsyncAfterCommit":
+
+    - `run_asynchronously` - runs straight after the record is saved, in its own
+      transaction. Nothing else may be set. This is the path for a callout that
+      cannot run inside the trigger's transaction.
+    - everything else - runs at a time: an offset from the trigger, or from a
+      date field on the record. A negative offset is "before", which only makes
+      sense against a field.
+
+    The org checks less here than it looks. It rejects a bad offset unit, a
+    record field that is not a date, and a connector pointing at nothing - but
+    it accepts a path with no offset at all, an offset with no unit, and
+    `time_source: RecordField` naming no field. Those last three are checked
+    below, because a path that says "relative to a field" and names no field
+    has no reading that makes sense.
+
+    One it accepts and nothing can catch: a `record_field` that does not exist
+    on the object. Salesforce validated `NoSuchField__c` without complaint.
+    Knowing it is wrong needs the object's schema, which this tool does not read.
+    """
+
+    name: str
+    label: Optional[str] = None
+    next: Optional[str] = Field(
+        default=None, description="The element this path runs when it fires."
+    )
+
+    run_asynchronously: bool = Field(
+        default=False,
+        description="Run immediately after the save, in a separate "
+        "transaction, rather than at a scheduled time. Nothing else may be set "
+        "alongside it.",
+    )
+
+    offset_number: Optional[int] = Field(
+        default=None,
+        description="How long after the time source. Negative is before, which "
+        "only makes sense with time_source 'RecordField'.",
+    )
+    offset_unit: Optional[Literal["Minutes", "Hours", "Days", "Months"]] = None
+    time_source: Optional[Literal["RecordTriggerEvent", "RecordField"]] = Field(
+        default=None,
+        description="Count from when the record changed, or from a date field "
+        "on it.",
+    )
+    record_field: Optional[str] = Field(
+        default=None,
+        description="The date or date/time field to count from. Required by, "
+        "and only meaningful with, time_source 'RecordField'.",
+    )
+    max_batch_size: Optional[int] = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "scheduled path name")
+
+    @model_validator(mode="after")
+    def one_kind_of_path_or_the_other(self) -> "ScheduledPath":
+        if self.run_asynchronously:
+            stray = [
+                attribute
+                for attribute, present in (
+                    ("label", self.label),
+                    ("offset_number", self.offset_number),
+                    ("offset_unit", self.offset_unit),
+                    ("time_source", self.time_source),
+                    ("record_field", self.record_field),
+                    ("max_batch_size", self.max_batch_size),
+                )
+                if present is not None and present != ""
+            ]
+            if stray:
+                raise ValueError(
+                    f"scheduled path {self.name!r}: \"Label, TimeSource, "
+                    "OffsetUnit, OffsetNumber, RecordField, MaxBatchSize cannot "
+                    "be set for ScheduledPath of PathType of AsyncAfterCommit\". "
+                    f"Remove {', '.join(stray)}, or drop run_asynchronously and "
+                    "give the path a time instead."
+                )
+            return self
+
+        if (self.offset_number is None) != (self.offset_unit is None):
+            if self.offset_unit is None:
+                problem = (
+                    f"offset_unit is missing, so {self.offset_number} does not "
+                    f"say {self.offset_number} of what"
+                )
+            else:
+                problem = (
+                    f"offset_number is missing, so {self.offset_unit.lower()} "
+                    "does not say how many"
+                )
+            raise ValueError(
+                f"scheduled path {self.name!r}: an offset needs both a number "
+                f"and a unit, and {problem}."
+            )
+
+        if self.time_source == "RecordField" and not self.record_field:
+            raise ValueError(
+                f"scheduled path {self.name!r}: time_source 'RecordField' counts "
+                "from a date field on the record, so record_field must name one. "
+                "To count from the moment the record changed, use "
+                "'RecordTriggerEvent' instead."
+            )
+        if self.record_field and self.time_source != "RecordField":
+            raise ValueError(
+                f"scheduled path {self.name!r}: record_field "
+                f"{self.record_field!r} is only read when time_source is "
+                "'RecordField'. Set that, or drop the field."
+            )
+        return self
+
+
 class Start(BaseModel):
     """
     Record-triggered flows set object + trigger_type. Autolaunched flows leave
@@ -1132,6 +1253,34 @@ class Start(BaseModel):
     # "Only when a record is updated to meet the condition requirements".
     # Changes when the flow runs, so it cannot be dropped silently.
     only_when_changed_to_meet_criteria: bool = False
+    scheduled_paths: List[ScheduledPath] = Field(
+        default_factory=list,
+        description="Extra branches that run later, or in their own "
+        "transaction. Only on a RecordAfterSave trigger.",
+    )
+
+    @model_validator(mode="after")
+    def scheduled_paths_belong_on_an_after_save_trigger(self) -> "Start":
+        """
+        The org's own words, one message per trigger type: "Flows with the
+        trigger type RecordBeforeSave can't have scheduled paths." Nothing has
+        happened yet in a before-save trigger, so there is no committed record
+        to come back to.
+        """
+        if not self.scheduled_paths:
+            return self
+        if self.trigger_type != "RecordAfterSave":
+            where = self.trigger_type or "a flow with no record trigger"
+            raise ValueError(
+                f"\"Flows with the trigger type {where} can't have scheduled "
+                "paths.\" A scheduled path resumes against a record that is "
+                "already saved, so the trigger must be 'RecordAfterSave'."
+            )
+        names = [path.name for path in self.scheduled_paths]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise ValueError(f"duplicate scheduled path names: {repeated}")
+        return self
 
     @model_validator(mode="after")
     def logic_matches_filters(self) -> "Start":
@@ -1207,6 +1356,8 @@ class Flow(BaseModel):
         chain actually breaks instead of guessing which link is missing.
         """
         lines = [f"  start -> {self.start.next or '(nothing)'}"]
+        for path in self.start.scheduled_paths:
+            lines.append(f"  scheduled path {path.name} -> {path.next or '(ends)'}")
         for element in self.elements:
             if isinstance(element, Decision):
                 for outcome in element.outcomes:
@@ -1228,10 +1379,20 @@ class Flow(BaseModel):
         return "\n".join(lines)
 
     def reachable(self) -> set:
-        """Names reachable from the start connector."""
+        """
+        Names reachable from any entry point.
+
+        A scheduled path is an entry point, not a continuation: the flow stops
+        at the end of the immediate run and starts again later at the path's own
+        connector. Counting only start.next would report everything a scheduled
+        path reaches as unreachable.
+        """
         by_name = self.by_name()
         seen: set = set()
         queue = [self.start.next] if self.start.next else []
+        queue.extend(
+            path.next for path in self.start.scheduled_paths if path.next
+        )
         while queue:
             name = queue.pop()
             if name in seen or name not in by_name:
@@ -1264,6 +1425,8 @@ class Flow(BaseModel):
                 problems.append(f"{where} points at unknown element {target!r}")
 
         check(self.start.next, "start")
+        for path in self.start.scheduled_paths:
+            check(path.next, f"scheduled path {path.name}")
         for el in self.elements:
             check(el.next, f"{el.name}.next")
             if isinstance(el, Decision):

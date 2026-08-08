@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-518 tests, none of which need a key, a network, or an org.
+559 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -218,6 +218,14 @@ Sample apps are showcases — far heavier on screen components than a working or
 and much lighter on record-triggered automation. Prefer a real org's numbers
 when you have them.
 
+**And read the zeroes.** Not one of the 91 flows contains a scheduled path or a
+Pause element, so both scored `frees: 0` and the survey never once suggested
+them. That is not evidence they are rare; it is evidence that a demo app has
+nothing to wait for. "Chase it in three days" is among the first things anyone
+asks a flow to do. A corpus tells you what is *in* it, and a gap in the corpus
+looks exactly like a gap in the product — so the survey ranks what to build only
+among things somebody has actually written down.
+
 The line to watch is **"parsed but did NOT survive a round trip"**. That means a
 flow looks editable and isn't: something would be lost on the way back out. It
 should always be empty.
@@ -232,6 +240,7 @@ Record-triggered, autolaunched, and screen flows:
 | Decision | Branch on structured conditions, combined with `and`, `or`, or an expression like `1 OR (2 AND 3)` |
 | Get / Create / Update / Delete Records | Get can name its fields and store into a variable; Create can save the new Id |
 | Loop | |
+| **Scheduled paths** | Run a branch later — three days after the trigger, a day before a date field, or straight away in its own transaction |
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 | **Screen** | Display text, input fields, long text areas, and pickers, with defaults |

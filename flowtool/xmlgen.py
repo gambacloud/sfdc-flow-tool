@@ -485,6 +485,28 @@ def generate(flow: Flow) -> str:
         _sub(start, "doesRequireRecordChangedToMeetCriteria", "true")
     if flow.start.record_trigger_type:
         _sub(start, "recordTriggerType", flow.start.record_trigger_type)
+    # Alphabetical among the start's children, as everywhere else, which puts
+    # scheduledPaths between recordTriggerType and triggerType.
+    for path in flow.start.scheduled_paths:
+        node = _sub(start, "scheduledPaths")
+        _sub(node, "name", path.name)
+        if path.label:
+            _sub(node, "label", path.label)
+        _connector(node, "connector", path.next)
+        if path.max_batch_size is not None:
+            _sub(node, "maxBatchSize", str(path.max_batch_size))
+        if path.offset_number is not None:
+            _sub(node, "offsetNumber", str(path.offset_number))
+        if path.offset_unit:
+            _sub(node, "offsetUnit", path.offset_unit)
+        # The one value this tag takes. An async path carries nothing else, so
+        # there is no ordering question about the rest.
+        if path.run_asynchronously:
+            _sub(node, "pathType", "AsyncAfterCommit")
+        if path.record_field:
+            _sub(node, "recordField", path.record_field)
+        if path.time_source:
+            _sub(node, "timeSource", path.time_source)
     if flow.start.trigger_type:
         _sub(start, "triggerType", flow.start.trigger_type)
 

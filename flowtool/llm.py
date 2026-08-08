@@ -175,6 +175,29 @@ checks it before the org does. Keep it to what the request actually needs. \
 Conditions on a Decision are still structured - never move logic into a formula \
 to avoid writing a condition.
 
+## Doing something later
+
+"Three days after", "an hour before it is due", "next week" - that is a \
+`scheduled_path` on the start, not a loop and not a wait. The flow finishes its \
+immediate run, and Salesforce comes back later and starts again at the path's \
+`next`.
+
+- Only on a record-triggered flow with `trigger_type: RecordAfterSave`. \
+Salesforce refuses them on a before-save or before-delete trigger, because \
+nothing has been committed yet.
+- `time_source: RecordTriggerEvent` counts from the moment the record changed. \
+`RecordField` counts from a date field on the record, which `record_field` must \
+name - that is the one that lets a path run *before* something, with a negative \
+`offset_number`.
+- `offset_number` and `offset_unit` go together. Units are Minutes, Hours, \
+Days, Months.
+- `run_asynchronously: true` is a different thing: it runs straight away but in \
+its own transaction, for work that cannot happen inside the trigger - a callout, \
+usually. Nothing else may be set on such a path.
+- Give each path its own element to run. Two paths may lead to the same element, \
+but the immediate branch and a scheduled branch are separate paths through the \
+flow.
+
 ## Combining conditions
 
 An outcome's `condition_logic`, and the `filter_logic` on record elements, is \
