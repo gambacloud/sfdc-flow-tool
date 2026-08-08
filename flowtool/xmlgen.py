@@ -15,10 +15,12 @@ from .ir import (
     ActionCall,
     Assignment,
     Choice,
+    Constant,
     Decision,
     DynamicChoiceSet,
     Element,
     Flow,
+    Formula,
     GetRecords,
     Loop,
     RecordCreate,
@@ -373,14 +375,16 @@ _WRITERS = {
 # The order Salesforce emits Flow children in. Alphabetical, which interleaves
 # the two resource tags among the elements - they are written by name below
 # rather than from a bucket, since nothing connects to them.
-_RESOURCE_TAGS = ("choices", "dynamicChoiceSets")
+_RESOURCE_TAGS = ("choices", "constants", "dynamicChoiceSets", "formulas")
 
 _ROOT_ORDER = [
     "actionCalls",
     "assignments",
     "choices",
+    "constants",
     "decisions",
     "dynamicChoiceSets",
+    "formulas",
     "loops",
     "recordCreates",
     "recordDeletes",
@@ -414,6 +418,26 @@ def generate(flow: Flow) -> str:
         if tag == "dynamicChoiceSets":
             for choice_set in flow.dynamic_choice_sets:
                 _write_choice_set(root, choice_set)
+            continue
+        if tag == "constants":
+            for constant in flow.constants:
+                node = _sub(root, "constants")
+                if constant.description:
+                    _sub(node, "description", constant.description)
+                _sub(node, "name", constant.name)
+                _sub(node, "dataType", constant.data_type)
+                _value_el(node, "value", constant.value)
+            continue
+        if tag == "formulas":
+            for formula in flow.formulas:
+                node = _sub(root, "formulas")
+                if formula.description:
+                    _sub(node, "description", formula.description)
+                _sub(node, "name", formula.name)
+                _sub(node, "dataType", formula.data_type)
+                _sub(node, "expression", formula.expression)
+                if formula.scale is not None:
+                    _sub(node, "scale", str(formula.scale))
             continue
         for el in buckets[tag]:
             _, writer = _WRITERS[type(el)]

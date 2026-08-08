@@ -13,9 +13,11 @@ from flowtool.ir import (
     Assignment,
     AssignmentItem,
     Condition,
+    Constant,
     Decision,
     FieldValue,
     Flow,
+    Formula,
     GetRecords,
     InputAssignment,
     Loop,
@@ -487,7 +489,7 @@ class TestUnsupported:
     @pytest.mark.parametrize("tag,expected", [
         ("recordRollbacks", "rollback elements"),
         ("waits", "wait / pause elements"),
-        ("formulas", "formula resources"),
+        ("transforms", "transform elements"),
         ("collectionProcessors", "collection filter/sort"),
     ])
     def test_named_constructs_are_refused(self, tag, expected):
@@ -894,3 +896,91 @@ class TestBlankLinesAreContent:
         xml = generate(_flow(GetRecords(name="Get", label="Get", object="Account")))
         assert "\n    <recordLookups>" in xml, "still pretty-printed"
         assert "\n\n" not in xml, "no blank lines where there is no content"
+
+
+class TestConstantsAndFormulas:
+    """
+    Two resources that always appeared together in the corpus, and neither of
+    which freed a flow alone - so they were built together.
+    """
+
+    def _with(self, **kw) -> Flow:
+        return _flow(GetRecords(name="Get", label="Get", object="Account"), **kw)
+
+    def test_a_constant(self):
+        assert_survives(self._with(constants=[
+            Constant(name="Default_Rating", data_type="String",
+                     value=Value(string_value="Warm")),
+        ]))
+
+    @pytest.mark.parametrize("data_type,value", [
+        ("String", Value(string_value="x")),
+        ("Number", Value(number_value=60)),
+        ("Currency", Value(number_value=9.99)),
+        ("Boolean", Value(boolean_value=True)),
+        ("Date", Value(date_value="2026-01-01")),
+        ("DateTime", Value(date_time_value="2026-01-01T09:00:00.000Z")),
+    ])
+    def test_every_constant_type(self, data_type, value):
+        assert_survives(self._with(constants=[
+            Constant(name="C", data_type=data_type, value=value),
+        ]))
+
+    def test_a_formula(self):
+        assert_survives(self._with(formulas=[
+            Formula(name="Vat", data_type="Currency",
+                    expression="{!v_Total} * 0.2", scale=2),
+        ]))
+
+    def test_a_formula_with_no_scale_and_a_description(self):
+        assert_survives(self._with(formulas=[
+            Formula(name="Today_Is", data_type="Date", expression="TODAY()",
+                    description="Right now, recomputed on each read."),
+        ]))
+
+    def test_both_together(self):
+        assert_survives(self._with(
+            constants=[Constant(name="Rate", data_type="Number",
+                                value=Value(number_value=20))],
+            formulas=[Formula(name="Vat", data_type="Currency",
+                              expression="{!v_Total} * {!Rate} / 100")],
+        ))
+
+    def test_they_share_the_one_namespace(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="share one namespace"):
+            self._with(
+                constants=[Constant(name="Rate", data_type="Number",
+                                    value=Value(number_value=1))],
+                formulas=[Formula(name="Rate", data_type="Number",
+                                  expression="1")],
+            )
+
+    def test_they_are_written_where_salesforce_writes_them(self):
+        import xml.etree.ElementTree as ET
+        from flowtool.xmlgen import METADATA_NS
+
+        xml = generate(self._with(
+            constants=[Constant(name="Rate", data_type="Number",
+                                value=Value(number_value=20))],
+            formulas=[Formula(name="Vat", data_type="Currency", expression="1")],
+        ))
+        tags = [c.tag.split("}")[-1] for c in ET.fromstring(xml)]
+        assert tags.index("constants") < tags.index("formulas")
+        assert tags.index("formulas") < tags.index("recordLookups")
+
+    def test_an_expression_with_a_pipe_does_not_break_the_documentation(self):
+        """A Markdown table cell ends at a pipe; a formula may contain one."""
+        from flowtool.mermaid import to_markdown
+
+        markdown = to_markdown(self._with(formulas=[
+            Formula(name="Either", data_type="Boolean",
+                    expression="{!a} || {!b}"),
+        ]))
+        row = next(line for line in markdown.splitlines() if "Either" in line)
+        # An escaped pipe still contains the character, so count only the ones
+        # that actually divide cells.
+        dividers = row.count("|") - row.count("\|")
+        assert dividers == 5, f"the expression split the row into cells: {row}"
+        assert "\|\|" in row

@@ -61,9 +61,9 @@ class TestCounting:
     def test_every_blocker_in_a_flow_is_counted(self):
         survey = Survey()
         survey.add("Both", xml(
-            "<formulas><name>F</name></formulas><waits><name>W</name></waits>"
+            "<transforms><name>T</name></transforms><waits><name>W</name></waits>"
         ))
-        assert survey.codes["element:formulas"] == 1
+        assert survey.codes["element:transforms"] == 1
         assert survey.codes["element:waits"] == 1
         assert survey.flows_by_code["element:waits"] == ["Both"]
 
@@ -104,10 +104,10 @@ class TestWhatWouldActuallyHelp:
     def test_a_code_that_never_stands_alone_frees_nothing(self):
         survey = Survey()
         survey.add("Two_Problems", xml(
-            "<formulas><name>F</name></formulas><waits><name>W</name></waits>"
+            "<transforms><name>T</name></transforms><waits><name>W</name></waits>"
         ))
-        assert survey.codes["element:formulas"] == 1, "it is still counted as seen"
-        assert survey.would_unblock()["element:formulas"] == 0, "but it frees nothing"
+        assert survey.codes["element:transforms"] == 1, "it is still counted as seen"
+        assert survey.would_unblock()["element:transforms"] == 0, "but it frees nothing"
 
     def test_a_sole_blocker_frees_its_flow(self):
         survey = Survey()
@@ -137,7 +137,7 @@ class TestWhatWouldActuallyHelp:
     def test_the_report_says_so_when_nothing_helps_alone(self, capsys):
         survey = Survey()
         survey.add("Two_Problems", xml(
-            "<formulas><name>F</name></formulas><waits><name>W</name></waits>"
+            "<transforms><name>T</name></transforms><waits><name>W</name></waits>"
         ))
         report(survey, verbose=False)
         out = capsys.readouterr().out
@@ -241,13 +241,13 @@ class TestOutput:
     def test_the_report_names_the_biggest_win(self, capsys):
         survey = Survey()
         for name in ("A", "B"):
-            survey.add(name, xml("<formulas><name>F</name></formulas>"))
+            survey.add(name, xml("<transforms><name>T</name></transforms>"))
         survey.add("C", xml("<waits><name>W</name></waits>"))
         report(survey, verbose=False)
         out = capsys.readouterr().out
         assert "3 flows" in out
         assert "Biggest single win" in out
-        assert "element:formulas" in out
+        assert "element:transforms" in out
 
     def test_json_is_serialisable_and_complete(self):
         survey = Survey()

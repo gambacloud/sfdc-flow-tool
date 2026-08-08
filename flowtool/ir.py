@@ -565,6 +565,59 @@ class DynamicChoiceSet(BaseModel):
         return self
 
 
+ResourceDataType = Literal[
+    "String", "Number", "Currency", "Date", "DateTime", "Boolean"
+]
+
+
+class Constant(BaseModel):
+    """A fixed value written once and referenced by name. Never reassigned."""
+
+    name: str
+    data_type: ResourceDataType
+    value: Value
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "constant name")
+
+
+class Formula(BaseModel):
+    """
+    A value recomputed from an expression each time it is read.
+
+    `expression` is Salesforce formula syntax, and it is the one place in this
+    IR that holds a free-form string. That is not the exception it looks like:
+    the rule elsewhere is that a *condition* must be structured, because a
+    condition written as text is how nonsense reaches leftValueReference. A
+    formula resource is an expression in Salesforce too, so a string is the
+    faithful shape rather than a shortcut.
+
+    The consequence is worth knowing, and it is worse than it looks: an
+    expression calling a function that does not exist, and referencing a
+    resource that does not exist, was accepted by the org under checkOnly. So a
+    formula is the one thing in a flow that nothing verifies before it is live -
+    not this IR, and not the validation step either. That is why the approval
+    documentation quotes the expression verbatim: a person is the only check.
+    """
+
+    name: str
+    data_type: ResourceDataType
+    expression: str = Field(
+        description="Salesforce formula syntax, e.g. '{!v_Total} * 0.2' or "
+        "'TODAY()'. References to other resources are written {!name}."
+    )
+    scale: Optional[int] = None
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "formula name")
+
+
 class TextTemplate(BaseModel):
     """
     A block of text with merge fields, written once and referenced by name.
@@ -749,6 +802,8 @@ class Flow(BaseModel):
     choices: List[Choice] = Field(default_factory=list)
     dynamic_choice_sets: List[DynamicChoiceSet] = Field(default_factory=list)
     text_templates: List[TextTemplate] = Field(default_factory=list)
+    constants: List[Constant] = Field(default_factory=list)
+    formulas: List[Formula] = Field(default_factory=list)
 
     @field_validator("api_name")
     @classmethod
@@ -986,6 +1041,10 @@ class Flow(BaseModel):
             claim(choice_set.name, "a choice set")
         for template in self.text_templates:
             claim(template.name, "a text template")
+        for constant in self.constants:
+            claim(constant.name, "a constant")
+        for formula in self.formulas:
+            claim(formula.name, "a formula")
 
         clashes = {
             name: kinds for name, kinds in owners.items() if len(kinds) > 1

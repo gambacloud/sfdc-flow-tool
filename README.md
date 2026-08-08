@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-387 tests, none of which need a key, a network, or an org.
+400 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -196,9 +196,17 @@ Record-triggered, autolaunched, and screen flows:
 | **Screen** | Display text, input fields, long text areas, and pickers |
 | **Choices** | Fixed options, or options built from records or a picklist |
 | **Text templates** | Reusable text with merge fields, for an email body or a message |
+| **Constants and formulas** | A fixed value, or one recomputed from an expression |
 
 Formula **fields** on an object work anywhere a reference does (`$Record.Margin__c`).
-Formula **resources** defined inside a flow do not.
+Formula **resources** defined inside a flow work too.
+
+A formula's expression is the one free-form string in the IR, and the one thing
+nothing verifies. An expression calling a function that does not exist, and
+referencing a resource that does not exist, was accepted by the org under
+`checkOnly` — so neither the IR nor the validation step will catch a bad
+formula. That is why the approval documentation quotes every expression
+verbatim: for a formula, a person reading it is the only check there is.
 
 ### Deliberately out of scope
 

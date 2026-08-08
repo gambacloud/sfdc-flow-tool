@@ -22,11 +22,13 @@ from .ir import (
     AssignmentItem,
     Choice,
     Condition,
+    Constant,
     Decision,
     DynamicChoiceSet,
     Element,
     FieldValue,
     Flow,
+    Formula,
     GetRecords,
     InputAssignment,
     Loop,
@@ -113,7 +115,9 @@ _SUPPORTED_ELEMENTS = {
 
 # Resources rather than elements: nothing connects to them, screen fields name
 # them. Read alongside the elements, checked with their own allowlists below.
-_SUPPORTED_RESOURCES = {"choices", "dynamicChoiceSets", "textTemplates"}
+_SUPPORTED_RESOURCES = {
+    "choices", "dynamicChoiceSets", "textTemplates", "constants", "formulas",
+}
 
 # Recognised Flow constructs the IR has no equivalent for. Named individually so
 # the message tells the user what is actually in their flow.
@@ -127,8 +131,6 @@ _KNOWN_UNSUPPORTED = {
     "collectionProcessors": "collection filter/sort elements",
     "transforms": "transform elements",
     "customErrors": "custom error elements",
-    "formulas": "formula resources",
-    "constants": "constant resources",
     "scheduledPaths": "scheduled paths",
     "exitRules": "exit rules",
     "filters": "top-level filters",
@@ -203,6 +205,14 @@ _CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataV
 
 _TEXT_TEMPLATE_CHILDREN = {"name", "text", "isViewedAsPlainText", "description",
                           "processMetadataValues"}
+
+_CONSTANT_CHILDREN = {"name", "dataType", "value", "description",
+                     "processMetadataValues"}
+
+# processMetadataValues carries the pre-migration formula text on flows that
+# came from Workflow. It is commentary, not behaviour.
+_FORMULA_CHILDREN = {"name", "dataType", "expression", "scale", "description",
+                    "processMetadataValues"}
 
 _CHOICE_SET_CHILDREN = {
     "name", "dataType", "displayField", "valueField", "object", "filters",
@@ -617,6 +627,8 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         ("choices", _CHOICE_CHILDREN),
         ("dynamicChoiceSets", _CHOICE_SET_CHILDREN),
         ("textTemplates", _TEXT_TEMPLATE_CHILDREN),
+        ("constants", _CONSTANT_CHILDREN),
+        ("formulas", _FORMULA_CHILDREN),
     ):
         for node in root.findall(f"m:{tag}", NS):
             reasons.extend(
@@ -735,6 +747,30 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                 Gap("ir_mismatch", f"text template does not fit the model: {exc}")
             )
 
+    constants, formulas = [], []
+    for node in root.findall("m:constants", NS):
+        try:
+            constants.append(Constant(
+                name=_text(node, "m:name") or "",
+                data_type=_text(node, "m:dataType") or "String",
+                value=_value(node.find("m:value", NS)),
+                description=_text(node, "m:description"),
+            ))
+        except ValueError as exc:
+            reasons.append(Gap("ir_mismatch", f"constant does not fit the model: {exc}"))
+    for node in root.findall("m:formulas", NS):
+        scale = _text(node, "m:scale")
+        try:
+            formulas.append(Formula(
+                name=_text(node, "m:name") or "",
+                data_type=_text(node, "m:dataType") or "String",
+                expression=_text(node, "m:expression") or "",
+                scale=int(scale) if scale else None,
+                description=_text(node, "m:description"),
+            ))
+        except ValueError as exc:
+            reasons.append(Gap("ir_mismatch", f"formula does not fit the model: {exc}"))
+
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
 
@@ -753,6 +789,8 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             choices=choices,
             dynamic_choice_sets=choice_sets,
             text_templates=templates,
+            constants=constants,
+            formulas=formulas,
         )
     except ValueError as exc:
         # The flow deployed, so this means the IR is stricter than Salesforce.

@@ -70,6 +70,11 @@ def _escape(text: str) -> str:
     )
 
 
+def _escape_pipes(text: str) -> str:
+    """A pipe in a formula would otherwise split the Markdown table cell."""
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
 def value_text(value: Value) -> str:
     if value.string_value is not None:
         return f'"{value.string_value}"'
@@ -417,6 +422,27 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
             next_label = f"`{element.next}`" if element.next else "End"
         lines.append(f"| `{element.name}` | {type_label} | {detail} | {next_label} |")
     lines.append("")
+
+    # A formula is logic, and it is the one thing here nothing can check - only
+    # the org knows whether the expression is valid, and only a person knows
+    # whether it is right. So it is shown verbatim.
+    if flow.constants or flow.formulas:
+        lines += ["## Resources", "", "| Name | Kind | Type | Value |",
+                  "|---|---|---|---|"]
+        for constant in flow.constants:
+            lines.append(
+                f"| `{constant.name}` | Constant | {constant.data_type} "
+                f"| {value_text(constant.value)} |"
+            )
+        for formula in flow.formulas:
+            data_type = formula.data_type
+            if formula.scale is not None:
+                data_type += f", {formula.scale} dp"
+            expression = _escape_pipes(formula.expression)
+            lines.append(
+                f"| `{formula.name}` | Formula | {data_type} | `{expression}` |"
+            )
+        lines.append("")
 
     # A template's body is what gets emailed or shown. Summarising it would mean
     # approving one thing and sending another, so it is quoted in full.

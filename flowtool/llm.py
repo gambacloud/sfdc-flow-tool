@@ -167,6 +167,13 @@ unset variable is already empty.
 - `text_templates` hold a block of text with merge fields written `{!name}`, \
 for an email body or a message shown to the user. Write the wording out in the \
 template rather than assembling it from string assignments.
+- `constants` hold a fixed value that never changes. `formulas` hold a value \
+recomputed from an expression each time it is read, written in Salesforce \
+formula syntax with other resources referenced as `{!name}`.
+- A formula's `expression` is the one free-form string you write, and nothing \
+checks it before the org does. Keep it to what the request actually needs. \
+Conditions on a Decision are still structured - never move logic into a formula \
+to avoid writing a condition.
 
 ## Screens
 
