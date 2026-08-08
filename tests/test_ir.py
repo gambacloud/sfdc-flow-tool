@@ -158,9 +158,15 @@ class TestReferences:
     def test_an_empty_flow_needs_no_start_connector(self):
         _flow(start=Start(), elements=[])
 
-    def test_unreachable_elements_are_rejected(self):
-        with pytest.raises(ValidationError, match="unreachable elements"):
-            _flow(
+    def test_unreachable_elements_are_warned_about_not_rejected(self):
+        """
+        Salesforce deploys a flow with an element nothing reaches, and one of
+        its own sample apps ships a live Active flow that has one. Refusing it
+        made that flow impossible to open, which is worse than drawing it with
+        a note on top. The model is still told, because a forgotten connector
+        on a flow it just wrote is what this check is for.
+        """
+        flow = _flow(
                 start=Start(next="Assign"),
                 elements=[
                     Assignment(
@@ -171,14 +177,27 @@ class TestReferences:
                     GetRecords(name="Orphan", label="Orphan", object="Account"),
                 ],
             )
+        assert "unreachable elements" in "\n".join(flow.warnings())
 
-    def test_the_unreachable_error_shows_where_the_chain_breaks(self):
+    def test_a_fully_connected_flow_has_nothing_to_warn_about(self):
+        flow = _flow(
+            start=Start(next="Assign"),
+            elements=[
+                Assignment(
+                    name="Assign", label="Assign",
+                    items=[AssignmentItem(to_reference="v",
+                                          value=Value(number_value=1))],
+                ),
+            ],
+        )
+        assert flow.warnings() == []
+
+    def test_the_unreachable_warning_shows_where_the_chain_breaks(self):
         """
         The model repaired nothing across four attempts when the message only
         said "connect them". It needs to see the wiring to find the gap.
         """
-        with pytest.raises(ValidationError) as caught:
-            _flow(
+        flow = _flow(
                 start=Start(next="D"),
                 elements=[
                     Decision(
@@ -201,27 +220,26 @@ class TestReferences:
                     GetRecords(name="Orphan", label="x", object="Account"),
                 ],
             )
-        message = str(caught.value)
+        message = "\n".join(flow.warnings())
         assert "start -> D" in message
         assert "D outcome Yes -> (ends)" in message, "must show the broken link"
         assert "Orphan -> (ends)" in message
 
-    def test_the_error_names_the_reachable_paths_that_stop(self):
+    def test_the_warning_names_the_reachable_paths_that_stop(self):
         """
         The connector map says what is stranded but not where the loose end is.
         A repair that cannot find the loose end just re-emits the same flow, so
         the reachable elements whose path stops are named outright - the missing
         connector belongs to one of them.
         """
-        with pytest.raises(ValidationError) as caught:
-            _flow(
+        flow = _flow(
                 start=Start(next="First"),
                 elements=[
                     GetRecords(name="First", label="First", object="Account"),
                     GetRecords(name="Orphan", label="Orphan", object="Contact"),
                 ],
             )
-        message = str(caught.value)
+        message = "\n".join(flow.warnings())
         assert "Paths that currently stop: ['First']" in message
         assert "Orphan" not in message.split("Paths that currently stop")[1], (
             "an unreachable element is not a loose end to connect from"

@@ -431,6 +431,18 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
     if flow.description:
         lines += [flow.description, ""]
 
+    # Above the diagram, not below it. These are the things that deploy and are
+    # still probably wrong, so they belong where someone deciding whether to
+    # approve will read them first - an element nothing reaches draws on the
+    # diagram like any other and gives no sign that it never runs.
+    for note in flow.warnings():
+        first, _, rest = note.partition("\n")
+        lines += ["> [!WARNING]", f"> {first}", ""]
+        if rest.strip():
+            lines += ["> <details><summary>details</summary>", ">", "> ```"]
+            lines += [f"> {line}" for line in rest.splitlines()]
+            lines += ["> ```", "> </details>", ""]
+
     lines += ["## Trigger", ""]
     if flow.process_type == "Flow":
         lines.append(

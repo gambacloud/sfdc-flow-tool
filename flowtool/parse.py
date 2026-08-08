@@ -300,6 +300,21 @@ def _bool(node: Optional[ET.Element], path: str, default: bool = False) -> bool:
     return default if raw is None else raw.strip().lower() == "true"
 
 
+# Salesforce reads FlowVersionStatus without regard to case - <status>ACTIVE</status>
+# deploys exactly as <status>Active</status> does, and three flows in Salesforce's
+# own sample apps are written that way. Matching on case would have refused them
+# over a spelling. The canonical form is what goes back out, since the two mean
+# the same thing and there is nothing to preserve.
+_STATUSES = {"draft": "Draft", "active": "Active",
+             "obsolete": "Obsolete", "invaliddraft": "InvalidDraft"}
+
+
+def _status(raw: Optional[str]) -> str:
+    if raw is None:
+        return "Draft"
+    return _STATUSES.get(raw.strip().lower(), raw)
+
+
 def _opt_bool(node: Optional[ET.Element], path: str) -> Optional[bool]:
     """None when the flow never said, which is not the same as saying false."""
     raw = _text(node, path)
@@ -324,6 +339,14 @@ def _value(node: Optional[ET.Element]) -> Optional[Value]:
     ):
         raw = _text(node, f"m:{tag}")
         if raw is None:
+            # <stringValue /> is an empty string, not a missing value. Reading
+            # it as missing dropped the whole assignment item, and an assignment
+            # left with no items then failed the model - so a live flow that
+            # blanks a variable was refused, and the reason named the wrong
+            # thing. Only strings can be legitimately empty; an empty
+            # <numberValue /> is malformed and stays skipped.
+            if tag == "stringValue" and node.find(f"m:{tag}", NS) is not None:
+                return Value(string_value="")
             continue
         if field == "number_value":
             return Value(number_value=float(raw))
@@ -825,7 +848,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             description=_text(root, "m:description"),
             api_version=_text(root, "m:apiVersion") or "62.0",
             process_type=process_type,
-            status=_text(root, "m:status") or "Draft",
+            status=_status(_text(root, "m:status")),
             start=start,
             elements=elements,
             variables=variables,

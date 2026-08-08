@@ -314,9 +314,31 @@ class FaultCapable(BaseElement):
     )
 
 
+# Salesforce's FlowAssignmentOperator, as the org accepts it. Widening this to
+# the real enum is safe in a way that widening a free-form string is not: the
+# org checks it and names a wrong one - "'Banana' is not a valid value for the
+# enum 'FlowAssignmentOperator'" - so a mistake fails validation rather than
+# deploying. AssignCount was found in two live flows and refused by the four
+# this used to allow.
+AssignmentOperator = Literal[
+    "Assign",           # set it
+    "Add",              # numbers, dates, and string concatenation
+    "Subtract",
+    "AssignCount",      # set a number to how many items a collection holds
+    "AddItem",          # append to a collection
+    "AddAtStart",
+    "RemoveFirst",
+    "RemoveBeforeFirst",
+    "RemoveAfterFirst",
+    "RemovePosition",
+    "RemoveAll",
+    "RemoveUncommon",   # keep only what both collections have
+]
+
+
 class AssignmentItem(BaseModel):
     to_reference: str
-    operator: Literal["Assign", "Add", "Subtract", "AddItem"] = "Assign"
+    operator: AssignmentOperator = "Assign"
     value: Value
 
 
@@ -1136,7 +1158,11 @@ class Flow(BaseModel):
     # "Flow" is Salesforce's name for a screen flow — the one a user runs and
     # watches. "AutoLaunchedFlow" covers both record-triggered and autolaunched.
     process_type: Literal["AutoLaunchedFlow", "Flow"] = "AutoLaunchedFlow"
-    status: Literal["Draft", "Active"] = "Draft"
+    # Draft and Active are the two this tool ever writes. Obsolete and
+    # InvalidDraft are what Salesforce marks superseded and broken versions
+    # with; a flow retrieved from an org can be either, and refusing them would
+    # make an old version unreadable rather than unwritable.
+    status: Literal["Draft", "Active", "Obsolete", "InvalidDraft"] = "Draft"
     start: Start
     elements: List[Element] = Field(default_factory=list)
     variables: List[Variable] = Field(default_factory=list)
@@ -1268,6 +1294,27 @@ class Flow(BaseModel):
                 "element."
             )
 
+        return self
+
+    def warnings(self) -> List[str]:
+        """
+        Things that are probably a mistake but that Salesforce allows.
+
+        Distinct from a validator on purpose. A validator says the flow cannot
+        be represented or cannot deploy; a warning says it will deploy and you
+        may not have meant it. Refusing the second kind is how a tool becomes
+        unable to open flows that are working in production right now.
+
+        An unreachable element was an error here until a live, Active flow in
+        Salesforce's own sample apps turned out to have one - Update_Profile
+        with no connector, Assign_Output that nothing reaches. The org deploys
+        it happily. Refusing it meant the flow could not be opened at all, which
+        is a worse outcome than drawing it with a note attached.
+
+        The model still gets told, so it keeps repairing the case that made this
+        check worth having: a forgotten connector on a flow it just wrote.
+        """
+        notes: List[str] = []
         reachable = self.reachable()
         orphans = {e.name for e in self.elements} - reachable
         if orphans:
@@ -1280,22 +1327,22 @@ class Flow(BaseModel):
                 name for name in sorted(reachable) if not self.successors(by_name[name])
             ]
             hint = (
-                f"\nPaths that currently stop: {dead_ends}. The connector you are "
+                f"\nPaths that currently stop: {dead_ends}. The connector that is "
                 "missing almost certainly belongs to one of these - set its `next` "
                 "to whatever should run after it."
                 if dead_ends
                 else ""
             )
-            raise ValueError(
+            notes.append(
                 f"unreachable elements: {sorted(orphans)}. No path from Start "
-                "reaches them. Here is every connector as it stands:\n"
-                f"{self.connector_map()}\n"
+                "reaches them, so they never run. Here is every connector as it "
+                f"stands:\n{self.connector_map()}\n"
                 "Set the connector that should lead to each unreachable element. "
                 "For a Decision, that is the outcome's own `next` - an outcome "
                 "with next=null ends the path instead of continuing to the "
                 f"element you meant.{hint}"
             )
-        return self
+        return notes
 
     @model_validator(mode="after")
     def screens_belong_to_a_screen_flow(self) -> "Flow":

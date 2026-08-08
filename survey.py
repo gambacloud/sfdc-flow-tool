@@ -90,7 +90,7 @@ class Survey:
         # A flow that parses but does not survive a round trip is worse than one
         # that is refused: it would look editable and lose something on deploy.
         try:
-            returned = parse_flow(generate(flow), api_name=api_name)
+            returned = parse_flow(generate(flow), api_name=bare_name)
         except Exception as exc:
             self.round_trip_failures.append((api_name, f"re-parse failed: {exc}"))
             return

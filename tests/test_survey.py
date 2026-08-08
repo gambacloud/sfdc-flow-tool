@@ -342,6 +342,11 @@ class TestReadingADirectory:
             survey.add(name, body)
         assert survey.parsed == ["purealoe/Good"]
         assert survey.refused == {}
+        # The round-trip check re-parses, and it needs the bare name too. It
+        # did not get it: every flow in a subdirectory corpus was reported as
+        # failing its round trip - the one line the README says must stay empty
+        # - because re-parsing threw on the slash.
+        assert survey.round_trip_failures == []
 
     def test_a_repo_prefix_is_not_mistaken_for_a_namespace(self, tmp_path):
         """

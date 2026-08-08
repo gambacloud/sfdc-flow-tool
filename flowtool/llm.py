@@ -820,6 +820,7 @@ class FlowGenerator:
     def _validated(self, messages: List[Message]) -> GenerationResult:
         conversation = list(messages)
         last_error: Optional[str] = None
+        asked_about_warnings = False
         previous_names: Optional[set] = None
 
         for attempt in range(self.max_repairs + 1):
@@ -901,6 +902,34 @@ class FlowGenerator:
                             "That IR failed validation:\n\n"
                             f"{last_error}\n\n"
                             "Return the corrected IR."
+                        ),
+                    )
+                )
+                continue
+
+            # Things the org allows but that are usually a mistake - a forgotten
+            # connector, most often. Not a validation error, because a flow in
+            # production can legitimately have one and refusing it would make
+            # that flow unopenable. Worth one round trip when we wrote the flow
+            # ourselves, and no more: if the model looks at it and produces the
+            # same shape again, it meant it.
+            notes = flow.warnings()
+            if notes and not asked_about_warnings and attempt < self.max_repairs:
+                asked_about_warnings = True
+                joined = "\n\n".join(notes)
+                log.info("attempt %s has warnings: %s", attempt + 1,
+                         joined.replace(chr(10), ' | ')[:200])
+                conversation.append(
+                    Message(role="assistant", content=json.dumps(payload, indent=1))
+                )
+                conversation.append(
+                    Message(
+                        role="user",
+                        content=(
+                            "That IR is valid, but it looks unintended:\n\n"
+                            f"{joined}\n\n"
+                            "Return the corrected IR. If you did mean it, return "
+                            "the same IR unchanged."
                         ),
                     )
                 )

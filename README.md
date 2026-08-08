@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-488 tests, none of which need a key, a network, or an org.
+518 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -131,6 +131,18 @@ from that diagram would delete them on deploy.
 `parse(generate(ir)) == ir` is asserted for every element type in
 `tests/test_roundtrip.py`. That property is what makes an edit round-trip safe.
 
+### Refusals and warnings are different things
+
+A **refusal** means the IR cannot hold the flow. A **warning** means it will
+deploy and you may not have meant it — an element nothing reaches, for example.
+Warnings appear at the top of the approval document, above the diagram, and the
+model is told about them once so it can fix a connector it forgot.
+
+The line between them is not taste. Unreachable elements were a refusal until a
+live, Active flow in Salesforce's own sample apps turned out to have one, so the
+tool could not open a flow that was working in production. **Anything the org
+accepts has to be openable**; the most a tool can do about it is say so.
+
 ## Measuring the gap
 
 ```bash
@@ -185,7 +197,7 @@ metadata at all. It takes one GitHub API call per repo, unauthenticated, so 60
 repos an hour — over the limit it says so per repo and skips what it already
 has, so running it again an hour later picks up where it stopped.
 
-The corpus drove eight changes in a row, taking coverage from 0 to 65 flows. It
+The corpus drove nine changes in a row, taking coverage from 0 to 72 flows. It
 showed that the top three blockers were not features at all but three unmodelled
 attributes of `variables`.
 
@@ -216,7 +228,7 @@ Record-triggered, autolaunched, and screen flows:
 
 | | |
 |---|---|
-| Assignment | Set variable values |
+| Assignment | Set variable values, add to or remove from a collection, count one |
 | Decision | Branch on structured conditions, combined with `and`, `or`, or an expression like `1 OR (2 AND 3)` |
 | Get / Create / Update / Delete Records | Get can name its fields and store into a variable; Create can save the new Id |
 | Loop | |
