@@ -169,13 +169,26 @@ files so later runs can go offline with `--dir`, and `--json` writes the whole
 report for tracking coverage over time.
 
 **No org handy?** `--dir` reads any SFDX checkout, so public repos work as a
-corpus — Salesforce's own [sample apps](https://github.com/trailheadapps) carry
-real flows under `force-app/main/default/flows/`. Fifteen of them is what showed
-that the top three blockers were not features at all but three unmodelled
-attributes of `variables`, and that the screen components planned next would
-have freed nothing. Pool several checkouts into one directory and survey it in
-one go — but watch for two orgs using the same flow name, which silently
-overwrites.
+corpus. Salesforce's own [sample apps](https://github.com/trailheadapps) carry
+real flows under `force-app/main/default/flows/`:
+
+```bash
+for r in purealoe-lwc coral-cloud dreamhouse-lwc easy-spaces-lwc lwc-recipes; do git clone -q --depth 1 "https://github.com/trailheadapps/$r.git"; done; mkdir -p flows; find . -name "*.flow-meta.xml" -exec cp {} flows/ \;
+```
+
+```bash
+.venv/Scripts/python.exe survey.py --dir flows -v
+```
+
+Fifteen flows from that corpus drove six changes in a row. It showed that the
+top three blockers were not features at all but three unmodelled attributes of
+`variables`, and that the screen components planned next would have freed
+nothing — which was true, and still is.
+
+Two caveats. Pooling several checkouts into one directory is fine only while no
+two use the same flow name; a collision overwrites silently and undercounts. And
+sample apps are showcases, far heavier on LWC than a working org — so prefer a
+real org's numbers when you have them.
 
 The line to watch is **"parsed but did NOT survive a round trip"**. That means a
 flow looks editable and isn't: something would be lost on the way back out. It
