@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-443 tests, none of which need a key, a network, or an org.
+484 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -180,8 +180,8 @@ for r in purealoe-lwc coral-cloud dreamhouse-lwc easy-spaces-lwc lwc-recipes; do
 .venv/Scripts/python.exe survey.py --dir flows -v
 ```
 
-Fifteen flows from that corpus drove seven changes in a row, taking it from 0 to
-8. It showed that the top three blockers were not features at all but three
+Fifteen flows from that corpus drove eight changes in a row, taking it from 0 to
+9. It showed that the top three blockers were not features at all but three
 unmodelled attributes of `variables`.
 
 It also showed the limit of the `frees` column. Screen components arrive as four
@@ -207,7 +207,7 @@ Record-triggered, autolaunched, and screen flows:
 | | |
 |---|---|
 | Assignment | Set variable values |
-| Decision | Branch on structured conditions |
+| Decision | Branch on structured conditions, combined with `and`, `or`, or an expression like `1 OR (2 AND 3)` |
 | Get / Create / Update / Delete Records | Get can name its fields and store into a variable; Create can save the new Id |
 | Loop | |
 | Subflow | |
@@ -221,12 +221,38 @@ Record-triggered, autolaunched, and screen flows:
 Formula **fields** on an object work anywhere a reference does (`$Record.Margin__c`).
 Formula **resources** defined inside a flow work too.
 
-A formula's expression is the one free-form string in the IR, and the one thing
-nothing verifies. An expression calling a function that does not exist, and
-referencing a resource that does not exist, was accepted by the org under
-`checkOnly` — so neither the IR nor the validation step will catch a bad
-formula. That is why the approval documentation quotes every expression
-verbatim: for a formula, a person reading it is the only check there is.
+A formula's expression is the one free-form string the org does not check at
+all. An expression calling a function that does not exist, and referencing a
+resource that does not exist, was accepted under `checkOnly` — so neither the IR
+nor the validation step will catch a bad formula. That is why the approval
+documentation quotes every expression verbatim: for a formula, a person reading
+it is the only check there is.
+
+### Custom condition logic
+
+Conditions normally combine with `and` or `or`. They can also combine with an
+expression over their positions — `1 OR (2 AND 3)`, numbered from 1 in the order
+listed — on a decision outcome, on record filters, and on a flow's entry
+conditions.
+
+Salesforce checks none of it. An expression naming a condition past the end of
+the list, an unclosed bracket, and the literal string `banana` all pass
+`checkOnly` and deploy. So the IR parses the expression and refuses anything it
+cannot read or whose numbers do not line up.
+
+The case that actually happens is renumbering. Editing a flow renumbers its
+conditions, so an outcome that loses its second condition leaves
+`1 OR (2 AND 3)` pointing one place past the end — a flow that still deploys and
+takes the wrong branch. That is what this check is for.
+
+One thing is deliberately allowed: a condition the expression never names. It is
+evaluated and ignored, which is odd but not broken, and refusing it would be
+guessing at intent rather than following a rule. The approval document says so
+in the margin instead, and a person decides.
+
+The expression is never reformatted on the way back out. `1 or 2` returns as
+`1 or 2`, because a reviewer comparing against the org version reads it
+character by character.
 
 ### Deliberately out of scope
 

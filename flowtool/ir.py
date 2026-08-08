@@ -56,6 +56,152 @@ def _check_api_name(value: str, what: str) -> str:
     return value
 
 
+# --------------------------------------------------------------------------
+# Custom condition logic
+# --------------------------------------------------------------------------
+#
+# A decision outcome, or a set of record filters, combines its conditions with
+# `and`, with `or`, or with an expression over their positions: "1 OR (2 AND 3)".
+# Conditions are numbered from 1, in the order they are listed.
+#
+# Nothing outside this file checks any of it. Salesforce accepts an expression
+# that names a condition past the end of the list, an expression with unbalanced
+# brackets, and the literal string "banana" - all pass checkOnly and deploy.
+# That makes this the second free-form string in the IR, alongside a formula
+# expression, and the only one of the two that can be checked at all: the
+# numbers have to line up with conditions that exist.
+#
+# The risk runs the other way too. Editing a flow renumbers its conditions, so
+# an outcome that drops its second condition leaves "1 OR (2 AND 3)" pointing
+# one place past the end. That is the case this catches most often.
+
+_LOGIC_TOKEN = re.compile(r"\s*(\(|\)|\d+|[A-Za-z]+|\S)")
+
+
+def _tokenise_logic(expression: str) -> List[str]:
+    tokens, position = [], 0
+    while position < len(expression):
+        match = _LOGIC_TOKEN.match(expression, position)
+        if not match:
+            break
+        tokens.append(match.group(1))
+        position = match.end()
+    return tokens
+
+
+def referenced_conditions(expression: str) -> set:
+    """
+    The condition numbers a custom logic expression uses.
+
+    Raises ValueError describing what is wrong, in terms of the expression
+    rather than of the parser: the message is read by whoever wrote the flow.
+
+        expr   := term (OR term)*
+        term   := factor (AND factor)*
+        factor := NOT factor | '(' expr ')' | number
+    """
+    tokens = _tokenise_logic(expression)
+    if not tokens:
+        raise ValueError("it is empty")
+
+    used: set = set()
+    position = 0
+
+    def peek() -> Optional[str]:
+        return tokens[position] if position < len(tokens) else None
+
+    def take() -> str:
+        nonlocal position
+        token = tokens[position]
+        position += 1
+        return token
+
+    def factor() -> None:
+        token = peek()
+        if token is None:
+            raise ValueError("it stops where a condition number was expected")
+        if token.upper() == "NOT":
+            take()
+            factor()
+            return
+        if token == "(":
+            take()
+            expr()
+            if peek() != ")":
+                raise ValueError("a '(' is never closed")
+            take()
+            return
+        if token.isdigit():
+            take()
+            used.add(int(token))
+            return
+        raise ValueError(
+            f"{token!r} is not a condition number, AND, OR, NOT or a bracket"
+        )
+
+    def term() -> None:
+        factor()
+        while peek() is not None and peek().upper() == "AND":
+            take()
+            factor()
+
+    def expr() -> None:
+        term()
+        while peek() is not None and peek().upper() == "OR":
+            take()
+            term()
+
+    expr()
+    if position < len(tokens):
+        leftover = tokens[position]
+        if leftover == ")":
+            raise ValueError("there is a ')' with no '(' to match it")
+        raise ValueError(
+            f"{leftover!r} is left over at the end - two conditions need an "
+            "AND or an OR between them"
+        )
+    return used
+
+
+_FILTER_LOGIC_HELP = (
+    "'and' when every filter must match, 'or' when any one will do, or an "
+    "expression over the filter numbers such as '1 OR (2 AND 3)'. Filters are "
+    "numbered from 1, in order."
+)
+
+
+def _check_logic(logic: str, count: int, where: str, field: str, item: str) -> None:
+    """
+    Validate one logic string against the conditions it combines.
+
+    A condition the expression never mentions is left alone. It is evaluated and
+    ignored, which is odd but not broken, and refusing it would be guessing at
+    intent rather than following a rule. The approval document points it out
+    instead, so a person decides.
+    """
+    if logic.lower() in ("and", "or"):
+        return
+    try:
+        used = referenced_conditions(logic)
+    except ValueError as problem:
+        raise ValueError(
+            f"{where}: {field} {logic!r} cannot be read - {problem}. Use 'and', "
+            f"'or', or an expression over the {item} numbers such as "
+            "'1 OR (2 AND 3)'."
+        ) from None
+
+    out_of_range = sorted(n for n in used if n < 1 or n > count)
+    if out_of_range:
+        listed = ", ".join(str(n) for n in out_of_range)
+        raise ValueError(
+            f"{where}: {field} {logic!r} refers to {item} {listed}, but there "
+            f"{'is' if count == 1 else 'are'} only {count}. {item.capitalize()}s "
+            "are numbered from 1 in the order they are listed. Salesforce "
+            "deploys this without complaint and then evaluates it wrongly, so "
+            "the numbers have to be right here."
+        )
+
+
 class Value(BaseModel):
     """
     A typed right-hand side. Exactly one field must be set.
@@ -183,13 +329,26 @@ class Outcome(BaseModel):
     name: str
     label: str
     conditions: List[Condition] = Field(min_length=1)
-    condition_logic: Literal["and", "or"] = "and"
+    condition_logic: str = Field(
+        default="and",
+        description="'and' when every condition must hold, 'or' when any one "
+        "will do, or an expression over the condition numbers such as "
+        "'1 OR (2 AND 3)'. Conditions are numbered from 1, in order.",
+    )
     next: Optional[str] = None
 
     @field_validator("name")
     @classmethod
     def valid_name(cls, v: str) -> str:
         return _check_api_name(v, "outcome name")
+
+    @model_validator(mode="after")
+    def logic_matches_conditions(self) -> "Outcome":
+        _check_logic(
+            self.condition_logic, len(self.conditions),
+            f"outcome {self.name!r}", "condition_logic", "condition",
+        )
+        return self
 
 
 class Decision(BaseElement):
@@ -227,7 +386,7 @@ class GetRecords(FaultCapable):
     type: Literal["GetRecords"] = "GetRecords"
     object: str
     filters: List[RecordFilter] = Field(default_factory=list)
-    filter_logic: Literal["and", "or"] = "and"
+    filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
     # None means the flow never said. Older flows omit it and take their answer
     # from the variable they store into, so writing a value back would decide
     # something the flow left open - and "true" would turn a query over many
@@ -246,6 +405,11 @@ class GetRecords(FaultCapable):
     # storage rather than replacing it.
     queried_fields: List[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def logic_matches_filters(self) -> "GetRecords":
+        _check_logic(self.filter_logic, len(self.filters),
+                     self.name, "filter_logic", "filter")
+        return self
 
     @model_validator(mode="after")
     def one_way_to_store_the_records(self) -> "GetRecords":
@@ -343,8 +507,14 @@ class RecordUpdate(FaultCapable):
     input_reference: Optional[str] = None
     object: Optional[str] = None
     filters: List[RecordFilter] = Field(default_factory=list)
-    filter_logic: Literal["and", "or"] = "and"
+    filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
     fields: List[FieldValue] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def logic_matches_filters(self) -> "RecordUpdate":
+        _check_logic(self.filter_logic, len(self.filters),
+                     self.name, "filter_logic", "filter")
+        return self
 
     @model_validator(mode="after")
     def needs_target(self) -> "RecordUpdate":
@@ -507,7 +677,7 @@ class DynamicChoiceSet(BaseModel):
         default=None, description="Record field stored, e.g. 'Id'."
     )
     filters: List["RecordFilter"] = Field(default_factory=list)
-    filter_logic: Literal["and", "or"] = "and"
+    filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
     sort_field: Optional[str] = None
     sort_order: Optional[Literal["Asc", "Desc"]] = None
     limit: Optional[int] = None
@@ -520,6 +690,12 @@ class DynamicChoiceSet(BaseModel):
     @classmethod
     def valid_name(cls, v: str) -> str:
         return _check_api_name(v, "choice set name")
+
+    @model_validator(mode="after")
+    def logic_matches_filters(self) -> "DynamicChoiceSet":
+        _check_logic(self.filter_logic, len(self.filters),
+                     f"choice set {self.name!r}", "filter_logic", "filter")
+        return self
 
     @model_validator(mode="after")
     def one_mode_or_the_other(self) -> "DynamicChoiceSet":
@@ -930,10 +1106,16 @@ class Start(BaseModel):
         Literal["RecordAfterSave", "RecordBeforeSave", "RecordBeforeDelete", "Scheduled"]
     ] = None
     filters: List[RecordFilter] = Field(default_factory=list)
-    filter_logic: Literal["and", "or"] = "and"
+    filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
     # "Only when a record is updated to meet the condition requirements".
     # Changes when the flow runs, so it cannot be dropped silently.
     only_when_changed_to_meet_criteria: bool = False
+
+    @model_validator(mode="after")
+    def logic_matches_filters(self) -> "Start":
+        _check_logic(self.filter_logic, len(self.filters),
+                     "the flow's entry conditions", "filter_logic", "filter")
+        return self
 
     @model_validator(mode="after")
     def trigger_consistency(self) -> "Start":

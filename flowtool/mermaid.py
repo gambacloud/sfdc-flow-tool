@@ -27,6 +27,7 @@ from .ir import (
     Screen,
     Subflow,
     Value,
+    referenced_conditions,
 )
 
 # Human-readable forms for the operators. Falls back to the raw name so a new
@@ -127,8 +128,33 @@ def filter_text(record_filter: RecordFilter) -> str:
 
 
 def _join(parts: Iterable[str], logic: str) -> str:
-    joined = f" {logic.upper()} ".join(parts)
-    return joined
+    """
+    Combine conditions the way the flow does.
+
+    With `and` or `or` that is one word between them. With a custom expression
+    it cannot be: "1 OR (2 AND 3)" is a shape, not a separator, and pasting it
+    between the conditions would read as though every one of them were joined
+    that way. So the expression is shown as itself and the conditions are
+    numbered underneath it, which is also how Flow Builder presents them.
+    """
+    parts = list(parts)
+    if logic.lower() in ("and", "or"):
+        return f" {logic.upper()} ".join(parts)
+
+    numbered = ", ".join(f"({i}) {part}" for i, part in enumerate(parts, 1))
+    detail = f"{logic}, where {numbered}"
+
+    # A condition the expression never names is evaluated and then ignored.
+    # Valid, and accepted everywhere, so the IR allows it - which leaves saying
+    # so here as the only way anyone finds out.
+    try:
+        unused = sorted(set(range(1, len(parts) + 1)) - referenced_conditions(logic))
+    except ValueError:
+        unused = []
+    if unused:
+        listed = ", ".join(str(n) for n in unused)
+        detail += f" (nothing in the expression uses {listed})"
+    return detail
 
 
 # --------------------------------------------------------------------------

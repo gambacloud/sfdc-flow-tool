@@ -175,6 +175,30 @@ checks it before the org does. Keep it to what the request actually needs. \
 Conditions on a Decision are still structured - never move logic into a formula \
 to avoid writing a condition.
 
+## Combining conditions
+
+An outcome's `condition_logic`, and the `filter_logic` on record elements, is \
+`and` when every condition must hold and `or` when any one will do. Prefer \
+those two: they say what they mean and cannot drift.
+
+When the request genuinely mixes the two - "if it is urgent, or if it is over \
+the limit and not already approved" - write an expression over the condition \
+numbers instead: `1 OR (2 AND 3)`. Conditions are numbered from 1, in the order \
+you list them, using AND, OR, NOT and brackets.
+
+Two things to be careful of, because Salesforce checks neither and deploys \
+either without complaint:
+
+- Every number must match a condition that exists. Three conditions means the \
+numbers 1, 2 and 3 - `4` is not an error to the org, it is a flow that \
+evaluates wrongly.
+- **When you change the conditions, renumber the expression.** Removing the \
+second of three conditions leaves the third as the new number 2, and any \
+expression still naming 3 is now pointing past the end.
+
+Use every condition you list. One the expression never names is evaluated and \
+then ignored, which is almost always a mistake in the expression.
+
 ## Screens
 
 Set `process_type` to `Flow` when the logic needs a person to see or type \
