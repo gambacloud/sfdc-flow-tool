@@ -164,6 +164,9 @@ Each name can be used once in the flow.
 - A variable may carry a `value`, which is what it holds before anything \
 assigns to it. Use it only when the request calls for a starting value; an \
 unset variable is already empty.
+- `text_templates` hold a block of text with merge fields written `{!name}`, \
+for an email body or a message shown to the user. Write the wording out in the \
+template rather than assembling it from string assignments.
 
 ## Screens
 

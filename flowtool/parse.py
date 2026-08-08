@@ -39,6 +39,7 @@ from .ir import (
     ScreenField,
     Start,
     Subflow,
+    TextTemplate,
     Value,
     Variable,
 )
@@ -112,7 +113,7 @@ _SUPPORTED_ELEMENTS = {
 
 # Resources rather than elements: nothing connects to them, screen fields name
 # them. Read alongside the elements, checked with their own allowlists below.
-_SUPPORTED_RESOURCES = {"choices", "dynamicChoiceSets"}
+_SUPPORTED_RESOURCES = {"choices", "dynamicChoiceSets", "textTemplates"}
 
 # Recognised Flow constructs the IR has no equivalent for. Named individually so
 # the message tells the user what is actually in their flow.
@@ -128,7 +129,6 @@ _KNOWN_UNSUPPORTED = {
     "customErrors": "custom error elements",
     "formulas": "formula resources",
     "constants": "constant resources",
-    "textTemplates": "text templates",
     "scheduledPaths": "scheduled paths",
     "exitRules": "exit rules",
     "filters": "top-level filters",
@@ -200,6 +200,9 @@ _SUPPORTED_SCREEN_FIELD_TYPES = {
 }
 
 _CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataValues"}
+
+_TEXT_TEMPLATE_CHILDREN = {"name", "text", "isViewedAsPlainText", "description",
+                          "processMetadataValues"}
 
 _CHOICE_SET_CHILDREN = {
     "name", "dataType", "displayField", "valueField", "object", "filters",
@@ -613,6 +616,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     for tag, allowed in (
         ("choices", _CHOICE_CHILDREN),
         ("dynamicChoiceSets", _CHOICE_SET_CHILDREN),
+        ("textTemplates", _TEXT_TEMPLATE_CHILDREN),
     ):
         for node in root.findall(f"m:{tag}", NS):
             reasons.extend(
@@ -717,6 +721,23 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     if reasons:
         raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
 
+    templates = []
+    for node in root.findall("m:textTemplates", NS):
+        try:
+            templates.append(TextTemplate(
+                name=_text(node, "m:name") or "",
+                text=_text(node, "m:text") or "",
+                is_viewed_as_plain_text=_bool(node, "m:isViewedAsPlainText"),
+                description=_text(node, "m:description"),
+            ))
+        except ValueError as exc:
+            reasons.append(
+                Gap("ir_mismatch", f"text template does not fit the model: {exc}")
+            )
+
+    if reasons:
+        raise UnsupportedFlow(reasons, api_name or _text(root, "m:label") or "")
+
     label = _text(root, "m:label") or api_name or "Untitled"
     try:
         return Flow(
@@ -731,6 +752,7 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             variables=variables,
             choices=choices,
             dynamic_choice_sets=choice_sets,
+            text_templates=templates,
         )
     except ValueError as exc:
         # The flow deployed, so this means the IR is stricter than Salesforce.

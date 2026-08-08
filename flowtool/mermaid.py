@@ -418,6 +418,17 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
         lines.append(f"| `{element.name}` | {type_label} | {detail} | {next_label} |")
     lines.append("")
 
+    # A template's body is what gets emailed or shown. Summarising it would mean
+    # approving one thing and sending another, so it is quoted in full.
+    if flow.text_templates:
+        lines += ["## Text templates", ""]
+        for template in flow.text_templates:
+            kind = "plain text" if template.is_viewed_as_plain_text else "rich text"
+            lines.append(f"**`{template.name}`** ({kind})")
+            if template.description:
+                lines.append(f"_{template.description}_")
+            lines += ["", "```", template.text, "```", ""]
+
     # A picker whose options are not listed is a picker approved unseen.
     if flow.choices or flow.dynamic_choice_sets:
         lines += ["## Options", "", "| Name | Kind | What it offers |", "|---|---|---|"]

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
-from xml.dom import minidom
 
 from .ir import (
     ActionCall,
@@ -28,6 +27,7 @@ from .ir import (
     RecordUpdate,
     Screen,
     Subflow,
+    TextTemplate,
     Value,
 )
 
@@ -444,6 +444,15 @@ def generate(flow: Flow) -> str:
 
     _sub(root, "status", flow.status)
 
+    for template in flow.text_templates:
+        node = _sub(root, "textTemplates")
+        if template.description:
+            _sub(node, "description", template.description)
+        _sub(node, "name", template.name)
+        if template.is_viewed_as_plain_text:
+            _sub(node, "isViewedAsPlainText", "true")
+        _sub(node, "text", template.text)
+
     for var in flow.variables:
         # The order Salesforce itself emits: the inherited description and name
         # first, then the variable's own fields alphabetically.
@@ -462,8 +471,11 @@ def generate(flow: Flow) -> str:
         if var.value is not None:
             _value_el(node, "value", var.value)
 
-    raw = ET.tostring(root, encoding="unicode")
-    pretty = minidom.parseString(raw).toprettyxml(indent="    ")
-    # minidom emits its own declaration with double quotes; normalise to SF style.
-    body = "\n".join(line for line in pretty.split("\n")[1:] if line.strip())
+    # ET.indent rather than minidom.toprettyxml. minidom puts a blank line
+    # between elements, which had to be filtered out again - and that filter
+    # dropped every blank line, including the ones inside a text template or a
+    # screen's display text. A paragraph break is content, not formatting.
+    # ET.indent leaves any element that has text alone.
+    ET.indent(root, space="    ")
+    body = ET.tostring(root, encoding="unicode")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + body + "\n"

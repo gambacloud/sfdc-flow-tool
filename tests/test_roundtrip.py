@@ -26,6 +26,7 @@ from flowtool.ir import (
     RecordUpdate,
     Start,
     Subflow,
+    TextTemplate,
     Value,
     Variable,
 )
@@ -813,3 +814,83 @@ class TestFirstRecordOnlyIsNotInvented:
         """Only a flow that never said stays silent; ours always say."""
         xml = generate(_flow(GetRecords(name="Get", label="Get", object="Account")))
         assert "<getFirstRecordOnly>true</getFirstRecordOnly>" in xml
+
+
+class TestTextTemplates:
+    """
+    A block of text with merge fields, referenced by name. Sole remaining
+    blocker on one public sample-app flow.
+    """
+
+    BODY = "Hello {!Name},\n\nYour order shipped.\n\nThanks,\nSupport"
+
+    def _flow_with(self, *templates) -> Flow:
+        return _flow(
+            GetRecords(name="Get", label="Get", object="Account"),
+            text_templates=list(templates),
+        )
+
+    def test_a_template(self):
+        assert_survives(self._flow_with(TextTemplate(name="Note", text=self.BODY)))
+
+    def test_plain_text_and_a_description(self):
+        assert_survives(self._flow_with(TextTemplate(
+            name="Note", text="Issued ${!amount} to {!count} customers.",
+            is_viewed_as_plain_text=True, description="What happened.",
+        )))
+
+    def test_several(self):
+        assert_survives(self._flow_with(
+            TextTemplate(name="Found", text="Found {!n}."),
+            TextTemplate(name="Missing", text="Nothing matched."),
+        ))
+
+    def test_it_shares_the_one_namespace(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="share one namespace"):
+            _flow(
+                GetRecords(name="Get", label="Get", object="Account"),
+                text_templates=[TextTemplate(name="Get", text="x")],
+            )
+
+
+class TestBlankLinesAreContent:
+    """
+    The generator pretty-printed with minidom, which puts a blank line between
+    elements, and then filtered every blank line back out. That filter could not
+    tell a blank line between two tags from a paragraph break inside one - so an
+    email template lost its paragraphs, and would have deployed that way.
+
+    Text templates are what surfaced it, but two carriers were already exposed.
+    """
+
+    BODY = "First paragraph.\n\nSecond paragraph.\n\nThird."
+
+    def test_in_a_text_template(self):
+        flow = _flow(
+            GetRecords(name="Get", label="Get", object="Account"),
+            text_templates=[TextTemplate(name="Note", text=self.BODY)],
+        )
+        assert roundtrip(flow).text_templates[0].text == self.BODY
+
+    def test_in_a_screens_display_text(self):
+        from flowtool.ir import Screen, ScreenField
+
+        flow = Flow(
+            api_name="S", label="S", process_type="Flow", start=Start(next="Ask"),
+            elements=[Screen(name="Ask", label="Ask", fields=[
+                ScreenField(name="Intro", field_type="DisplayText",
+                            field_text=self.BODY)])],
+        )
+        assert roundtrip(flow).elements[0].fields[0].field_text == self.BODY
+
+    def test_in_an_elements_description(self):
+        flow = _flow(GetRecords(name="Get", label="Get", object="Account",
+                                description=self.BODY))
+        assert roundtrip(flow).elements[0].description == self.BODY
+
+    def test_the_xml_is_still_indented_and_has_no_stray_blank_lines(self):
+        xml = generate(_flow(GetRecords(name="Get", label="Get", object="Account")))
+        assert "\n    <recordLookups>" in xml, "still pretty-printed"
+        assert "\n\n" not in xml, "no blank lines where there is no content"

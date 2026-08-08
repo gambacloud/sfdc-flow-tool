@@ -565,6 +565,27 @@ class DynamicChoiceSet(BaseModel):
         return self
 
 
+class TextTemplate(BaseModel):
+    """
+    A block of text with merge fields, written once and referenced by name.
+
+    Its content is not documentation - it is what gets emailed or shown - so it
+    belongs in the flow proper and on the screen where the flow is approved.
+    """
+
+    name: str
+    text: str = Field(
+        description="The body. Merge fields look like {!variable_name}."
+    )
+    is_viewed_as_plain_text: bool = False
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "text template name")
+
+
 class ScreenField(BaseModel):
     """
     One thing on a screen: a paragraph of text, a box the user types into, or a
@@ -727,6 +748,7 @@ class Flow(BaseModel):
     # Resources, not elements: nothing connects to them, screen fields name them.
     choices: List[Choice] = Field(default_factory=list)
     dynamic_choice_sets: List[DynamicChoiceSet] = Field(default_factory=list)
+    text_templates: List[TextTemplate] = Field(default_factory=list)
 
     @field_validator("api_name")
     @classmethod
@@ -962,6 +984,8 @@ class Flow(BaseModel):
             claim(choice.name, "a choice")
         for choice_set in self.dynamic_choice_sets:
             claim(choice_set.name, "a choice set")
+        for template in self.text_templates:
+            claim(template.name, "a text template")
 
         clashes = {
             name: kinds for name, kinds in owners.items() if len(kinds) > 1

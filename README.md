@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-379 tests, none of which need a key, a network, or an org.
+387 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -195,6 +195,7 @@ Record-triggered, autolaunched, and screen flows:
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 | **Screen** | Display text, input fields, long text areas, and pickers |
 | **Choices** | Fixed options, or options built from records or a picklist |
+| **Text templates** | Reusable text with merge fields, for an email body or a message |
 
 Formula **fields** on an object work anywhere a reference does (`$Record.Margin__c`).
 Formula **resources** defined inside a flow do not.
