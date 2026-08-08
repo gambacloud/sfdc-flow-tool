@@ -60,10 +60,15 @@ class Survey:
         self.managed: set = set()
 
     def add(self, api_name: str, xml: str) -> None:
-        if is_managed(api_name):
+        # A key may be qualified by the repo it came from ("purealoe/Irrigation")
+        # so two checkouts cannot collide. The parser gets the bare name: a
+        # slash is not a valid Salesforce API name, and the flow's own identity
+        # is what it is regardless of which directory it was read from.
+        bare_name = api_name.rsplit("/", 1)[-1]
+        if is_managed(bare_name):
             self.managed.add(api_name)
         try:
-            flow = parse_flow(xml, api_name=api_name)
+            flow = parse_flow(xml, api_name=bare_name)
         except UnsupportedFlow as exc:
             self.refused[api_name] = exc.reasons
             # Count each code once per flow: a flow with three screens is one
@@ -252,11 +257,26 @@ def as_json(survey: Survey) -> dict:
 
 
 def from_directory(directory: Path) -> Dict[str, str]:
+    """
+    Every flow under a directory, keyed so that two repos cannot collide.
+
+    In an org the API name is unique, so it makes a fine key. Across pooled
+    checkouts it is not: purealoe and purealoe-lwc both ship an
+    `IrrigationManagement`, and they are not the same flow - one of them has a
+    detail the other does not. Keying by name meant whichever sorted last won,
+    the other vanished, and the totals moved with the directory layout.
+
+    So a flow in a subdirectory is qualified by it. A flat directory still gives
+    plain names, which is what a `--save` dump from an org looks like.
+    """
     flows = {}
     for path in sorted(directory.rglob("*.flow*")):
         if path.suffix not in (".flow", ".xml"):
             continue
         name = path.name.split(".")[0]
+        parent = path.parent.relative_to(directory)
+        if parent != Path("."):
+            name = f"{parent.as_posix()}/{name}"
         flows[name] = path.read_text(encoding="utf-8")
     return flows
 

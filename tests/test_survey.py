@@ -11,7 +11,7 @@ import pytest
 
 from flowtool.ir import FieldValue, Flow, GetRecords, RecordUpdate, Start, Value
 from flowtool.xmlgen import generate
-from survey import Survey, as_json, report
+from survey import Survey, as_json, from_directory, report
 
 HEAD = (
     '<?xml version="1.0" encoding="UTF-8"?>'
@@ -305,3 +305,53 @@ class TestOutOfScopeIsNeverRecommended:
         from flowtool.parse import OUT_OF_SCOPE
 
         assert "process_type:Workflow" in OUT_OF_SCOPE
+
+
+class TestReadingADirectory:
+    """
+    A corpus is several checkouts, and two sample apps ship a flow of the same
+    name without it being the same flow. Keying by API name - which is unique
+    inside an org, and is why it was the key - silently kept one of them, and
+    coverage read higher than it was. Five of ninety-one vanished that way.
+    """
+
+    def write(self, root, relative, xml_text):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(xml_text, encoding="utf-8")
+
+    def test_a_flat_directory_keys_by_plain_name(self, tmp_path):
+        """What a --save dump from an org looks like, so it must not change."""
+        self.write(tmp_path, "Good.flow-meta.xml", clean_flow_xml())
+        assert list(from_directory(tmp_path)) == ["Good"]
+
+    def test_same_name_in_two_repos_keeps_both(self, tmp_path):
+        self.write(tmp_path, "purealoe/Same.flow-meta.xml", clean_flow_xml())
+        self.write(tmp_path, "purealoe-lwc/Same.flow-meta.xml", clean_flow_xml())
+        found = from_directory(tmp_path)
+        assert sorted(found) == ["purealoe-lwc/Same", "purealoe/Same"]
+
+    def test_the_parser_still_gets_a_valid_api_name(self, tmp_path):
+        """
+        A slash is not a Salesforce API name. The qualified key labels the
+        report; the flow's own identity is the bare name.
+        """
+        self.write(tmp_path, "purealoe/Good.flow-meta.xml", clean_flow_xml())
+        survey = Survey()
+        for name, body in from_directory(tmp_path).items():
+            survey.add(name, body)
+        assert survey.parsed == ["purealoe/Good"]
+        assert survey.refused == {}
+
+    def test_a_repo_prefix_is_not_mistaken_for_a_namespace(self, tmp_path):
+        """
+        The first attempt named files "repo__Flow". A double underscore is how
+        Salesforce marks a managed package, so every flow was read as somebody
+        else's metadata and excluded from the recommendation - 91 flows, 0
+        counted. The directory carries the repo instead.
+        """
+        self.write(tmp_path, "purealoe/Good.flow-meta.xml", clean_flow_xml())
+        survey = Survey()
+        for name, body in from_directory(tmp_path).items():
+            survey.add(name, body)
+        assert survey.managed == set()

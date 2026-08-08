@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-484 tests, none of which need a key, a network, or an org.
+488 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -169,20 +169,25 @@ files so later runs can go offline with `--dir`, and `--json` writes the whole
 report for tracking coverage over time.
 
 **No org handy?** `--dir` reads any SFDX checkout, so public repos work as a
-corpus. Salesforce's own [sample apps](https://github.com/trailheadapps) carry
-real flows under `force-app/main/default/flows/`:
+corpus. `harvest.py` collects the flows out of them — Salesforce's own
+[sample apps](https://github.com/trailheadapps) are the obvious place to start:
 
 ```bash
-for r in purealoe-lwc coral-cloud dreamhouse-lwc easy-spaces-lwc lwc-recipes; do git clone -q --depth 1 "https://github.com/trailheadapps/$r.git"; done; mkdir -p flows; find . -name "*.flow-meta.xml" -exec cp {} flows/ \;
+.venv/Scripts/python.exe harvest.py trailheadapps
 ```
 
 ```bash
-.venv/Scripts/python.exe survey.py --dir flows -v
+.venv/Scripts/python.exe survey.py --dir corpus -v
 ```
 
-Fifteen flows from that corpus drove eight changes in a row, taking it from 0 to
-9. It showed that the top three blockers were not features at all but three
-unmodelled attributes of `variables`.
+That is 91 flows from 12 of the 29 repos in the org; the other 17 ship no flow
+metadata at all. It takes one GitHub API call per repo, unauthenticated, so 60
+repos an hour — over the limit it says so per repo and skips what it already
+has, so running it again an hour later picks up where it stopped.
+
+The corpus drove eight changes in a row, taking coverage from 0 to 65 flows. It
+showed that the top three blockers were not features at all but three unmodelled
+attributes of `variables`.
 
 It also showed the limit of the `frees` column. Screen components arrive as four
 blockers that always travel together, so each one scored `frees: 0` and the
@@ -191,10 +196,15 @@ plan. **Read `frees` alongside the cheapest-flows list underneath it**, which
 counts how many additions each refused flow needs and names them. Four blockers
 that appear on the same line of that list are one piece of work, not four.
 
-Two caveats. Pooling several checkouts into one directory is fine only while no
-two use the same flow name; a collision overwrites silently and undercounts. And
-sample apps are showcases, far heavier on LWC than a working org — so prefer a
-real org's numbers when you have them.
+One directory per repo, which `harvest.py` does and the survey relies on.
+Pooling them flat keeps only one of any two flows sharing a name, and
+`purealoe` and `purealoe-lwc` both ship an `IrrigationManagement` that is not
+the same flow. Five of these 91 vanished that way, and coverage read five points
+higher than it was.
+
+Sample apps are showcases — far heavier on screen components than a working org,
+and much lighter on record-triggered automation. Prefer a real org's numbers
+when you have them.
 
 The line to watch is **"parsed but did NOT survive a round trip"**. That means a
 flow looks editable and isn't: something would be lost on the way back out. It

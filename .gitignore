@@ -5,6 +5,9 @@ venv/
 .env
 *.flow-meta.xml
 out/
+# Other people's flow metadata, fetched by harvest.py. Reproducible from the
+# command in the README, so there is nothing to gain by vendoring it.
+corpus/
 dist/
 build/
 .pytest_cache/
