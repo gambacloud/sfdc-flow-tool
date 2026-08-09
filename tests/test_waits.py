@@ -284,8 +284,8 @@ class TestWhatTheUserSees:
     def test_every_exit_is_dotted_on_the_diagram(self):
         """Time passes on each of these edges. The flow is not running."""
         diagram = to_mermaid(flow(hold(alarm())))
-        assert "Hold -.->|When due| After" in diagram
-        assert "Hold -.->|Anything else| After" in diagram
+        assert 'Hold -.->|"When due"| After' in diagram
+        assert 'Hold -.->|"Anything else"| After' in diagram
 
     def test_an_unknown_event_type_still_says_something(self):
         markdown = to_markdown(

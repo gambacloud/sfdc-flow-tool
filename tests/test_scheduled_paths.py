@@ -229,7 +229,7 @@ class TestWhatTheUserSees:
 
     def test_the_diagram_shows_the_path_as_a_second_entry(self):
         diagram = to_mermaid(flow(after()))
-        assert "START -.->|3 days after the trigger| Later" in diagram
+        assert 'START -.->|"3 days after the trigger"| Later' in diagram
 
     def test_the_immediate_branch_is_still_a_solid_line(self):
         assert "START --> Mark" in to_mermaid(flow(after()))
