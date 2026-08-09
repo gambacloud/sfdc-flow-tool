@@ -324,6 +324,72 @@ def _write_choice_set(root: ET.Element, choice_set: DynamicChoiceSet) -> None:
         _sub(node, "valueField", choice_set.value_field)
 
 
+def _write_screen_field(parent: ET.Element, screen_field) -> None:
+    """
+    One field, and any fields nested inside it.
+
+    Recursive because a section holds columns and a column holds fields. Two
+    levels is all Salesforce allows, but writing it as a walk rather than two
+    hard-coded loops keeps the ordering rules in one place - a field inside a
+    column has to be written exactly like one outside it, or a section would
+    quietly lose the attributes the top level got right.
+    """
+    f = _sub(parent, "fields")
+    _sub(f, "name", screen_field.name)
+    for reference in screen_field.choice_references:
+        _sub(f, "choiceReferences", reference)
+    if screen_field.data_type:
+        _sub(f, "dataType", screen_field.data_type)
+    if screen_field.default_selected_choice:
+        _sub(f, "defaultSelectedChoiceReference",
+             screen_field.default_selected_choice)
+    if screen_field.default_value is not None:
+        _value_el(f, "defaultValue", screen_field.default_value)
+    if screen_field.extension_name:
+        _sub(f, "extensionName", screen_field.extension_name)
+    for nested in screen_field.fields:
+        _write_screen_field(f, nested)
+    if screen_field.field_text is not None:
+        _sub(f, "fieldText", screen_field.field_text)
+    _sub(f, "fieldType", screen_field.field_type)
+    if screen_field.help_text is not None:
+        _sub(f, "helpText", screen_field.help_text)
+    for parameter in screen_field.input_parameters:
+        ip = _sub(f, "inputParameters")
+        _sub(ip, "name", parameter.name)
+        _value_el(ip, "value", parameter.value)
+    if screen_field.inputs_on_revisit:
+        _sub(f, "inputsOnNextNavToAssocScrn", screen_field.inputs_on_revisit)
+    # DisplayText collects nothing, so isRequired would be meaningless on it -
+    # and Salesforce omits it there too.
+    if screen_field.field_type != "DisplayText":
+        _sub(f, "isRequired", _bool(screen_field.is_required))
+    for parameter in screen_field.output_parameters:
+        op = _sub(f, "outputParameters")
+        _sub(op, "assignToReference", parameter.assign_to_reference)
+        _sub(op, "name", parameter.name)
+    if screen_field.region_container_type:
+        _sub(f, "regionContainerType", screen_field.region_container_type)
+    if screen_field.scale is not None:
+        _sub(f, "scale", str(screen_field.scale))
+    if screen_field.store_output_automatically:
+        _sub(f, "storeOutputAutomatically", "true")
+    if screen_field.validation:
+        rule = _sub(f, "validationRule")
+        _sub(rule, "errorMessage", screen_field.validation.error_message)
+        _sub(rule, "formulaExpression",
+             screen_field.validation.formula_expression)
+    if screen_field.visibility:
+        rule = _sub(f, "visibilityRule")
+        _sub(rule, "conditionLogic", screen_field.visibility.condition_logic)
+        for condition in screen_field.visibility.conditions:
+            c = _sub(rule, "conditions")
+            _sub(c, "leftValueReference", condition.left)
+            _sub(c, "operator", condition.operator)
+            if condition.right is not None:
+                _value_el(c, "rightValue", condition.right)
+
+
 def _write_screen(root: ET.Element, el: Screen, xy) -> None:
     node = _sub(root, "screens")
     _write_common(node, el, xy)
@@ -332,40 +398,7 @@ def _write_screen(root: ET.Element, el: Screen, xy) -> None:
     _sub(node, "allowPause", _bool(el.allow_pause))
     _connector(node, "connector", el.next)
     for screen_field in el.fields:
-        f = _sub(node, "fields")
-        _sub(f, "name", screen_field.name)
-        for reference in screen_field.choice_references:
-            _sub(f, "choiceReferences", reference)
-        if screen_field.data_type:
-            _sub(f, "dataType", screen_field.data_type)
-        if screen_field.default_selected_choice:
-            _sub(f, "defaultSelectedChoiceReference",
-                 screen_field.default_selected_choice)
-        if screen_field.default_value is not None:
-            _value_el(f, "defaultValue", screen_field.default_value)
-        if screen_field.extension_name:
-            _sub(f, "extensionName", screen_field.extension_name)
-        if screen_field.field_text is not None:
-            _sub(f, "fieldText", screen_field.field_text)
-        _sub(f, "fieldType", screen_field.field_type)
-        for parameter in screen_field.input_parameters:
-            ip = _sub(f, "inputParameters")
-            _sub(ip, "name", parameter.name)
-            _value_el(ip, "value", parameter.value)
-        if screen_field.inputs_on_revisit:
-            _sub(f, "inputsOnNextNavToAssocScrn", screen_field.inputs_on_revisit)
-        # DisplayText collects nothing, so isRequired would be meaningless on it -
-        # and Salesforce omits it there too.
-        if screen_field.field_type != "DisplayText":
-            _sub(f, "isRequired", _bool(screen_field.is_required))
-        for parameter in screen_field.output_parameters:
-            op = _sub(f, "outputParameters")
-            _sub(op, "assignToReference", parameter.assign_to_reference)
-            _sub(op, "name", parameter.name)
-        if screen_field.scale is not None:
-            _sub(f, "scale", str(screen_field.scale))
-        if screen_field.store_output_automatically:
-            _sub(f, "storeOutputAutomatically", "true")
+        _write_screen_field(node, screen_field)
     _sub(node, "showFooter", _bool(el.show_footer))
     _sub(node, "showHeader", _bool(el.show_header))
 

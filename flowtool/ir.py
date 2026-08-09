@@ -627,7 +627,15 @@ ScreenFieldType = Literal[
     "MultiSelectCheckboxes",
     "MultiSelectPicklist",
     "ComponentInstance",
+    # Layout rather than content. A RegionContainer is a section and holds
+    # Regions; a Region is a column and holds ordinary fields. Exactly two
+    # levels: the org refuses a container inside a region by name.
+    "RegionContainer",
+    "Region",
 ]
+
+# The two layout types, which hold other fields instead of holding a value.
+LAYOUT_FIELD_TYPES = frozenset({"RegionContainer", "Region"})
 
 # Screen inputs hold a value, and the value has a type. DisplayText shows text
 # and holds nothing, which is why data_type is optional and checked below.
@@ -652,7 +660,12 @@ _NO_VALUE_FIELD_TYPES = frozenset({"DisplayText", "LargeTextArea"})
 # so the field needs no data_type - but the org accepts one, and refusing what
 # the org accepts would turn a deployable flow into an unopenable one. So it is
 # optional here: not required, not forbidden.
-_OPTIONAL_DATA_TYPE_FIELD_TYPES = frozenset({"ComponentInstance"})
+# Neither required nor forbidden. A component declares its own types; a
+# section or a column holds no value at all, and the org takes a dataType on
+# any of the three without complaint.
+_OPTIONAL_DATA_TYPE_FIELD_TYPES = frozenset(
+    {"ComponentInstance", "RegionContainer", "Region"}
+)
 
 
 class Choice(BaseModel):
@@ -844,6 +857,45 @@ class TextTemplate(BaseModel):
         return _check_api_name(v, "text template name")
 
 
+class VisibilityRule(BaseModel):
+    """
+    When a field is shown at all.
+
+    The conditions read other fields on the same screen, which is the one place
+    a screen field is used as an input to something else. Nothing checks the
+    references: the org validated a rule reading `No_Such_Field` without a
+    word, and the field then simply never appears. So Flow checks them.
+    """
+
+    conditions: List[Condition] = Field(min_length=1)
+    condition_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+
+    @model_validator(mode="after")
+    def logic_matches_conditions(self) -> "VisibilityRule":
+        _check_logic(self.condition_logic, len(self.conditions),
+                     "a visibility rule", "condition_logic", "condition")
+        return self
+
+
+class ValidationRule(BaseModel):
+    """
+    A formula the entered value must satisfy, and what to say when it does not.
+
+    `error_message` is required by the org - "Required field is missing:
+    errorMessage" - and rightly: a validation that fails silently is worse than
+    none. The formula is the same free-form string as everywhere else, and the
+    org accepted `BANANA(` without complaint, so a person reading it is the
+    only check there is.
+    """
+
+    error_message: str = Field(
+        description="Shown to the user when the value does not pass."
+    )
+    formula_expression: str = Field(
+        description="A formula that must be true, e.g. '{!Quantity} > 0'."
+    )
+
+
 class ComponentOutput(BaseModel):
     """
     One value a screen component hands back, and the variable it lands in.
@@ -941,6 +993,31 @@ class ScreenField(BaseModel):
         "recompute the inputs.",
     )
 
+    # ---- Anything ---------------------------------------------------------
+    help_text: Optional[str] = Field(
+        default=None, description="Shown behind the little help icon."
+    )
+    visibility: Optional[VisibilityRule] = Field(
+        default=None,
+        description="Show this field only when these conditions hold.",
+    )
+    validation: Optional[ValidationRule] = None
+
+    # ---- RegionContainer and Region only ----------------------------------
+    # A section holds columns and a column holds fields. Nothing else nests.
+    fields: List["ScreenField"] = Field(
+        default_factory=list,
+        description="For a RegionContainer, its Regions. For a Region, the "
+        "fields in that column. Empty for anything else.",
+    )
+    region_container_type: Optional[
+        Literal["SectionWithoutHeader", "SectionWithHeader"]
+    ] = Field(
+        default=None,
+        description="Whether the section shows a heading. With a heading, "
+        "field_text is the heading.",
+    )
+
     @field_validator("name")
     @classmethod
     def valid_name(cls, v: str) -> str:
@@ -966,9 +1043,68 @@ class ScreenField(BaseModel):
         return v
 
     @model_validator(mode="after")
+    def layout_nests_exactly_two_deep(self) -> "ScreenField":
+        """
+        Section holds column holds field, and no further. The org states the
+        limit itself: "A RegionContainer screen field can't be a child of a
+        Region screen field."
+        """
+        if self.field_type == "RegionContainer":
+            if not self.region_container_type:
+                raise ValueError(
+                    f"screen field {self.name!r}: a section needs a "
+                    "region_container_type - 'SectionWithoutHeader', or "
+                    "'SectionWithHeader' with field_text as the heading."
+                )
+            if self.region_container_type == "SectionWithHeader" and not self.field_text:
+                raise ValueError(
+                    f"screen field {self.name!r}: \"you must specify a value for "
+                    "the fieldText field\" - a section with a header needs the "
+                    "heading to show."
+                )
+            wrong = [f.name for f in self.fields if f.field_type != "Region"]
+            if wrong:
+                raise ValueError(
+                    f"screen field {self.name!r}: a section holds columns, so "
+                    f"every entry in fields must be a Region. {wrong} are not. "
+                    "Put the fields inside a Region."
+                )
+        elif self.field_type == "Region":
+            wrong = [f.name for f in self.fields
+                     if f.field_type in LAYOUT_FIELD_TYPES]
+            if wrong:
+                raise ValueError(
+                    f"screen field {self.name!r}: \"A RegionContainer screen "
+                    "field can't be a child of a Region screen field.\" "
+                    f"{wrong} cannot go inside a column. Sections do not nest."
+                )
+            widths = [p for p in self.input_parameters if p.name == "width"]
+            if not widths:
+                raise ValueError(
+                    f"screen field {self.name!r}: \"The {self.name!r} Region "
+                    "screen field requires a width input parameter.\" Add an "
+                    "input_parameter named 'width' holding a string from '1' to "
+                    "'12' - the columns in one section should add up to 12."
+                )
+        elif self.fields:
+            raise ValueError(
+                f"screen field {self.name!r}: a {self.field_type} holds a value, "
+                "not other fields. Use a RegionContainer to make a section."
+            )
+        return self
+
+    @model_validator(mode="after")
     def shape_matches_type(self) -> "ScreenField":
         takes_choices = self.field_type in CHOICE_FIELD_TYPES
         is_component = self.field_type == "ComponentInstance"
+        is_layout = self.field_type in LAYOUT_FIELD_TYPES
+
+        if self.validation and self.field_type == "DisplayText":
+            raise ValueError(
+                f"screen field {self.name!r}: \"The screen field of type "
+                "DisplayText doesn\'t support validation rules.\" It collects "
+                "nothing, so there is nothing to validate."
+            )
 
         if is_component and not self.extension_name:
             raise ValueError(
@@ -976,16 +1112,19 @@ class ScreenField(BaseModel):
                 "for a component, so it needs extension_name to say which one."
             )
         if not is_component:
+            # A Region is the one exception, and it is not really one: its width
+            # is carried as an input parameter named "width", which is how
+            # Salesforce spells it. The tag is shared; the meaning is not.
+            component_only = (
+                ("extension_name", self.extension_name),
+                ("output_parameters", self.output_parameters),
+                ("store_output_automatically", self.store_output_automatically),
+                ("inputs_on_revisit", self.inputs_on_revisit),
+            )
+            if self.field_type != "Region":
+                component_only += (("input_parameters", self.input_parameters),)
             stray = [
-                attribute
-                for attribute, present in (
-                    ("extension_name", self.extension_name),
-                    ("input_parameters", self.input_parameters),
-                    ("output_parameters", self.output_parameters),
-                    ("store_output_automatically", self.store_output_automatically),
-                    ("inputs_on_revisit", self.inputs_on_revisit),
-                )
-                if present
+                attribute for attribute, present in component_only if present
             ]
             if stray:
                 raise ValueError(
@@ -1041,7 +1180,9 @@ class ScreenField(BaseModel):
         #
         # Everything else must say what it shows. Every non-component field in
         # every flow examined carries one, so a missing label is a mistake.
-        if not is_component and not self.field_text:
+        # A column has no label of its own, and a section only has one when
+        # it shows a header - which is checked above, where the org states it.
+        if not is_component and not is_layout and not self.field_text:
             raise ValueError(
                 f"screen field {self.name!r}: a {self.field_type} needs field_text "
                 + ("to say what it shows."
@@ -1081,6 +1222,29 @@ class Screen(BaseElement):
 
     type: Literal["Screen"] = "Screen"
     fields: List[ScreenField] = Field(default_factory=list)
+
+    def all_fields(self) -> List[ScreenField]:
+        """
+        Every field on the screen, including the ones inside sections and
+        columns.
+
+        Sections arrived after the flow-level checks were written, and each of
+        those walked `fields` one level deep. A field inside a column would have
+        escaped all of them: its name would not have been checked for
+        collisions, its choices would not have been resolved, and its component
+        outputs would not have been checked for a variable to land in - all of
+        them silently, on the fields most likely to be in a real screen.
+        """
+        found: List[ScreenField] = []
+
+        def walk(fields: List[ScreenField]) -> None:
+            for screen_field in fields:
+                found.append(screen_field)
+                if screen_field.fields:
+                    walk(screen_field.fields)
+
+        walk(self.fields)
+        return found
     # Runtime chrome. Modelled rather than assumed, because these are what the
     # user sees and dropping them would turn Back and Pause back on for an admin
     # who deliberately turned them off.
@@ -1725,7 +1889,7 @@ class Flow(BaseModel):
         for element in self.elements:
             if not isinstance(element, Screen):
                 continue
-            for screen_field in element.fields:
+            for screen_field in element.all_fields():
                 for reference in screen_field.choice_references:
                     if reference not in defined:
                         problems.append(
@@ -1750,6 +1914,59 @@ class Flow(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def visibility_rules_read_something_real(self) -> "Flow":
+        """
+        A field shown conditionally reads other resources by name, and nothing
+        else checks those names.
+
+        The org validated a rule reading `No_Such_Field` without a word. The
+        flow deploys, the condition can never be true, and the field simply
+        never appears - which looks exactly like a field somebody decided not
+        to show. The same silence as a dangling choice reference, and worse to
+        diagnose, because there is nothing on the screen to notice is missing.
+
+        The root before the first dot is what has to exist, so `$Record.Amount`
+        needs `$Record` and a screen field's own name needs the field.
+        """
+        known = {"$Record", "$Record__Prior", "$User", "$Flow", "$Organisation",
+                 "$Organization", "$Setup", "$Permission", "$Profile",
+                 "$Api", "$System", "$Label"}
+        known |= {v.name for v in self.variables}
+        known |= {c.name for c in self.choices}
+        known |= {c.name for c in self.dynamic_choice_sets}
+        known |= {c.name for c in self.constants}
+        known |= {f.name for f in self.formulas}
+        known |= {t.name for t in self.text_templates}
+        known |= {e.name for e in self.elements}
+        for element in self.elements:
+            if isinstance(element, Screen):
+                known |= {f.name for f in element.all_fields()}
+
+        problems: List[str] = []
+        for element in self.elements:
+            if not isinstance(element, Screen):
+                continue
+            for screen_field in element.all_fields():
+                if not screen_field.visibility:
+                    continue
+                for condition in screen_field.visibility.conditions:
+                    root = condition.left.split(".")[0]
+                    if root and root not in known:
+                        problems.append(
+                            f"{element.name}.{screen_field.name} is shown when "
+                            f"{condition.left!r} matches"
+                        )
+        if problems:
+            raise ValueError(
+                "these visibility rules read something the flow does not "
+                "define: " + "; ".join(problems)
+                + ". Salesforce deploys this without complaint and the field "
+                "then never appears, which is indistinguishable from one you "
+                "meant to hide."
+            )
+        return self
+
+    @model_validator(mode="after")
     def component_outputs_land_somewhere(self) -> "Flow":
         """
         Every component output must name a variable that exists.
@@ -1769,7 +1986,7 @@ class Flow(BaseModel):
         for element in self.elements:
             if not isinstance(element, Screen):
                 continue
-            for screen_field in element.fields:
+            for screen_field in element.all_fields():
                 for parameter in screen_field.output_parameters:
                     root = parameter.assign_to_reference.split(".")[0]
                     if root not in variables:
@@ -1806,7 +2023,7 @@ class Flow(BaseModel):
         for element in self.elements:
             claim(element.name, "an element")
             if isinstance(element, Screen):
-                for screen_field in element.fields:
+                for screen_field in element.all_fields():
                     claim(screen_field.name, f"a field on screen {element.name}")
         for variable in self.variables:
             claim(variable.name, "a variable")

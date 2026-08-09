@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-697 tests, none of which need a key, a network, or an org.
+746 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -286,6 +286,7 @@ Record-triggered, autolaunched, and screen flows:
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 | **Screen** | Display text, input fields, long text areas, and pickers, with defaults |
+| **Screen layout** | Sections and columns, conditional visibility, validation rules, help text |
 | **Choices** | Fixed options, or options built from records or a picklist |
 | **Screen components** | LWC and Aura components, with their inputs and outputs |
 | **Text templates** | Reusable text with merge fields, for an email body or a message |
@@ -351,21 +352,28 @@ count is the evidence for the decision — but marks them `(out of scope)` and
 never recommends them. Before that, the headline recommended building them
 every single run.
 
-**Screen flows** are built through all three planned stages:
+**Screen flows** are complete as far as the planned stages went: text and
+inputs, choices, LWC and Aura components, and then sections, columns,
+conditional visibility, validation rules and help text.
 
-1. ✅ `processType: Flow`, plus screens carrying display text, input fields, and
-   long text areas. Covers most of what a simple screen flow does.
-2. ✅ Choices and dynamic choice sets — radio buttons, dropdowns, checkboxes and
-   multi-selects, with options written out or built from records or a picklist.
-3. ✅ LWC and Aura components on a screen, with the values passed in and the
-   values handed back.
+Sections are the one place the shape of the IR changed rather than grew. A
+section holds columns and a column holds fields, so a screen field became a
+tree — and every flow-level check written before that walked the field list
+exactly one level deep. A field inside a column would have had its name
+unchecked for collisions, its choices unresolved and its component outputs
+unchecked for anywhere to land, all silently. `Screen.all_fields()` exists so
+that nothing has to remember the nesting twice.
 
-What remains unmodelled — region containers, visibility rules, validation rules,
-help text — is refused rather than approximated. That is what makes a partial
-implementation safe to ship: every screen field has the same children, so a
-`RegionContainer` read as an input box would draw as one and deploy as one.
+Sections nest exactly two deep, which is Salesforce's rule and not a
+simplification: *"A RegionContainer screen field can't be a child of a Region
+screen field."*
 
-Three references have no connector to travel along, so nothing else would catch
+What remains unmodelled — password fields, object-provided fields — is refused
+rather than approximated. That is what makes a partial implementation safe to
+ship: every screen field has the same children, so an unmodelled type read as an
+input box would draw as one and deploy as one.
+
+Four references have no connector to travel along, so nothing else would catch
 them, and all three are enforced in the IR:
 
 - A screen input is read by its own name (`{!Customer_Email}`), so screen fields,
@@ -375,6 +383,9 @@ them, and all three are enforced in the IR:
 - A component output names the variable it lands in. **Salesforce deploys a
   missing one without complaining** and then discards the value — `checkOnly`
   passes, the component runs, and the result goes nowhere.
+- A field shown conditionally reads other resources by name. A rule naming
+  something the flow never defines **also deploys**, and the field then never
+  appears — which is indistinguishable from one you meant to hide.
 
 Where the metadata's own rules were not obvious, the org settled them under
 `checkOnly` rather than being guessed: a multi-select field's data type is

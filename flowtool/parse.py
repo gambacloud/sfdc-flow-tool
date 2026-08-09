@@ -44,8 +44,10 @@ from .ir import (
     Start,
     Subflow,
     TextTemplate,
+    ValidationRule,
     Value,
     Variable,
+    VisibilityRule,
     Wait,
     WaitEvent,
 )
@@ -208,6 +210,10 @@ _SCREEN_FIELD_CHILDREN = {
     # A component and the four things that travel with it.
     "extensionName", "inputParameters", "outputParameters",
     "storeOutputAutomatically", "inputsOnNextNavToAssocScrn",
+    # Layout and the two rules. `fields` nests: a section holds columns and a
+    # column holds fields, which is why _read_screen_field calls itself.
+    "fields", "regionContainerType", "helpText", "visibilityRule",
+    "validationRule",
 }
 
 # Everything else on a screen - region containers, and the field types that
@@ -216,7 +222,7 @@ _SCREEN_FIELD_CHILDREN = {
 _SUPPORTED_SCREEN_FIELD_TYPES = {
     "DisplayText", "InputField", "LargeTextArea",
     "RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "MultiSelectPicklist",
-    "ComponentInstance",
+    "ComponentInstance", "RegionContainer", "Region",
 }
 
 _CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataValues"}
@@ -633,36 +639,69 @@ def _read_component_outputs(item: ET.Element) -> List[ComponentOutput]:
     ]
 
 
-def _read_screen(node: ET.Element) -> Screen:
-    fields = []
-    for item in node.findall("m:fields", NS):
-        fields.append(
-            ScreenField(
-                name=_text(item, "m:name") or "",
-                field_type=_text(item, "m:fieldType") or "DisplayText",
-                # None, not "": a ComponentInstance has no fieldText at all, and
-                # an empty string would be written back as an empty tag.
-                field_text=_text(item, "m:fieldText"),
-                data_type=_text(item, "m:dataType"),
-                extension_name=_text(item, "m:extensionName"),
-                input_parameters=_read_component_inputs(item),
-                output_parameters=_read_component_outputs(item),
-                store_output_automatically=_bool(
-                    item, "m:storeOutputAutomatically"
-                ),
-                inputs_on_revisit=_text(item, "m:inputsOnNextNavToAssocScrn"),
-                is_required=_bool(item, "m:isRequired"),
-                choice_references=[
-                    (ref.text or "") for ref in item.findall("m:choiceReferences", NS)
-                ],
-                default_value=_value(item.find("m:defaultValue", NS)),
-                default_selected_choice=_text(
-                    item, "m:defaultSelectedChoiceReference"
-                ),
-                scale=int(_text(item, "m:scale"))
-                if _text(item, "m:scale") else None,
-            )
+def _read_screen_field(item: ET.Element) -> ScreenField:
+    """
+    One field and anything nested inside it.
+
+    Recursive for the same reason the writer is: a field inside a column is an
+    ordinary field and has to be read as one. Reading only the top level would
+    have dropped every field in every section on the way back out.
+    """
+    return ScreenField(
+        name=_text(item, "m:name") or "",
+        field_type=_text(item, "m:fieldType") or "DisplayText",
+        # None, not "": a ComponentInstance has no fieldText at all, and
+        # an empty string would be written back as an empty tag.
+        field_text=_text(item, "m:fieldText"),
+        data_type=_text(item, "m:dataType"),
+        extension_name=_text(item, "m:extensionName"),
+        input_parameters=_read_component_inputs(item),
+        output_parameters=_read_component_outputs(item),
+        store_output_automatically=_bool(
+            item, "m:storeOutputAutomatically"
+        ),
+        inputs_on_revisit=_text(item, "m:inputsOnNextNavToAssocScrn"),
+        is_required=_bool(item, "m:isRequired"),
+        choice_references=[
+            (ref.text or "") for ref in item.findall("m:choiceReferences", NS)
+        ],
+        default_value=_value(item.find("m:defaultValue", NS)),
+        default_selected_choice=_text(
+            item, "m:defaultSelectedChoiceReference"
+        ),
+        scale=int(_text(item, "m:scale"))
+        if _text(item, "m:scale") else None,
+        help_text=_text(item, "m:helpText"),
+        region_container_type=_text(item, "m:regionContainerType"),
+        fields=[_read_screen_field(nested)
+                for nested in item.findall("m:fields", NS)],
+        visibility=_read_visibility(item),
+        validation=_read_validation(item),
         )
+
+
+def _read_visibility(item: ET.Element) -> Optional[VisibilityRule]:
+    node = item.find("m:visibilityRule", NS)
+    if node is None:
+        return None
+    return VisibilityRule(
+        conditions=_conditions(node),
+        condition_logic=_text(node, "m:conditionLogic") or "and",
+    )
+
+
+def _read_validation(item: ET.Element) -> Optional[ValidationRule]:
+    node = item.find("m:validationRule", NS)
+    if node is None:
+        return None
+    return ValidationRule(
+        error_message=_text(node, "m:errorMessage") or "",
+        formula_expression=_text(node, "m:formulaExpression") or "",
+    )
+
+
+def _read_screen(node: ET.Element) -> Screen:
+    fields = [_read_screen_field(item) for item in node.findall("m:fields", NS)]
     return Screen(
         **_common(node),
         fields=fields,
@@ -774,11 +813,12 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                 _unknown_children(node, allowed, _text(node, "m:name") or tag)
             )
 
-    # And one level below that, for the fields on each screen.
-    for node in root.findall("m:screens", NS):
-        screen_name = _text(node, "m:name") or "a screen"
-        for item in node.findall("m:fields", NS):
-            where = f"{screen_name}.{_text(item, 'm:name') or 'a field'}"
+    # And one level below that, for the fields on each screen - following the
+    # nesting, because a field inside a column is where an unmodelled attribute
+    # is least likely to be noticed and just as likely to be lost.
+    def check_fields(container, prefix: str) -> None:
+        for item in container.findall("m:fields", NS):
+            where = f"{prefix}.{_text(item, 'm:name') or 'a field'}"
             reasons.extend(_unknown_children(item, _SCREEN_FIELD_CHILDREN, where))
             # The tag is allowed; the value may not be. A RadioButtons field has
             # exactly the same children as an InputField, so nothing above would
@@ -788,6 +828,10 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                 reasons.append(Gap(
                     f"screen_field:{kind}", f"{where} is a {kind} field"
                 ))
+            check_fields(item, where)
+
+    for node in root.findall("m:screens", NS):
+        check_fields(node, _text(node, "m:name") or "a screen")
 
     start_node = root.find("m:start", NS)
     if start_node is not None:

@@ -287,7 +287,9 @@ def _element_caption(element: Element) -> str:
     if isinstance(element, Subflow):
         return f"{element.label}\nCall {element.flow_name}"
     if isinstance(element, Screen):
-        inputs = [f.name for f in element.fields if f.field_type != "DisplayText"]
+        inputs = [f.name for f in element.all_fields()
+                  if f.field_type not in ("DisplayText", "RegionContainer",
+                                          "Region")]
         if inputs:
             detail = "Asks for " + ", ".join(inputs)
         else:
@@ -413,7 +415,17 @@ _FIELD_LABEL = {
     "MultiSelectCheckboxes": "checkboxes",
     "MultiSelectPicklist": "multi-select",
     "ComponentInstance": "component",
+    "RegionContainer": "section",
+    "Region": "column",
 }
+
+
+def _walk_fields(fields, depth: int = 0):
+    """Every field with how deep it sits, so the layout survives in text."""
+    for screen_field in fields:
+        yield screen_field, depth
+        if screen_field.fields:
+            yield from _walk_fields(screen_field.fields, depth + 1)
 
 
 def _element_detail(element: Element) -> str:
@@ -475,13 +487,21 @@ def _element_detail(element: Element) -> str:
         if not element.fields:
             return "no fields"
         parts = []
-        for screen_field in element.fields:
+        # Nested, because a field inside a column is a field the reader has to
+        # see. Indented rather than flattened, so the layout is legible too - a
+        # two-column section reads differently from two fields in a row.
+        for screen_field, depth in _walk_fields(element.fields):
             kind = _FIELD_LABEL.get(screen_field.field_type, screen_field.field_type)
             if screen_field.data_type:
                 kind += f", {screen_field.data_type}"
             if screen_field.is_required:
                 kind += ", required"
-            detail = f"`{screen_field.name}` ({kind})"
+            if screen_field.field_type == "Region":
+                width = next((p.value for p in screen_field.input_parameters
+                              if p.name == "width"), None)
+                if width is not None:
+                    kind += f", width {value_text(width).strip(chr(34))}"
+            detail = ("&nbsp;" * 4 * depth) + f"`{screen_field.name}` ({kind})"
             if screen_field.extension_name:
                 detail += f" `{screen_field.extension_name}`"
             if screen_field.choice_references:
@@ -491,7 +511,10 @@ def _element_detail(element: Element) -> str:
             # A component's inputs and outputs are the whole of what it does
             # from the flow's side, and they are the part a reviewer can
             # actually check. The component's own behaviour is not in the flow.
-            if screen_field.input_parameters:
+            # A Region's only input parameter is its width, already shown in
+            # the label above. Repeating it as a component input reads as
+            # though a column took arguments.
+            if screen_field.input_parameters and screen_field.field_type != "Region":
                 detail += " in: " + ", ".join(
                     f"{p.name} = {value_text(p.value)}"
                     for p in screen_field.input_parameters
@@ -503,6 +526,21 @@ def _element_detail(element: Element) -> str:
                 )
             elif screen_field.store_output_automatically:
                 detail += f" out: `{{!{screen_field.name}.…}}`"
+            # Both of these change what the user actually experiences, and
+            # neither is visible anywhere else in the documentation.
+            if screen_field.visibility:
+                shown = _join(
+                    (condition_text(c) for c in screen_field.visibility.conditions),
+                    screen_field.visibility.condition_logic,
+                )
+                detail += f" — shown when {shown}"
+            if screen_field.validation:
+                detail += (
+                    f" — must satisfy `{_escape_pipes(screen_field.validation.formula_expression)}`"
+                    f", else \"{screen_field.validation.error_message}\""
+                )
+            if screen_field.help_text:
+                detail += " — has help text"
             parts.append(detail)
         return "<br>".join(parts)
 

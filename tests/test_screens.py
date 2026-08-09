@@ -308,8 +308,7 @@ class TestTheParserRefuses:
         assert screen.fields[0].data_type == "String"
 
     @pytest.mark.parametrize("kind", [
-        "PasswordField", "RegionContainer", "Region",
-        "ObjectProvided", "ComponentInput",
+        "PasswordField", "ObjectProvided", "ComponentInput",
     ])
     def test_a_field_type_this_build_lacks_is_refused_by_name(self, kind):
         """
@@ -327,9 +326,10 @@ class TestTheParserRefuses:
         assert "Ask.Pick" in str(caught.value)
 
     @pytest.mark.parametrize("tag,expected", [
-        ("visibilityRule", "conditional visibility"),
-        ("validationRule", "a validation rule"),
-        ("helpText", "help text"),
+        # visibilityRule, validationRule and helpText used to be here. They are
+        # modelled now - see tests/test_screen_layout.py.
+        ("objectFieldReference", "a bound record field"),
+        ("inputsOnNextNavToAssocScrn2", "<inputsOnNextNavToAssocScrn2>"),
     ])
     def test_extras_on_a_field_are_refused(self, tag, expected):
         xml = org_xml(PLAIN_FIELD.replace("</fields>", f"<{tag}>x</{tag}></fields>"))

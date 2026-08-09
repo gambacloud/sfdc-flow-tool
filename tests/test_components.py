@@ -360,17 +360,20 @@ class TestTheParserReads:
 
     def test_a_screen_field_kind_still_unmodelled_is_refused_by_name(self):
         """
-        The point of the allowlist has not changed: a RegionContainer has the
-        same children as anything else, so it is refused rather than read as a
-        component that happens to have no extensionName.
+        The point of the allowlist has not changed: an unmodelled field type has
+        the same children as anything else, so it is refused by name rather than
+        read as a component that happens to have no extensionName.
+
+        RegionContainer used to be the example here and is modelled now, so this
+        uses one that still is not.
         """
         field = (
-            "<fields><name>Row</name><fieldText>Row</fieldText>"
-            "<fieldType>RegionContainer</fieldType></fields>"
+            "<fields><name>Secret</name><fieldText>Secret</fieldText>"
+            "<fieldType>PasswordField</fieldType></fields>"
         )
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self.org_xml(field), api_name="Ask")
-        assert "screen_field:RegionContainer" in caught.value.codes
+        assert "screen_field:PasswordField" in caught.value.codes
 
 
 class TestWhatTheUserSees:

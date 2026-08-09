@@ -64,6 +64,23 @@ class TestShapes:
             n for n in names if names.count(n) > 1
         )
 
+    @pytest.mark.parametrize("cases", [SHAPES, GUARDS],
+                             ids=["shapes", "guards"])
+    def test_each_group_appears_once(self, cases):
+        """
+        The report prints a heading whenever the group changes, so a case filed
+        away from its neighbours makes the same group appear twice - which reads
+        as two different things and is how a duplicate case gets added next.
+        """
+        groups = [case.group for case in cases]
+        seen, repeated = set(), []
+        for group, following in zip(groups, groups[1:] + [None]):
+            if group != following:
+                if group in seen:
+                    repeated.append(group)
+                seen.add(group)
+        assert not repeated, f"{repeated} appear in more than one block"
+
     def test_every_case_is_namespaced(self):
         """
         checkOnly never writes, but the names still show up in deploy logs, and

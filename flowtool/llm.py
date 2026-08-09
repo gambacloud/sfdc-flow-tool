@@ -269,6 +269,30 @@ Boolean).
 `data_type` is still the type of one option, usually `String`; Salesforce joins \
 the several answers into it.
   - `ComponentInstance` - a custom LWC or Aura component. See below.
+  - `RegionContainer` and `Region` - a section and a column. See below.
+- Any field can carry `help_text`, a `visibility` rule that decides whether it \
+is shown at all, and - if it collects something - a `validation` rule the \
+answer must satisfy.
+- `visibility` reads other fields on the same screen by name, and it is worth \
+being careful with: Salesforce deploys a rule reading a field that does not \
+exist, and the field then simply never appears.
+- `validation` needs both a `formula_expression` that must be true and an \
+`error_message` to show when it is not. Not on a `DisplayText` - it collects \
+nothing.
+
+## Sections and columns
+
+Put fields side by side with a `RegionContainer` holding `Region`s:
+
+- The container is the section. `region_container_type` is \
+`SectionWithoutHeader`, or `SectionWithHeader` with `field_text` as the heading.
+- Each Region is a column and needs one `input_parameters` entry named `width`, \
+a string from `"1"` to `"12"`. The widths in one section should add up to 12.
+- The fields go inside the Regions. A section holds only columns, a column \
+holds only ordinary fields, and that is as deep as it goes - Salesforce refuses \
+a section inside a column.
+- Only reach for this when the request actually asks for a layout. A plain list \
+of fields is the normal thing and reads better than a one-column section.
 - Read what the user entered by the field's own name: a field named \
 `Customer_Email` is referenced as `Customer_Email`, not as `Screen1.Customer_Email`.
 

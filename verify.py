@@ -64,8 +64,10 @@ from flowtool.ir import (
     ScreenField,
     Start,
     TextTemplate,
+    ValidationRule,
     Value,
     Variable,
+    VisibilityRule,
     Wait,
     WaitEvent,
 )
@@ -146,6 +148,38 @@ def slider(**kwargs) -> ScreenField:
     fields.update(kwargs)
     return ScreenField(**fields)
 
+
+def column(name: str, width: int, *fields) -> ScreenField:
+    """A column. Its width is an input parameter because that is how Salesforce
+    spells it - the same tag a component uses for its own inputs."""
+    return ScreenField(
+        name=name, field_type="Region", fields=list(fields),
+        input_parameters=[InputAssignment(name="width",
+                                          value=Value(string_value=str(width)))])
+
+
+def section(name: str, *columns, **kwargs) -> ScreenField:
+    fields = dict(name=name, field_type="RegionContainer",
+                  region_container_type="SectionWithoutHeader",
+                  fields=list(columns))
+    fields.update(kwargs)
+    return ScreenField(**fields)
+
+
+def number_field(name: str, **kwargs) -> ScreenField:
+    fields = dict(name=name, field_type="InputField", field_text=name,
+                  data_type="Number")
+    fields.update(kwargs)
+    return ScreenField(**fields)
+
+
+COLOUR = ScreenField(name="Colour", field_type="RadioButtons",
+                     field_text="Pick a colour", data_type="String",
+                     choice_references=["Red"])
+RED = Choice(name="Red", choice_text="Red")
+SHOW_IF_RED = VisibilityRule(conditions=[
+    Condition(left="Colour", operator="EqualTo",
+              right=Value(string_value="Red"))])
 
 ACCOUNTS = Variable(name="v_Accounts", data_type="SObject",
                     object_type="Account", is_collection=True)
@@ -293,6 +327,38 @@ SHAPES: List[Shape] = [
                         default_value=Value(number_value=1)),
         ]),
     )),
+
+    Shape("screens", "help text and a validation rule", screen_flow(
+        "Screen_Rules",
+        Screen(name="Ask", label="Ask", fields=[number_field(
+            "Quantity", help_text="<p>Type a number.</p>",
+            validation=ValidationRule(error_message="Must be more than zero.",
+                                      formula_expression="{!Quantity} > 0"))]),
+    ), "the org takes a nonsense formula here without a word"),
+    Shape("screens", "a field shown only sometimes", screen_flow(
+        "Screen_Visibility",
+        Screen(name="Ask", label="Ask",
+               fields=[COLOUR, number_field("Quantity", visibility=SHOW_IF_RED)]),
+        choices=[RED],
+    ), "a rule reading a field that does not exist also deploys"),
+    Shape("screens", "two columns in a section", screen_flow(
+        "Screen_Section",
+        Screen(name="Ask", label="Ask", fields=[section(
+            "Section_1",
+            column("Column_1", 6, number_field("Left")),
+            column("Column_2", 6, number_field("Right")))]),
+    )),
+    Shape("screens", "a section with a heading, holding a conditional field",
+          screen_flow(
+              "Screen_Section_Header",
+              Screen(name="Ask", label="Ask", fields=[COLOUR, section(
+                  "Section_1",
+                  column("Column_1", 12,
+                         number_field("Quantity", visibility=SHOW_IF_RED)),
+                  region_container_type="SectionWithHeader",
+                  field_text="Details")]),
+              choices=[RED],
+          ), "sections nest exactly two deep and no further"),
 
     # ---- Choices -----------------------------------------------------------
     Shape("choices", "radio buttons from fixed choices", screen_flow(
@@ -522,6 +588,25 @@ GUARDS: List[Guard] = [
           lambda: screen_flow("X", Wait(name="Hold", label="Hold")),
           org="rejects it"),
 
+    Guard("screens", "visibility reading a field that does not exist",
+          lambda: screen_flow("X", Screen(name="Ask", label="Ask", fields=[
+              number_field("Quantity", visibility=VisibilityRule(conditions=[
+                  Condition(left="No_Such_Field", operator="EqualTo",
+                            right=Value(string_value="Red"))]))])),
+          org="deploys, and the field then never appears"),
+    Guard("screens", "a column with no width",
+          lambda: ScreenField(name="Column_1", field_type="Region"),
+          org="rejects it, quoted verbatim in the IR's message"),
+    Guard("screens", "a section inside a column",
+          lambda: column("Column_1", 12, section("Inner", column("C", 12))),
+          org="rejects it - sections nest exactly two deep"),
+    Guard("screens", "a validation rule on a DisplayText",
+          lambda: ScreenField(name="Intro", field_type="DisplayText",
+                              field_text="<p>Hi</p>",
+                              validation=ValidationRule(
+                                  error_message="No.",
+                                  formula_expression="true")),
+          org="rejects it"),
     Guard("screens", "a screen in a flow nobody is watching",
           lambda: flow("X", Screen(name="Ask", label="Ask")),
           org="rejects it"),
