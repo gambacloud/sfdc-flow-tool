@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-594 tests, none of which need a key, a network, or an org.
+697 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -143,6 +143,46 @@ The line between them is not taste. Unreachable elements were a refusal until a
 live, Active flow in Salesforce's own sample apps turned out to have one, so the
 tool could not open a flow that was working in production. **Anything the org
 accepts has to be openable**; the most a tool can do about it is say so.
+
+## Checking the metadata is right
+
+```bash
+.venv/Scripts/python.exe verify.py --org dev
+```
+
+The test suite proves the IR agrees with itself. It cannot prove the XML is
+right, because the only authority on that is Salesforce. `verify.py` asks:
+
+- **shapes** — every construct the compiler emits, built through the IR,
+  round-tripped, then sent to the org under `checkOnly`. A failure means what we
+  generate is not what Salesforce takes.
+- **guards** — things the IR refuses, each recording what the org does with the
+  same flow. These need no org and run anyway.
+
+The guards are the more valuable half, because most of them read like this:
+
+```
+  pause
+    ok    a Pause with no time to resume at
+            the org deploys, and the flow never resumes
+    ok    a Pause whose parameter is misspelled
+            the org deploys - it took AlarmTimeX without a word
+```
+
+Salesforce validates far less than it looks like it does. Condition logic is
+never parsed — `banana` deploys. A component output assigned to a variable that
+does not exist deploys, runs, and throws the value away. Those are not edge
+cases; they are the reason several validators exist, and without this file the
+reason is a comment nobody can re-check.
+
+Read-only: `checkOnly` means Salesforce validates and discards. Nothing is
+created, updated or deployed, and no flow of yours is touched. The cases use
+standard objects and standard components only, so they work in any org. Expect
+about a minute and a half — each case is a full round trip to the Metadata API,
+five at a time.
+
+The guards and the round trips also run in the ordinary test suite, so they
+cannot rot between org runs; the org half is the part `verify.py` adds.
 
 ## Measuring the gap
 
@@ -364,6 +404,8 @@ tells it not to invent one.
 | `forge.py` | The pipeline, as a CLI |
 | `server.py` | The pipeline, over HTTP |
 | `survey.py` | Measures how much of an org this build can model |
+| `verify.py` | Checks every metadata shape against a real org |
+| `harvest.py` | Collects flows from public repos to survey against |
 | `diagnose.py` | Isolates where org authentication breaks |
 
 ### Adding a provider
