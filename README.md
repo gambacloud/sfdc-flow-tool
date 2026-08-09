@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-746 tests, none of which need a key, a network, or an org.
+776 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -279,12 +279,12 @@ Record-triggered, autolaunched, and screen flows:
 |---|---|
 | Assignment | Set variable values, add to or remove from a collection, count one |
 | Decision | Branch on structured conditions, combined with `and`, `or`, or an expression like `1 OR (2 AND 3)` |
-| Get / Create / Update / Delete Records | Get can name its fields and store into a variable; Create can save the new Id |
-| Loop | |
+| Get / Create / Update / Delete Records | Get can name its fields and store the records three ways — kept, into a variable, or a field at a time; Create can save the new Id |
+| Loop | Reads the item as the loop's own name, or into a variable you name |
 | **Scheduled paths** | Run a branch later — three days after the trigger, a day before a date field, or straight away in its own transaction |
 | **Pause** | Stop and resume at a time, at a date on a record, or when a platform event arrives |
 | Subflow | |
-| **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
+| **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType`, in the current transaction or its own |
 | **Screen** | Display text, input fields, long text areas, and pickers, with defaults |
 | **Screen layout** | Sections and columns, conditional visibility, validation rules, help text |
 | **Choices** | Fixed options, or options built from records or a picklist |

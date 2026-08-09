@@ -55,6 +55,7 @@ from flowtool.ir import (
     InputAssignment,
     Loop,
     Outcome,
+    OutputAssignment,
     RecordCreate,
     RecordDelete,
     RecordFilter,
@@ -187,6 +188,8 @@ COUNT = Variable(name="v_Count", data_type="Number", scale=0)
 TEXT = Variable(name="v_Text", data_type="String")
 WHEN = Variable(name="v_When", data_type="DateTime")
 THE_ID = Variable(name="v_Id", data_type="String", is_input=True)
+ONE_ACCOUNT = Variable(name="v_One", data_type="SObject",
+                       object_type="Account")
 
 
 # --------------------------------------------------------------------------
@@ -227,6 +230,19 @@ SHAPES: List[Shape] = [
                      filters=[RecordFilter(field="IsClosed", operator="EqualTo",
                                            value=Value(boolean_value=True))]),
     )),
+    Shape("records", "fields assigned into their own variables", flow(
+        "Get_Assign_Fields",
+        GetRecords(name="Get", label="Get", object="Account",
+                   store_output_automatically=False, output_assignments=[
+                       OutputAssignment(field="Name",
+                                        assign_to_reference="v_Text")]),
+        variables=[TEXT],
+    ), "the third way of handing records back, exclusive with both others"),
+    Shape("records", "null the variables when nothing is found", flow(
+        "Get_Null_Values",
+        GetRecords(name="Get", label="Get", object="Account",
+                   assign_null_values_if_no_records_found=True),
+    ), "was written back as false regardless, whatever the flow said"),
     Shape("records", "a fault path", flow(
         "Fault_Path",
         GetRecords(name="Get", label="Get", object="Account", next=None,
@@ -500,6 +516,17 @@ SHAPES: List[Shape] = [
     # metadata whose name differs per org, so that case failed in any org but
     # the one it was written in - and a check that always fails is a check
     # everyone learns to skip. Send Email is standard everywhere.
+    Shape("elements", "a loop with its own variable", flow(
+        "Loop_Named_Var",
+        Loop(name="Each", label="Each", collection_reference="v_Accounts",
+             assign_next_value_to_reference="v_One", first_element="Body",
+             next=None),
+        Assignment(name="Body", label="Body", next="Each", items=[
+            AssignmentItem(to_reference="v_Text",
+                           value=Value(element_reference="v_One.Name"))]),
+        variables=[ACCOUNTS, ONE_ACCOUNT, TEXT],
+    ), "the older loop style, and still the only way to change the item"),
+
     Shape("elements", "a Send Email action", triggered(
         "Action_Email",
         ActionCall(name="Notify", label="Notify", action_name="emailSimple",
@@ -546,6 +573,19 @@ GUARDS: List[Guard] = [
                              name="value", assign_to_reference="v_Count")]),
           org="rejects it, quoted verbatim in the IR's message"),
 
+    Guard("records", "a field assigned into a variable that does not exist",
+          lambda: flow("X", GetRecords(
+              name="Get", label="Get", object="Account",
+              store_output_automatically=False, output_assignments=[
+                  OutputAssignment(field="Name",
+                                   assign_to_reference="v_Nope")])),
+          org="deploys, reads the field, and drops it"),
+    Guard("records", "assigning fields and keeping the record too",
+          lambda: GetRecords(name="Get", label="Get", object="Account",
+                             store_output_automatically=True,
+                             output_assignments=[OutputAssignment(
+                                 field="Name", assign_to_reference="v_Text")]),
+          org="rejects it, quoted verbatim in the IR's message"),
     Guard("records", "create asking for the Id twice over",
           lambda: RecordCreate(name="Make", label="Make", object="Task",
                                fields=[FieldValue(

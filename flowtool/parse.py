@@ -34,6 +34,7 @@ from .ir import (
     InputAssignment,
     Loop,
     Outcome,
+    OutputAssignment,
     RecordCreate,
     RecordDelete,
     RecordFilter,
@@ -164,12 +165,13 @@ _ELEMENT_CHILDREN = {
     },
     "loops": _ELEMENT_COMMON | {
         "collectionReference", "iterationOrder", "nextValueConnector",
-        "noMoreValuesConnector",
+        "noMoreValuesConnector", "assignNextValueToReference",
     },
     "recordLookups": _ELEMENT_COMMON | _FAULT | {
         "object", "filters", "filterLogic", "getFirstRecordOnly",
         "storeOutputAutomatically", "assignNullValuesIfNoRecordsFound",
         "sortField", "sortOrder", "queriedFields", "outputReference",
+        "outputAssignments",
     },
     "recordCreates": _ELEMENT_COMMON | _FAULT | {
         "object", "inputAssignments", "inputReference", "storeOutputAutomatically",
@@ -184,6 +186,7 @@ _ELEMENT_CHILDREN = {
     "subflows": _ELEMENT_COMMON | _FAULT | {"flowName", "inputAssignments"},
     "actionCalls": _ELEMENT_COMMON | _FAULT | {
         "actionName", "actionType", "inputParameters", "storeOutputAutomatically",
+        "flowTransactionModel",
     },
     "waits": _ELEMENT_COMMON | _FAULT | {
         "waitEvents", "defaultConnector", "defaultConnectorLabel",
@@ -473,6 +476,16 @@ def _read_get_records(node: ET.Element) -> GetRecords:
     return GetRecords(
         **_fault_common(node),
         object=_text(node, "m:object") or "",
+        assign_null_values_if_no_records_found=_bool(
+            node, "m:assignNullValuesIfNoRecordsFound"
+        ),
+        output_assignments=[
+            OutputAssignment(
+                field=_text(item, "m:field") or "",
+                assign_to_reference=_text(item, "m:assignToReference") or "",
+            )
+            for item in node.findall("m:outputAssignments", NS)
+        ],
         queried_fields=[
             (f.text or "") for f in node.findall("m:queriedFields", NS)
         ],
@@ -524,6 +537,9 @@ def _read_loop(node: ET.Element) -> Loop:
     return Loop(
         name=_text(node, "m:name") or "",
         label=_text(node, "m:label") or "",
+        assign_next_value_to_reference=_text(
+            node, "m:assignNextValueToReference"
+        ),
         collection_reference=_text(node, "m:collectionReference") or "",
         iteration_order=_text(node, "m:iterationOrder") or "Asc",
         first_element=_target(node, "nextValueConnector"),
@@ -540,6 +556,7 @@ def _read_action_call(node: ET.Element) -> ActionCall:
         parameters.append(InputAssignment(name=_text(item, "m:name") or "", value=value))
     return ActionCall(
         **_fault_common(node),
+        flow_transaction_model=_text(node, "m:flowTransactionModel"),
         action_name=_text(node, "m:actionName") or "",
         action_type=_text(node, "m:actionType") or "",
         input_parameters=parameters,

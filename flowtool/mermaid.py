@@ -446,6 +446,15 @@ def _element_detail(element: Element) -> str:
                 (filter_text(f) for f in element.filters), element.filter_logic
             )
         detail += ", first record only" if element.first_record_only else ", all records"
+        if element.output_assignments:
+            detail += " → " + ", ".join(
+                f"{a.field} into `{a.assign_to_reference}`"
+                for a in element.output_assignments
+            )
+        elif element.output_reference:
+            detail += f" → `{element.output_reference}`"
+        if element.assign_null_values_if_no_records_found:
+            detail += "; clears them when nothing is found"
         return detail
 
     if isinstance(element, (RecordCreate, RecordUpdate)):
@@ -478,8 +487,12 @@ def _element_detail(element: Element) -> str:
         )
 
     if isinstance(element, Loop):
+        item = (f"`{element.assign_next_value_to_reference}`"
+                if element.assign_next_value_to_reference
+                else f"`{element.name}`")
         return (
             f"over `{element.collection_reference}` ({element.iteration_order}), "
+            f"each item as {item}, "
             f"body starts at `{element.first_element or 'nothing'}`"
         )
 
@@ -558,6 +571,24 @@ def _element_detail(element: Element) -> str:
             f"**{element.default_label}** -> `{element.default_next or 'End'}`"
         )
         return "<br>".join(parts)
+
+    if isinstance(element, ActionCall):
+        detail = f"`{element.action_name}` ({element.action_type})"
+        # Worth saying only when the flow said it. An action in its own
+        # transaction cannot be rolled back with the rest, which is the whole
+        # reason anyone sets this.
+        if element.flow_transaction_model == "NewTransaction":
+            detail += ", in its own transaction"
+        elif element.flow_transaction_model == "CurrentTransaction":
+            detail += ", in this transaction"
+        if element.input_parameters:
+            detail += " with " + ", ".join(
+                f"{p.name} = {value_text(p.value)}"
+                for p in element.input_parameters
+            )
+        if element.store_output_automatically:
+            detail += f", results read as `{{!{element.name}.…}}`"
+        return detail
 
     if isinstance(element, Subflow):
         detail = f"calls `{element.flow_name}`"

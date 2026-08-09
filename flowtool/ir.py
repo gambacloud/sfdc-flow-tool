@@ -426,6 +426,18 @@ class GetRecords(FaultCapable):
     # it is what the query actually asks for - and it sits alongside automatic
     # storage rather than replacing it.
     queried_fields: List[str] = Field(default_factory=list)
+    # The third way of handing the records back: one variable per field.
+    output_assignments: List[OutputAssignment] = Field(
+        default_factory=list,
+        description="Put individual fields into variables, instead of keeping "
+        "the whole record. The oldest of the three ways, and exclusive with "
+        "both the others.",
+    )
+    # "When no records are found, set the variables to null." Modelled rather
+    # than assumed: the compiler used to write `false` unconditionally, so a
+    # flow that said true came back saying false - a behaviour change, silently,
+    # on the one flag that decides what a failed lookup leaves behind.
+    assign_null_values_if_no_records_found: bool = False
 
     @model_validator(mode="after")
     def logic_matches_filters(self) -> "GetRecords":
@@ -436,21 +448,58 @@ class GetRecords(FaultCapable):
     @model_validator(mode="after")
     def one_way_to_store_the_records(self) -> "GetRecords":
         """
-        Automatic storage keeps the records in this element's own output;
-        `output_reference` puts them in a variable instead. They are two answers
-        to the same question, so a flag nobody set follows the shape - as on
-        Create Records, and for the same reason.
+        There are three, and they are answers to the same question:
+
+          - automatic storage keeps the records in this element's own output,
+            read as `{!Get_Account.Name}`
+          - `output_reference` puts the whole record in a variable
+          - `output_assignments` puts individual fields into variables
+
+        A flag nobody set follows the shape - as on Create Records, and for the
+        same reason. The org states both of the pairs it rejects, and they are
+        quoted here because the wording is what someone will search for.
         """
-        if self.output_reference:
+        if self.output_reference and self.output_assignments:
+            raise ValueError(
+                f"{self.name}: \"You can't use the sObjectOutputReference field "
+                "with the outputAssignments field.\" Either put the whole record "
+                "in a variable, or assign its fields one at a time."
+            )
+        if self.output_reference or self.output_assignments:
             if "store_output_automatically" not in self.model_fields_set:
                 self.store_output_automatically = False
             elif self.store_output_automatically:
+                if self.output_assignments:
+                    raise ValueError(
+                        f"{self.name}: \"You can't use the outputAssignments "
+                        "field with the storeOutputAutomatically field.\" Either "
+                        "assign the fields you want, or keep the record and read "
+                        f"its fields as {{!{self.name}.FieldName}}."
+                    )
                 raise ValueError(
                     f"{self.name}: output_reference stores the records in a "
                     "variable, which is what store_output_automatically would "
                     "otherwise do here. Use one or the other."
                 )
         return self
+
+
+class OutputAssignment(BaseModel):
+    """
+    One field of a retrieved record, put into a variable of its own.
+
+    The oldest of the three ways Get Records can hand back what it found, and
+    the most explicit: instead of keeping the record and reading
+    `{!Get_Account.Name}`, each field is assigned somewhere by name.
+
+    Salesforce checks neither half. A `field` that does not exist on the object
+    deploys - knowing better would need the object's schema, which this tool
+    does not read - and so does an `assign_to_reference` naming a variable the
+    flow never defines, which is checked on Flow because it can be.
+    """
+
+    field: str = Field(description="The field on the retrieved record.")
+    assign_to_reference: str = Field(description="The variable it goes into.")
 
 
 class RecordCreate(FaultCapable):
@@ -586,6 +635,16 @@ class Loop(BaseElement):
     first_element: Optional[str] = Field(
         default=None, description="First element inside the loop body"
     )
+    # The older way of naming the current item. Without it the item is read as
+    # the loop's own name; with it, it lands in a variable you declared - which
+    # is still the only way to change the item inside the body and collect the
+    # result. The org checks that the variable exists and that its type matches
+    # the collection, so this carries no rule of its own beyond existing.
+    assign_next_value_to_reference: Optional[str] = Field(
+        default=None,
+        description="A variable to hold the current item. Leave empty to read "
+        "it as the loop's own name instead.",
+    )
     # `next` is the no-more-values connector (what runs after the loop).
 
 
@@ -600,6 +659,17 @@ class ActionCall(FaultCapable):
     """
 
     type: Literal["ActionCall"] = "ActionCall"
+    # Whether the action runs inside the flow's transaction or gets its own.
+    # Which values a given action allows is the action's business, and the org
+    # says so by name - "The action 'EMAILSIMPLE' only supports
+    # 'CurrentTransaction'" - so this models the enum and leaves the rest there.
+    flow_transaction_model: Optional[
+        Literal["CurrentTransaction", "NewTransaction", "Automatic"]
+    ] = Field(
+        default=None,
+        description="'NewTransaction' for work that cannot run inside the "
+        "current one, such as a callout after a record was saved.",
+    )
     action_name: str = Field(
         description="The action's API name - the Email Alert's name, the Apex "
         "class's invocable name, and so on."
@@ -1963,6 +2033,47 @@ class Flow(BaseModel):
                 + ". Salesforce deploys this without complaint and the field "
                 "then never appears, which is indistinguishable from one you "
                 "meant to hide."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def retrieved_fields_land_somewhere(self) -> "Flow":
+        """
+        Every field a Get Records assigns out must name a variable that exists.
+
+        The org accepts one that does not - it validated an assignment into
+        `v_Nope` without a word, and the field is then read from the record and
+        dropped. The same shape of silence as a component output, and checked
+        here for the same reason.
+
+        A Loop's own variable is checked too, though the org does catch that one
+        ("Value v_Nope in the AssignNextValueTo element doesn't exist in this
+        flow"). Catching it here means the model is told before a deploy round
+        trip rather than after one.
+        """
+        variables = {v.name for v in self.variables}
+        problems: List[str] = []
+        for element in self.elements:
+            if isinstance(element, GetRecords):
+                for assignment in element.output_assignments:
+                    root = assignment.assign_to_reference.split(".")[0]
+                    if root not in variables:
+                        problems.append(
+                            f"{element.name} puts {assignment.field!r} into "
+                            f"{assignment.assign_to_reference!r}"
+                        )
+            if isinstance(element, Loop) and element.assign_next_value_to_reference:
+                root = element.assign_next_value_to_reference.split(".")[0]
+                if root not in variables:
+                    problems.append(
+                        f"{element.name} puts each item into "
+                        f"{element.assign_next_value_to_reference!r}"
+                    )
+        if problems:
+            known = sorted(variables) or "nothing"
+            raise ValueError(
+                "these land in variables that do not exist: "
+                + "; ".join(problems) + f". Defined variables: {known}."
             )
         return self
 

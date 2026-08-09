@@ -391,7 +391,8 @@ class TestNestedUnknownsAreRefused:
         ("<limit>5</limit>", "a record limit"),
         ("<assignNextValueToReference>v</assignNextValueToReference>",
          "its own loop variable"),
-        ("<outputAssignments><name>a</name></outputAssignments>", "manually assigned"),
+        # outputAssignments is modelled now - see test_three_spellings.py.
+        ("<limit>5</limit>", "a record limit"),
     ])
     def test_unknown_child_of_an_element(self, extra, expected):
         with pytest.raises(UnsupportedFlow) as caught:

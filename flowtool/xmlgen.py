@@ -194,7 +194,8 @@ def _write_decision(root: ET.Element, el: Decision, xy) -> None:
 def _write_get_records(root: ET.Element, el: GetRecords, xy) -> None:
     node = _sub(root, "recordLookups")
     _write_common(node, el, xy)
-    _sub(node, "assignNullValuesIfNoRecordsFound", "false")
+    _sub(node, "assignNullValuesIfNoRecordsFound",
+         _bool(el.assign_null_values_if_no_records_found))
     _connector(node, "connector", el.next)
     _fault(node, el)
     if el.filters:
@@ -205,6 +206,10 @@ def _write_get_records(root: ET.Element, el: GetRecords, xy) -> None:
     if el.first_record_only is not None:
         _sub(node, "getFirstRecordOnly", _bool(el.first_record_only))
     _sub(node, "object", el.object)
+    for assignment in el.output_assignments:
+        oa = _sub(node, "outputAssignments")
+        _sub(oa, "assignToReference", assignment.assign_to_reference)
+        _sub(oa, "field", assignment.field)
     if el.output_reference:
         _sub(node, "outputReference", el.output_reference)
     for field_name in el.queried_fields:
@@ -269,6 +274,9 @@ def _write_record_delete(root: ET.Element, el: RecordDelete, xy) -> None:
 def _write_loop(root: ET.Element, el: Loop, xy) -> None:
     node = _sub(root, "loops")
     _write_common(node, el, xy)
+    if el.assign_next_value_to_reference:
+        _sub(node, "assignNextValueToReference",
+             el.assign_next_value_to_reference)
     _sub(node, "collectionReference", el.collection_reference)
     _sub(node, "iterationOrder", el.iteration_order)
     _connector(node, "nextValueConnector", el.first_element)
@@ -282,6 +290,8 @@ def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
     _sub(node, "actionType", el.action_type)
     _connector(node, "connector", el.next)
     _fault(node, el)
+    if el.flow_transaction_model:
+        _sub(node, "flowTransactionModel", el.flow_transaction_model)
     for parameter in el.input_parameters:
         ip = _sub(node, "inputParameters")
         _sub(ip, "name", parameter.name)
