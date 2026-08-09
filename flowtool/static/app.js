@@ -267,7 +267,7 @@ async function design() {
   showError(button.parentElement, "");
   busy(button, true, "Designing...");
   try {
-    const data = await api("api/design", {
+    const { job_id } = await api("api/design/start", {
       request: $("request").value,
       provider: $("provider").value || null,
       effort: $("effort").value,
@@ -276,6 +276,7 @@ async function design() {
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
     });
+    const data = await poll("api/design/status", { job_id });
     state.validatedVersion = null;
     renderFlow(data);
   } catch (err) {
@@ -341,10 +342,11 @@ async function explainFlow() {
   target.textContent = "Reading the flow...";
   target.className = "explanation dim";
   try {
-    const data = await api("api/explain", {
+    await api("api/explain/start", {
       session_id: state.sessionId,
       question: $("question").value.trim() || null,
     });
+    const data = await poll("api/explain/status", { session_id: state.sessionId });
     target.textContent = data.explanation;
     target.className = "explanation filled";
   } catch (err) {
@@ -360,10 +362,11 @@ async function refine() {
   showError(button.parentElement, "");
   busy(button, true, "Revising...");
   try {
-    const data = await api("api/refine", {
+    await api("api/refine/start", {
       session_id: state.sessionId,
       instruction: $("instruction").value,
     });
+    const data = await poll("api/refine/status", { session_id: state.sessionId });
     $("instruction").value = "";
     renderFlow(data);
   } catch (err) {
@@ -411,7 +414,8 @@ async function validate() {
 async function repair(button) {
   busy(button, true, "Repairing...");
   try {
-    const data = await api("api/repair", { session_id: state.sessionId });
+    await api("api/repair/start", { session_id: state.sessionId });
+    const data = await poll("api/repair/status", { session_id: state.sessionId });
     state.validatedVersion = null;
     renderFlow(data);
   } catch (err) {

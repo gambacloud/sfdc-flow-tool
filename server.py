@@ -83,6 +83,19 @@ class PendingDeploy:
 
 
 @dataclass
+class PendingLLM:
+    """
+    A refine/repair running in the background, held on the session it will
+    update once it lands. `note` is what session.record() logs to history -
+    it has to be captured now, since the /status call has no other way to
+    know what instruction started this.
+    """
+
+    task: "asyncio.Task"
+    note: str
+
+
+@dataclass
 class Session:
     generator: FlowGenerator
     result: GenerationResult
@@ -98,6 +111,8 @@ class Session:
     # True when the flow came out of the org rather than from a description.
     imported: bool = False
     pending_deploy: Optional[PendingDeploy] = None
+    pending_llm: Optional[PendingLLM] = None
+    pending_explain: Optional["asyncio.Task"] = None
 
     @property
     def flow(self) -> Flow:
@@ -133,6 +148,21 @@ class PendingImport:
 
 
 IMPORTS: Dict[str, PendingImport] = {}
+
+
+@dataclass
+class PendingDesign:
+    """A generation running in the background - same reasoning as
+    PendingImport, no session exists until the model comes back."""
+
+    task: "asyncio.Task"
+    generator: FlowGenerator
+    request: str
+    activate: bool
+    api_version: str
+
+
+DESIGN_JOBS: Dict[str, PendingDesign] = {}
 
 
 def get_session(session_id: str) -> Session:
@@ -347,28 +377,59 @@ def models(body: ModelsRequest) -> Dict[str, Any]:
     return {"models": found, "default": getattr(provider, "model", None)}
 
 
-@app.post("/api/design")
-def design(body: DesignRequest) -> Dict[str, Any]:
+@app.post("/api/design/start")
+async def design_start(body: DesignRequest) -> Dict[str, Any]:
+    """
+    Kick off generation in the background and hand back a job id. The model
+    call itself is synchronous (the provider SDKs are), so it runs in a
+    thread rather than blocking the event loop - a slow or schema-fallback
+    generation has run past 30s in practice, which is Heroku's request limit.
+    """
     if not body.request.strip():
         raise HTTPException(400, "Describe what the flow should do.")
     try:
         provider = build_provider(body.provider, body.model, body.effort, body.api_key)
-        generator = FlowGenerator(provider)
-        result = generator.generate(body.request)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    generator = FlowGenerator(provider)
+    task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
+    job_id = uuid.uuid4().hex
+    DESIGN_JOBS[job_id] = PendingDesign(
+        task=task,
+        generator=generator,
+        request=body.request,
+        activate=body.activate,
+        api_version=body.api_version,
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/design/status")
+async def design_status(job_id: str) -> Dict[str, Any]:
+    pending = DESIGN_JOBS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown design job.")
+    if not pending.task.done():
+        return {"done": False}
+    del DESIGN_JOBS[job_id]
+
+    try:
+        result = pending.task.result()
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
     session_id = uuid.uuid4().hex
     session = Session(
-        generator=generator,
+        generator=pending.generator,
         result=result,
-        activate=body.activate,
-        api_version=body.api_version,
-        history=[{"note": body.request, "version": "1"}],
+        activate=pending.activate,
+        api_version=pending.api_version,
+        history=[{"note": pending.request, "version": "1"}],
     )
     session.apply_policy()
     SESSIONS[session_id] = session
-    return view(session_id, session)
+    return {"done": True, **view(session_id, session)}
 
 
 @app.get("/api/flows")
@@ -413,7 +474,7 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
 
 
 @app.get("/api/import/status")
-def import_status(job_id: str) -> Dict[str, Any]:
+async def import_status(job_id: str) -> Dict[str, Any]:
     """
     Pull a flow out of the org and adopt it, so the next refinement edits it
     rather than designing a replacement from its description.
@@ -462,26 +523,71 @@ def import_status(job_id: str) -> Dict[str, Any]:
     return {"done": True, **view(session_id, session)}
 
 
-@app.post("/api/explain")
-def explain(body: ExplainRequest) -> Dict[str, str]:
+@app.post("/api/explain/start")
+async def explain_start(body: ExplainRequest) -> Dict[str, Any]:
     session = get_session(body.session_id)
+    if session.pending_explain is not None and not session.pending_explain.done():
+        raise HTTPException(409, "An explain is already running for this flow.")
+    session.pending_explain = asyncio.create_task(
+        asyncio.to_thread(session.generator.explain, session.flow, body.question)
+    )
+    return {"started": True}
+
+
+@app.get("/api/explain/status")
+async def explain_status(session_id: str) -> Dict[str, Any]:
+    session = get_session(session_id)
+    task = session.pending_explain
+    if task is None:
+        raise HTTPException(400, "No explain in progress - call /api/explain/start first.")
+    if not task.done():
+        return {"done": False}
+    session.pending_explain = None
     try:
-        return {"explanation": session.generator.explain(session.flow, body.question)}
+        explanation = task.result()
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
+    return {"done": True, "explanation": explanation}
 
 
-@app.post("/api/refine")
-def refine(body: RefineRequest) -> Dict[str, Any]:
+def _start_llm(session: Session, func, *args, note: str) -> None:
+    if session.pending_llm is not None and not session.pending_llm.task.done():
+        raise HTTPException(409, "Another request is already running for this flow.")
+    task = asyncio.create_task(asyncio.to_thread(func, *args))
+    session.pending_llm = PendingLLM(task=task, note=note)
+
+
+def _llm_status(session_id: str) -> Dict[str, Any]:
+    session = get_session(session_id)
+    pending = session.pending_llm
+    if pending is None:
+        raise HTTPException(400, "Nothing in progress - call the matching /start endpoint first.")
+    if not pending.task.done():
+        return {"done": False}
+    session.pending_llm = None
+    try:
+        result = pending.task.result()
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    session.record(result, pending.note)
+    return {"done": True, **view(session_id, session)}
+
+
+@app.post("/api/refine/start")
+async def refine_start(body: RefineRequest) -> Dict[str, Any]:
     session = get_session(body.session_id)
     if not body.instruction.strip():
         raise HTTPException(400, "Say what should change.")
-    try:
-        result = session.generator.refine(session.result, body.instruction)
-    except LLMError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    session.record(result, body.instruction)
-    return view(body.session_id, session)
+    _start_llm(
+        session, session.generator.refine, session.result, body.instruction,
+        note=body.instruction,
+    )
+    return {"started": True}
+
+
+@app.get("/api/refine/status")
+async def refine_status(session_id: str) -> Dict[str, Any]:
+    return _llm_status(session_id)
 
 
 @app.post("/api/approve")
@@ -557,20 +663,23 @@ async def validate_status(session_id: str) -> Dict[str, Any]:
     }
 
 
-@app.post("/api/repair")
-def repair(body: OrgRequest) -> Dict[str, Any]:
+@app.post("/api/repair/start")
+async def repair_start(body: OrgRequest) -> Dict[str, Any]:
     """Feed the last validation failures back to the model."""
     session = get_session(body.session_id)
     failures = session.last_failures
     if not failures:
         raise HTTPException(400, "Nothing to repair - run a validation first.")
-    try:
-        result = session.generator.repair_from_salesforce(session.result, failures)
-    except LLMError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    # The flow changed, so the previous approval no longer covers it.
-    session.record(result, "Repaired from Salesforce errors")
-    return view(body.session_id, session)
+    _start_llm(
+        session, session.generator.repair_from_salesforce, session.result, failures,
+        note="Repaired from Salesforce errors",
+    )
+    return {"started": True}
+
+
+@app.get("/api/repair/status")
+async def repair_status(session_id: str) -> Dict[str, Any]:
+    return _llm_status(session_id)
 
 
 @app.post("/api/deploy/start")

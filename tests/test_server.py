@@ -36,12 +36,6 @@ def scripted(monkeypatch):
     return install
 
 
-def design(client, **body):
-    response = client.post("/api/design", json={"request": "build it", **body})
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
 def poll(client, url, **params):
     """
     validate/deploy/import now hand back a job immediately and finish in the
@@ -55,6 +49,41 @@ def poll(client, url, **params):
         if response.status_code != 200 or response.json().get("done"):
             return response
     raise AssertionError(f"{url} never completed")
+
+
+def design(client, **body):
+    started = client.post("/api/design/start", json={"request": "build it", **body})
+    assert started.status_code == 200, started.text
+    job_id = started.json()["job_id"]
+    response = poll(client, "/api/design/status", job_id=job_id)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def refine(client, session_id, instruction="change it"):
+    started = client.post(
+        "/api/refine/start", json={"session_id": session_id, "instruction": instruction}
+    )
+    if started.status_code != 200:
+        return started
+    return poll(client, "/api/refine/status", session_id=session_id)
+
+
+def repair(client, session_id):
+    started = client.post("/api/repair/start", json={"session_id": session_id})
+    if started.status_code != 200:
+        return started
+    return poll(client, "/api/repair/status", session_id=session_id)
+
+
+def explain(client, session_id, question=None):
+    body = {"session_id": session_id}
+    if question is not None:
+        body["question"] = question
+    started = client.post("/api/explain/start", json=body)
+    if started.status_code != 200:
+        return started
+    return poll(client, "/api/explain/status", session_id=session_id)
 
 
 def stub_validate(monkeypatch, *results):
@@ -88,7 +117,9 @@ class TestDesign:
 
     def test_empty_request_is_rejected(self, client, scripted):
         scripted(VALID)
-        assert client.post("/api/design", json={"request": "  "}).status_code == 400
+        assert client.post(
+            "/api/design/start", json={"request": "  "}
+        ).status_code == 400
 
     def test_artifacts_are_downloadable(self, client, scripted):
         scripted(VALID)
@@ -134,9 +165,7 @@ class TestApprovalGate:
     def test_approving_a_stale_version_is_rejected(self, client, scripted):
         provider = scripted(VALID, VALID)
         session_id = design(client)["session_id"]
-        client.post(
-            "/api/refine", json={"session_id": session_id, "instruction": "change it"}
-        )
+        refine(client, session_id)
 
         # v1 is what the browser last rendered; the flow is now v2.
         response = client.post(
@@ -151,9 +180,7 @@ class TestApprovalGate:
         session_id = design(client)["session_id"]
         client.post("/api/approve", json={"session_id": session_id, "version": 1})
 
-        refined = client.post(
-            "/api/refine", json={"session_id": session_id, "instruction": "change it"}
-        ).json()
+        refined = refine(client, session_id).json()
         assert refined["approved"] is False
 
         assert client.post(
@@ -181,7 +208,7 @@ class TestRepairLoop:
         assert result["success"] is False
         assert "nothing is connected to Start" in result["failures"][0]
 
-        repaired = client.post("/api/repair", json={"session_id": session_id}).json()
+        repaired = repair(client, session_id).json()
         assert repaired["version"] == 2
         assert repaired["approved"] is False, "a repaired flow needs re-approval"
 
@@ -192,7 +219,7 @@ class TestRepairLoop:
         scripted(VALID)
         session_id = design(client)["session_id"]
         assert client.post(
-            "/api/repair", json={"session_id": session_id}
+            "/api/repair/start", json={"session_id": session_id}
         ).status_code == 400
 
 
@@ -217,7 +244,7 @@ class TestDeploymentPolicy:
         client.post("/api/validate/start", json={"session_id": session_id})
         poll(client, "/api/validate/status", session_id=session_id)
 
-        repaired = client.post("/api/repair", json={"session_id": session_id}).json()
+        repaired = repair(client, session_id).json()
         assert repaired["status"] == "Draft"
 
 
@@ -323,10 +350,7 @@ class TestBrowseTheOrg:
         ).json()["job_id"]
         session_id = poll(client, "/api/import/status", job_id=job_id).json()["session_id"]
 
-        refined = client.post(
-            "/api/refine",
-            json={"session_id": session_id, "instruction": "also set the description"},
-        ).json()
+        refined = refine(client, session_id, "also set the description").json()
         assert refined["version"] == 2
 
         # The model saw the existing flow before the instruction, so it edits
@@ -347,7 +371,7 @@ class TestExplain:
             lambda self, system, messages: "It marks accounts hot.", raising=False,
         )
         session_id = design(client)["session_id"]
-        data = client.post("/api/explain", json={"session_id": session_id}).json()
+        data = explain(client, session_id).json()
         assert data["explanation"] == "It marks accounts hot."
 
     def test_the_model_is_given_the_ir_not_the_xml(self, client, scripted, monkeypatch):
@@ -360,7 +384,7 @@ class TestExplain:
 
         monkeypatch.setattr(type(provider), "complete_text", fake_text, raising=False)
         session_id = design(client)["session_id"]
-        client.post("/api/explain", json={"session_id": session_id})
+        explain(client, session_id)
         assert '"api_name"' in seen["content"], "expected the IR"
         assert "<Flow" not in seen["content"], "the XML is bigger and adds nothing"
 
