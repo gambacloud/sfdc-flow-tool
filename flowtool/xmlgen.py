@@ -31,6 +31,7 @@ from .ir import (
     Subflow,
     TextTemplate,
     Value,
+    Wait,
 )
 
 METADATA_NS = "http://soap.sforce.com/2006/04/metadata"
@@ -369,6 +370,35 @@ def _write_screen(root: ET.Element, el: Screen, xy) -> None:
     _sub(node, "showHeader", _bool(el.show_header))
 
 
+def _write_wait(root: ET.Element, el: Wait, xy) -> None:
+    node = _sub(root, "waits")
+    # _write_common writes the plain connector, which a Pause does not have -
+    # the IR refuses `next` on one. Everything else it writes still applies.
+    _write_common(node, el, xy)
+    _connector(node, "defaultConnector", el.default_next)
+    _sub(node, "defaultConnectorLabel", el.default_label)
+    _fault(node, el)
+    for event in el.wait_events:
+        item = _sub(node, "waitEvents")
+        _sub(item, "name", event.name)
+        if event.conditions:
+            _sub(item, "conditionLogic", event.condition_logic)
+            for condition in event.conditions:
+                c = _sub(item, "conditions")
+                _sub(c, "leftValueReference", condition.left)
+                _sub(c, "operator", condition.operator)
+                if condition.right is not None:
+                    _value_el(c, "rightValue", condition.right)
+        _connector(item, "connector", event.next)
+        _sub(item, "eventType", event.event_type)
+        for parameter in event.input_parameters:
+            ip = _sub(item, "inputParameters")
+            _sub(ip, "name", parameter.name)
+            _value_el(ip, "value", parameter.value)
+        if event.label:
+            _sub(item, "label", event.label)
+
+
 def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
@@ -391,6 +421,7 @@ _WRITERS = {
     GetRecords: ("recordLookups", _write_get_records),
     RecordUpdate: ("recordUpdates", _write_record_update),
     Screen: ("screens", _write_screen),
+    Wait: ("waits", _write_wait),
     Subflow: ("subflows", _write_subflow),
 }
 
@@ -414,6 +445,7 @@ _ROOT_ORDER = [
     "recordUpdates",
     "screens",
     "subflows",
+    "waits",
 ]
 
 

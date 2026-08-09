@@ -1091,6 +1091,132 @@ class Screen(BaseElement):
     show_footer: bool = True
 
 
+class WaitEvent(BaseModel):
+    """
+    One thing a Pause is waiting for, and where to go when it happens.
+
+    `input_parameters` is a name/value bag rather than named fields, which is
+    against the grain of the rest of this IR. It is deliberate: the same tag
+    carries a platform event as carries a time, and the keys differ per event
+    type. Modelling only the times would refuse every event-driven pause; a bag
+    holds any of them and round-trips exactly.
+
+    What the bag costs is checking, so the two time events are checked here by
+    name. That is not belt and braces - the org validates *nothing* inside a
+    wait. It accepted an AlarmEvent with no parameters, an AlarmEvent whose
+    parameter was called AlarmTimeX, and an eventType of BananaEvent. All three
+    deploy, and a pause with no time to resume at simply never resumes.
+    """
+
+    name: str
+    label: Optional[str] = None
+    event_type: str = Field(
+        default="AlarmEvent",
+        description="'AlarmEvent' to resume at a time, 'DateRefAlarmEvent' to "
+        "resume relative to a date field on a record, or the API name of a "
+        "platform event to resume when one arrives.",
+    )
+    next: Optional[str] = Field(
+        default=None, description="What runs when this is what woke the flow."
+    )
+    conditions: List[Condition] = Field(
+        default_factory=list,
+        description="Extra conditions that must hold for this event to resume "
+        "the flow.",
+    )
+    condition_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+    input_parameters: List[InputAssignment] = Field(
+        default_factory=list,
+        description="What the event needs. For AlarmEvent: one named "
+        "'AlarmTime' holding a DateTime. For DateRefAlarmEvent: "
+        "'SalesforceObject', 'BaseDateTimeFieldName', 'RecordId', and "
+        "'TimeOffset' with 'TimeOffsetUnit'.",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "wait event name")
+
+    @model_validator(mode="after")
+    def the_event_can_actually_fire(self) -> "WaitEvent":
+        _check_logic(self.condition_logic, len(self.conditions),
+                     f"wait event {self.name!r}", "condition_logic", "condition")
+
+        given = {parameter.name for parameter in self.input_parameters}
+
+        def require(needed: set, why: str) -> None:
+            missing = sorted(needed - given)
+            if missing:
+                raise ValueError(
+                    f"wait event {self.name!r}: a {self.event_type} {why}, so it "
+                    f"needs the input parameter{'' if len(missing) == 1 else 's'} "
+                    f"{', '.join(repr(m) for m in missing)}. Salesforce deploys "
+                    "this without them and then never resumes."
+                )
+
+        if self.event_type == "AlarmEvent":
+            require({"AlarmTime"}, "resumes at a moment in time")
+        elif self.event_type == "DateRefAlarmEvent":
+            require(
+                {"SalesforceObject", "BaseDateTimeFieldName", "RecordId"},
+                "resumes relative to a date field on a record",
+            )
+            # Both or neither, as on a scheduled path: an offset with no unit
+            # does not say how much, and no offset at all means the date itself.
+            has_offset = "TimeOffset" in given
+            has_unit = "TimeOffsetUnit" in given
+            if has_offset != has_unit:
+                missing = "TimeOffsetUnit" if has_unit is False else "TimeOffset"
+                raise ValueError(
+                    f"wait event {self.name!r}: an offset needs both "
+                    f"'TimeOffset' and 'TimeOffsetUnit', and {missing!r} is "
+                    "missing. Leave out both to resume on the date itself."
+                )
+        return self
+
+
+class Wait(FaultCapable):
+    """
+    Pause: the flow stops here and Salesforce resumes it later.
+
+    Allowed in exactly one kind of flow, which the org states twice over:
+    "Flows of type "Screen Flow" can't include Pause elements", and "A flow
+    can't include Pause elements when TriggerType is set to Record-Run After
+    Save". So a Pause belongs to a plain autolaunched flow - the exact mirror of
+    a scheduled path, which is only allowed on a record-triggered one. When a
+    request needs a record change to lead to something days later, the answer is
+    usually a scheduled path, not this.
+
+    `next` is inherited but unused: a Pause leaves through its events, or
+    through `default_next` when none of them was what happened.
+    """
+
+    type: Literal["Wait"] = "Wait"
+    wait_events: List[WaitEvent] = Field(default_factory=list)
+    default_next: Optional[str] = Field(
+        default=None,
+        description="Where to go when the flow resumes for any other reason.",
+    )
+    # Required by the org even when there is no default connector to label:
+    # "Required field is missing: defaultConnectorLabel".
+    default_label: str = "Anything else"
+
+    @model_validator(mode="after")
+    def a_pause_has_a_way_out(self) -> "Wait":
+        if self.next:
+            raise ValueError(
+                f"{self.name}: a Pause does not have a plain `next`. It leaves "
+                "through a wait event's own `next`, or through `default_next` "
+                "when the flow resumed for some other reason."
+            )
+        names = [event.name for event in self.wait_events]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise ValueError(f"{self.name}: duplicate wait event names: {repeated}")
+        return self
+
+
 Element = Annotated[
     Union[
         ActionCall,
@@ -1103,6 +1229,7 @@ Element = Annotated[
         Loop,
         Screen,
         Subflow,
+        Wait,
     ],
     Field(discriminator="type"),
 ]
@@ -1342,6 +1469,10 @@ class Flow(BaseModel):
             targets.extend(oc.next for oc in element.outcomes if oc.next)
         if isinstance(element, Loop) and element.first_element:
             targets.append(element.first_element)
+        if isinstance(element, Wait):
+            targets.extend(event.next for event in element.wait_events if event.next)
+            if element.default_next:
+                targets.append(element.default_next)
         fault = getattr(element, "fault_next", None)
         if fault:
             targets.append(fault)
@@ -1371,6 +1502,15 @@ class Flow(BaseModel):
                     f"  {element.name} each -> {element.first_element or '(nothing)'}"
                 )
                 lines.append(f"  {element.name} done -> {element.next or '(ends)'}")
+            elif isinstance(element, Wait):
+                for event in element.wait_events:
+                    lines.append(
+                        f"  {element.name} on {event.name} -> "
+                        f"{event.next or '(ends)'}"
+                    )
+                lines.append(
+                    f"  {element.name} default -> {element.default_next or '(ends)'}"
+                )
             else:
                 lines.append(f"  {element.name} -> {element.next or '(ends)'}")
             fault = getattr(element, "fault_next", None)
@@ -1428,6 +1568,10 @@ class Flow(BaseModel):
         for path in self.start.scheduled_paths:
             check(path.next, f"scheduled path {path.name}")
         for el in self.elements:
+            if isinstance(el, Wait):
+                for event in el.wait_events:
+                    check(event.next, f"{el.name}.{event.name}.next")
+                check(el.default_next, f"{el.name}.default_next")
             check(el.next, f"{el.name}.next")
             if isinstance(el, Decision):
                 for oc in el.outcomes:
@@ -1530,6 +1674,40 @@ class Flow(BaseModel):
                 "trigger_type must all be empty. To react to a record change, use "
                 "process_type 'AutoLaunchedFlow' - but note that such a flow "
                 "cannot contain screens."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def a_pause_belongs_in_an_autolaunched_flow(self) -> "Flow":
+        """
+        Both halves are the org's own words, and between them they leave exactly
+        one kind of flow that may pause:
+
+          "Flows of type "Screen Flow" can't include Pause elements."
+          "A flow can't include Pause elements when TriggerType is set to
+           Record-Run After Save."
+
+        The mirror of scheduled_paths, which are allowed only where a Pause is
+        not. Worth saying in the error, because the request behind both is the
+        same one - do this later - and the right answer depends on what started
+        the flow.
+        """
+        pauses = sorted(e.name for e in self.elements if isinstance(e, Wait))
+        if not pauses:
+            return self
+        if self.process_type == "Flow":
+            raise ValueError(
+                f"\"Flows of type \"Screen Flow\" can't include Pause elements.\" "
+                f"{pauses} cannot be here. A screen flow runs while someone "
+                "waits for it, so there is nobody to come back to."
+            )
+        if self.start.trigger_type or self.start.object:
+            raise ValueError(
+                "\"A flow can't include Pause elements when TriggerType is set "
+                f"to Record-Run After Save.\" {pauses} cannot be in a "
+                "record-triggered flow. To do something later after a record "
+                "changes, add a scheduled_path to the start instead - that is "
+                "the same idea in the form this kind of flow allows."
             )
         return self
 

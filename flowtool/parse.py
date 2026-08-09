@@ -46,6 +46,8 @@ from .ir import (
     TextTemplate,
     Value,
     Variable,
+    Wait,
+    WaitEvent,
 )
 from .xmlgen import METADATA_NS
 
@@ -112,7 +114,7 @@ _IGNORED = {
 # Element collections this module can turn into IR.
 _SUPPORTED_ELEMENTS = {
     "actionCalls", "assignments", "decisions", "loops", "recordCreates", "recordDeletes",
-    "recordLookups", "recordUpdates", "screens", "subflows",
+    "recordLookups", "recordUpdates", "screens", "subflows", "waits",
 }
 
 # Resources rather than elements: nothing connects to them, screen fields name
@@ -124,7 +126,6 @@ _SUPPORTED_RESOURCES = {
 # Recognised Flow constructs the IR has no equivalent for. Named individually so
 # the message tells the user what is actually in their flow.
 _KNOWN_UNSUPPORTED = {
-    "waits": "wait / pause elements",
     "apexPluginCalls": "Apex plugin calls",
     "recordRollbacks": "rollback elements",
     "steps": "steps",
@@ -182,6 +183,9 @@ _ELEMENT_CHILDREN = {
     "actionCalls": _ELEMENT_COMMON | _FAULT | {
         "actionName", "actionType", "inputParameters", "storeOutputAutomatically",
     },
+    "waits": _ELEMENT_COMMON | _FAULT | {
+        "waitEvents", "defaultConnector", "defaultConnectorLabel",
+    },
     # No faultConnector: a screen cannot fail the way a DML element can.
     "screens": _ELEMENT_COMMON | {
         "fields", "allowBack", "allowFinish", "allowPause", "showFooter", "showHeader",
@@ -191,6 +195,13 @@ _ELEMENT_CHILDREN = {
 # Two levels below the root, and the reason this pass exists at all: a screen
 # whose field list was read but whose choices, components or visibility rules
 # were not would draw as a plain input box and lose them on the next deploy.
+# A wait event carries an open bag of parameters, so the allowlist is about the
+# tags around it rather than what is in it.
+_WAIT_EVENT_CHILDREN = {
+    "name", "label", "eventType", "connector", "conditions", "conditionLogic",
+    "inputParameters", "outputParameters", "offset", "processMetadataValues",
+}
+
 _SCREEN_FIELD_CHILDREN = {
     "name", "dataType", "fieldText", "fieldType", "isRequired", "choiceReferences",
     "defaultValue", "defaultSelectedChoiceReference", "scale",
@@ -418,18 +429,22 @@ def _read_assignment(node: ET.Element) -> Assignment:
     return Assignment(**_common(node), items=items)
 
 
+def _conditions(node: ET.Element) -> List[Condition]:
+    """Shared by a decision outcome and a wait event: the same tag, same shape."""
+    return [
+        Condition(
+            left=_text(condition, "m:leftValueReference") or "",
+            operator=_text(condition, "m:operator") or "EqualTo",
+            right=_value(condition.find("m:rightValue", NS)),
+        )
+        for condition in node.findall("m:conditions", NS)
+    ]
+
+
 def _read_decision(node: ET.Element) -> Decision:
     outcomes = []
     for rule in node.findall("m:rules", NS):
-        conditions = []
-        for condition in rule.findall("m:conditions", NS):
-            conditions.append(
-                Condition(
-                    left=_text(condition, "m:leftValueReference") or "",
-                    operator=_text(condition, "m:operator") or "EqualTo",
-                    right=_value(condition.find("m:rightValue", NS)),
-                )
-            )
+        conditions = _conditions(rule)
         outcomes.append(
             Outcome(
                 name=_text(rule, "m:name") or "",
@@ -553,6 +568,26 @@ def _read_choice_set(node: ET.Element) -> DynamicChoiceSet:
     )
 
 
+def _read_wait(node: ET.Element) -> Wait:
+    events = []
+    for item in node.findall("m:waitEvents", NS):
+        events.append(WaitEvent(
+            name=_text(item, "m:name") or "",
+            label=_text(item, "m:label"),
+            event_type=_text(item, "m:eventType") or "AlarmEvent",
+            next=_target(item, "connector"),
+            conditions=_conditions(item),
+            condition_logic=_text(item, "m:conditionLogic") or "and",
+            input_parameters=_read_component_inputs(item),
+        ))
+    return Wait(
+        **_fault_common(node),
+        wait_events=events,
+        default_next=_target(node, "defaultConnector"),
+        default_label=_text(node, "m:defaultConnectorLabel") or "Anything else",
+    )
+
+
 def _read_scheduled_paths(start_node: Optional[ET.Element]) -> List[ScheduledPath]:
     if start_node is None:
         return []
@@ -665,6 +700,7 @@ _READERS = {
     "recordLookups": _read_get_records,
     "recordUpdates": _read_record_update,
     "screens": _read_screen,
+    "waits": _read_wait,
     "subflows": _read_subflow,
 }
 
@@ -714,6 +750,15 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         for node in root.findall(f"m:{tag}", NS):
             name = _text(node, "m:name") or tag
             reasons.extend(_unknown_children(node, allowed, name))
+
+    # And one level down again, for the two elements that nest. A wait event is
+    # where the flow's resume condition lives, so an attribute read as absent
+    # there is a flow that comes back at the wrong time - or not at all.
+    for node in root.findall("m:waits", NS):
+        for item in node.findall("m:waitEvents", NS):
+            where = (f"{_text(node, 'm:name') or 'a Pause'}."
+                     f"{_text(item, 'm:name') or '(unnamed event)'}")
+            reasons.extend(_unknown_children(item, _WAIT_EVENT_CHILDREN, where))
 
     # Resources get the same treatment: a choice read without its userInput would
     # lose the user's own typed answer on the next deploy.

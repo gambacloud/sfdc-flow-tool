@@ -27,6 +27,7 @@ from .ir import (
     Screen,
     Subflow,
     Value,
+    Wait,
     referenced_conditions,
 )
 
@@ -154,6 +155,49 @@ def _path_timing(path) -> str:
     return f"{size} {unit}{'' if size == 1 else 's'} {when} {anchor}"
 
 
+_EVENT_WORD = {
+    "AlarmEvent": "until a time",
+    "DateRefAlarmEvent": "until a date on a record",
+}
+
+
+def _wait_parameter(event, key: str) -> Optional[str]:
+    for parameter in event.input_parameters:
+        if parameter.name == key:
+            return value_text(parameter.value)
+    return None
+
+
+def _wait_event_text(event) -> str:
+    """
+    What a wait event is waiting for, as far as the IR can tell.
+
+    The parameters are a name/value bag because the same tag carries a platform
+    event as carries a time, so this reads the keys it knows and falls back to
+    naming the event type. A reader needs to see something about why the flow
+    stopped: a Pause with no explanation is the least reviewable thing a flow
+    can contain.
+    """
+    if event.event_type == "AlarmEvent":
+        when = _wait_parameter(event, "AlarmTime")
+        return f"until {when}" if when else "until a time"
+    if event.event_type == "DateRefAlarmEvent":
+        field = _wait_parameter(event, "BaseDateTimeFieldName")
+        offset = _wait_parameter(event, "TimeOffset")
+        unit = _wait_parameter(event, "TimeOffsetUnit")
+        anchor = field.strip('"') if field else "a date field"
+        if offset and unit:
+            return f"until {offset} {unit.strip(chr(34)).lower()} from {anchor}"
+        return f"until {anchor}"
+    return f"for {event.event_type}"
+
+
+def _wait_caption(element) -> str:
+    if not element.wait_events:
+        return "waits for nothing"
+    return "; ".join(_wait_event_text(event) for event in element.wait_events)
+
+
 def _join(parts: Iterable[str], logic: str) -> str:
     """
     Combine conditions the way the flow does.
@@ -203,6 +247,10 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
     if isinstance(element, Screen):
         # Hexagon: the only place the flow stops and waits for a person.
         return f'{name}{{{{"{text}"}}}}'
+    if isinstance(element, Wait):
+        # Stadium, like Start and End: the flow genuinely stops here and a
+        # later event starts it again, so it reads as a terminus, not a step.
+        return f'{name}(["{text}"])'
     if isinstance(element, ActionCall):
         # Mermaid's trapezoid ends with a literal backslash, hence the raw string.
         return rf'{name}[/"{text}"\]'
@@ -234,6 +282,8 @@ def _element_caption(element: Element) -> str:
         return f"{element.label}\n{detail}"
     if isinstance(element, Loop):
         return f"{element.label}\nFor each {element.collection_reference}"
+    if isinstance(element, Wait):
+        return f"{element.label}\n{_wait_caption(element)}"
     if isinstance(element, Subflow):
         return f"{element.label}\nCall {element.flow_name}"
     if isinstance(element, Screen):
@@ -310,6 +360,15 @@ def to_mermaid(flow: Flow) -> str:
         elif isinstance(element, Loop):
             edge(element.name, element.first_element, "each")
             edge(element.name, element.next, "done", dotted=True)
+        elif isinstance(element, Wait):
+            # Every exit is dotted: the flow is not running between here and
+            # there. Time passes on each of these edges, which is the one thing
+            # a reader has to see about a Pause.
+            for event in element.wait_events:
+                edge(element.name, event.next, event.label or event.name,
+                     dotted=True)
+            edge(element.name, element.default_next, element.default_label,
+                 dotted=True)
         else:
             edge(element.name, element.next)
 
@@ -340,6 +399,7 @@ _TYPE_LABEL = {
     RecordDelete: "Delete Records",
     Loop: "Loop",
     Screen: "Screen",
+    Wait: "Pause",
     Subflow: "Subflow",
     ActionCall: "Action",
 }
@@ -446,6 +506,21 @@ def _element_detail(element: Element) -> str:
             parts.append(detail)
         return "<br>".join(parts)
 
+    if isinstance(element, Wait):
+        parts = []
+        for event in element.wait_events:
+            line = f"**{event.label or event.name}**: waits {_wait_event_text(event)}"
+            if event.conditions:
+                line += " and " + _join(
+                    (condition_text(c) for c in event.conditions),
+                    event.condition_logic,
+                )
+            parts.append(f"{line} -> `{event.next or 'End'}`")
+        parts.append(
+            f"**{element.default_label}** -> `{element.default_next or 'End'}`"
+        )
+        return "<br>".join(parts)
+
     if isinstance(element, Subflow):
         detail = f"calls `{element.flow_name}`"
         if element.input_assignments:
@@ -513,6 +588,10 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
         detail = _element_detail(element) or "—"
         if isinstance(element, Decision):
             next_label = "see outcomes"
+        elif isinstance(element, Wait):
+            # A Pause has no plain `next` - the IR refuses one - so the column
+            # would otherwise read "End" for an element that continues.
+            next_label = "see events"
         elif isinstance(element, Loop):
             next_label = f"`{element.next}`" if element.next else "End"
         else:

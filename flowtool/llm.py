@@ -175,6 +175,27 @@ checks it before the org does. Keep it to what the request actually needs. \
 Conditions on a Decision are still structured - never move logic into a formula \
 to avoid writing a condition.
 
+## Waiting inside the flow
+
+A `Wait` element (Pause) stops the flow and Salesforce resumes it later. It is \
+allowed in **only one kind of flow**, and the org says so twice over: not in a \
+screen flow, and not in a record-triggered one. So a Pause belongs to a plain \
+autolaunched flow with no `object` and no `trigger_type`.
+
+**If the request starts with a record changing, you want a scheduled path, not \
+a Pause.** They are the same idea - do this later - in the two forms Salesforce \
+allows, and which one is right is decided by what started the flow.
+
+- A Pause has no `next`. It leaves through each wait event's own `next`, or \
+through `default_next` when the flow resumed for some other reason.
+- `AlarmEvent` resumes at a moment in time: one `input_parameters` entry named \
+`AlarmTime` whose value is a DateTime reference.
+- `DateRefAlarmEvent` resumes relative to a date field on a record: \
+`SalesforceObject`, `BaseDateTimeFieldName`, `RecordId`, and optionally \
+`TimeOffset` with `TimeOffsetUnit`.
+- Salesforce checks none of this. A Pause with no `AlarmTime`, or with the name \
+misspelled, deploys and then never resumes.
+
 ## Doing something later
 
 "Three days after", "an hour before it is due", "next week" - that is a \

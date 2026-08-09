@@ -490,7 +490,6 @@ class TestUnsupported:
 
     @pytest.mark.parametrize("tag,expected", [
         ("recordRollbacks", "rollback elements"),
-        ("waits", "wait / pause elements"),
         ("transforms", "transform elements"),
         ("collectionProcessors", "collection filter/sort"),
     ])
@@ -513,7 +512,7 @@ class TestUnsupported:
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self._xml(
                 "<recordRollbacks><name>A</name></recordRollbacks>"
-                "<waits><name>B</name></waits>"
+                "<transforms><name>B</name></transforms>"
             ))
         assert len(caught.value.reasons) == 2
 

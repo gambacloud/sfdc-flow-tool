@@ -222,7 +222,7 @@ SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 
 UNSUPPORTED_XML = SAMPLE_XML.replace(
     "<label>Existing Flow</label>",
-    "<waits><name>Hold</name></waits><label>Existing Flow</label>",
+    "<recordRollbacks><name>Undo</name></recordRollbacks><label>Existing Flow</label>",
 )
 
 
@@ -278,7 +278,7 @@ class TestBrowseTheOrg:
         stub_org(monkeypatch, xml=UNSUPPORTED_XML)
         response = client.post("/api/import", json={"api_name": "Existing_Flow"})
         assert response.status_code == 422
-        assert "wait / pause elements" in response.json()["detail"]
+        assert "rollback elements" in response.json()["detail"]
 
     def test_an_imported_flow_can_be_refined(self, client, scripted, monkeypatch):
         provider = scripted(VALID)

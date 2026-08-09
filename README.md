@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-559 tests, none of which need a key, a network, or an org.
+594 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -123,10 +123,11 @@ validate and deploy refuse unless the version you approved is still current.
 SFDC Flow Tool retrieves the metadata, parses it back into IR, and draws it. From
 there it behaves like any other flow — explain, refine, approve, redeploy.
 
-A flow using waits, formula resources, or other constructs the IR can't hold is
-**refused, not drawn approximately**, naming what it found. Skipping those parts
-would show a diagram of a different flow than the one in the org, and editing
-from that diagram would delete them on deploy.
+A flow using orchestration stages, collection filters, transforms, or other
+constructs the IR can't hold is **refused, not drawn approximately**, naming
+what it found. Skipping those parts would show a diagram of a different flow
+than the one in the org, and editing from that diagram would delete them on
+deploy.
 
 `parse(generate(ir)) == ir` is asserted for every element type in
 `tests/test_roundtrip.py`. That property is what makes an edit round-trip safe.
@@ -158,15 +159,15 @@ actually blocks the ones it can't take:
 What blocks them:
 
   seen  frees
-     9      6  ############################  element:waits
-     4      1  ############                  element:formulas
-     2      0  ######                        child:visibilityRule
-     1      0  ###                           screen_field:RegionContainer
+     9      6  ############################  child:visibilityRule
+     4      1  ############                  element:collectionProcessors
+     2      0  ######                        screen_field:RegionContainer
+     1      0  ###                           element:orchestratedStages
 
   seen  = flows this appears in
   frees = flows that would parse if only this were supported
 
-Biggest single win: supporting element:waits would unblock 6 of 47 flows on its own.
+Biggest single win: supporting child:visibilityRule would unblock 6 of 47 flows on its own.
 ```
 
 The two columns differ because a flow blocked by several things is freed by
@@ -241,6 +242,7 @@ Record-triggered, autolaunched, and screen flows:
 | Get / Create / Update / Delete Records | Get can name its fields and store into a variable; Create can save the new Id |
 | Loop | |
 | **Scheduled paths** | Run a branch later — three days after the trigger, a day before a date field, or straight away in its own transaction |
+| **Pause** | Stop and resume at a time, at a date on a record, or when a platform event arrives |
 | Subflow | |
 | **Action** | Email alerts, Send Email, Apex invocables, Chatter posts — anything with an `actionType` |
 | **Screen** | Display text, input fields, long text areas, and pickers, with defaults |
@@ -258,6 +260,21 @@ resource that does not exist, was accepted under `checkOnly` — so neither the 
 nor the validation step will catch a bad formula. That is why the approval
 documentation quotes every expression verbatim: for a formula, a person reading
 it is the only check there is.
+
+### Two ways to do something later, and no choice about which
+
+Salesforce has both, and allows each in exactly the place the other is refused:
+
+| | Scheduled path | Pause |
+|---|---|---|
+| Lives on | the flow's start | its own element |
+| Allowed in | a record-triggered flow, after save | a plain autolaunched flow |
+| Refused in | anything else, by the org | a screen flow, and any record-triggered flow |
+
+So "chase it in three days" is a scheduled path when a record change started it,
+and a Pause when Apex or another flow did. The request is identical and the
+answer is not, which is why the IR names the other one when it refuses:
+reaching for a Pause in a record-triggered flow is a reasonable mistake.
 
 ### Custom condition logic
 

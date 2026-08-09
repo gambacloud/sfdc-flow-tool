@@ -49,30 +49,30 @@ class TestCounting:
         assert survey.total == 1
 
     def test_a_blocker_counts_once_per_flow_not_once_per_occurrence(self):
-        # Three waits in one flow is one flow blocked by waits.
+        # Three rollbacks in one flow is one flow blocked by rollbacks.
         survey = Survey()
         survey.add("Screeny", xml(
-            "<waits><name>A</name></waits>"
-            "<waits><name>B</name></waits>"
-            "<waits><name>C</name></waits>"
+            "<recordRollbacks><name>A</name></recordRollbacks>"
+            "<recordRollbacks><name>B</name></recordRollbacks>"
+            "<recordRollbacks><name>C</name></recordRollbacks>"
         ))
-        assert survey.codes["element:waits"] == 1
+        assert survey.codes["element:recordRollbacks"] == 1
 
     def test_every_blocker_in_a_flow_is_counted(self):
         survey = Survey()
         survey.add("Both", xml(
-            "<transforms><name>T</name></transforms><waits><name>W</name></waits>"
+            "<transforms><name>T</name></transforms><recordRollbacks><name>W</name></recordRollbacks>"
         ))
         assert survey.codes["element:transforms"] == 1
-        assert survey.codes["element:waits"] == 1
-        assert survey.flows_by_code["element:waits"] == ["Both"]
+        assert survey.codes["element:recordRollbacks"] == 1
+        assert survey.flows_by_code["element:recordRollbacks"] == ["Both"]
 
     def test_counts_add_up_across_flows(self):
         survey = Survey()
         for name in ("A", "B", "C"):
-            survey.add(name, xml("<waits><name>W</name></waits>"))
+            survey.add(name, xml("<recordRollbacks><name>W</name></recordRollbacks>"))
         survey.add("D", clean_flow_xml())
-        assert survey.codes["element:waits"] == 3
+        assert survey.codes["element:recordRollbacks"] == 3
         assert survey.total == 4
         assert len(survey.parsed) == 1
 
@@ -89,7 +89,7 @@ class TestCounting:
     def test_elements_are_tallied_only_for_flows_that_parse(self):
         survey = Survey()
         survey.add("Good", clean_flow_xml())
-        survey.add("Bad", xml("<waits><name>W</name></waits>"))
+        survey.add("Bad", xml("<recordRollbacks><name>W</name></recordRollbacks>"))
         assert survey.element_counts["GetRecords"] == 1
         assert survey.element_counts["RecordUpdate"] == 1
 
@@ -104,23 +104,23 @@ class TestWhatWouldActuallyHelp:
     def test_a_code_that_never_stands_alone_frees_nothing(self):
         survey = Survey()
         survey.add("Two_Problems", xml(
-            "<transforms><name>T</name></transforms><waits><name>W</name></waits>"
+            "<transforms><name>T</name></transforms><recordRollbacks><name>W</name></recordRollbacks>"
         ))
         assert survey.codes["element:transforms"] == 1, "it is still counted as seen"
         assert survey.would_unblock()["element:transforms"] == 0, "but it frees nothing"
 
     def test_a_sole_blocker_frees_its_flow(self):
         survey = Survey()
-        survey.add("One_Problem", xml("<waits><name>W</name></waits>"))
-        assert survey.would_unblock()["element:waits"] == 1
+        survey.add("One_Problem", xml("<recordRollbacks><name>W</name></recordRollbacks>"))
+        assert survey.would_unblock()["element:recordRollbacks"] == 1
 
     def test_managed_flows_do_not_drive_the_recommendation(self):
         # The first real survey's top answer was a Salesforce-installed flow
         # nobody can edit.
         survey = Survey()
-        survey.add("sfdc_default_Something", xml("<waits><name>W</name></waits>"))
-        assert survey.codes["element:waits"] == 1
-        assert survey.would_unblock()["element:waits"] == 0
+        survey.add("sfdc_default_Something", xml("<recordRollbacks><name>W</name></recordRollbacks>"))
+        assert survey.codes["element:recordRollbacks"] == 1
+        assert survey.would_unblock()["element:recordRollbacks"] == 0
         assert "sfdc_default_Something" in survey.managed
 
     @pytest.mark.parametrize("name,managed", [
@@ -137,7 +137,7 @@ class TestWhatWouldActuallyHelp:
     def test_the_report_says_so_when_nothing_helps_alone(self, capsys):
         survey = Survey()
         survey.add("Two_Problems", xml(
-            "<transforms><name>T</name></transforms><waits><name>W</name></waits>"
+            "<transforms><name>T</name></transforms><recordRollbacks><name>W</name></recordRollbacks>"
         ))
         report(survey, verbose=False)
         out = capsys.readouterr().out
@@ -242,7 +242,7 @@ class TestOutput:
         survey = Survey()
         for name in ("A", "B"):
             survey.add(name, xml("<transforms><name>T</name></transforms>"))
-        survey.add("C", xml("<waits><name>W</name></waits>"))
+        survey.add("C", xml("<recordRollbacks><name>W</name></recordRollbacks>"))
         report(survey, verbose=False)
         out = capsys.readouterr().out
         assert "3 flows" in out
@@ -252,12 +252,12 @@ class TestOutput:
     def test_json_is_serialisable_and_complete(self):
         survey = Survey()
         survey.add("Good", clean_flow_xml())
-        survey.add("Bad", xml("<waits><name>W</name></waits>"))
+        survey.add("Bad", xml("<recordRollbacks><name>W</name></recordRollbacks>"))
         payload = json.loads(json.dumps(as_json(survey)))
         assert payload["total"] == 2
         assert payload["parsed"] == ["Good"]
-        assert payload["codes"]["element:waits"] == 1
-        assert payload["flows_by_code"]["element:waits"] == ["Bad"]
+        assert payload["codes"]["element:recordRollbacks"] == 1
+        assert payload["flows_by_code"]["element:recordRollbacks"] == ["Bad"]
 
 
 class TestOutOfScopeIsNeverRecommended:
@@ -284,10 +284,10 @@ class TestOutOfScopeIsNeverRecommended:
         # Two flows blocked only by a legacy process type, one by a real gap.
         for name in ("Legacy_A", "Legacy_B"):
             survey.add(name, xml(process_type="Workflow"))
-        survey.add("Fixable", xml("<waits><name>W</name></waits>"))
+        survey.add("Fixable", xml("<recordRollbacks><name>W</name></recordRollbacks>"))
         report(survey, verbose=False)
         out = capsys.readouterr().out
-        assert "Biggest single win: supporting element:waits" in out, (
+        assert "Biggest single win: supporting element:recordRollbacks" in out, (
             "the recommendation must skip what was decided against, even when "
             "it appears in more flows"
         )
