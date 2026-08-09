@@ -345,6 +345,11 @@ def config() -> Dict[str, Any]:
         "orgs": orgs,
         "sf_cli": cli,
         "env_file": str(ROOT / ".env"),
+        # DYNO is set by the Heroku runtime on every dyno, unset everywhere
+        # else - there is no .env file to point someone at on Heroku, since
+        # config there lives in Config Vars and ROOT is wherever pip installed
+        # this package, not the app's own directory.
+        "heroku": "DYNO" in os.environ,
         # Same Connected App and same env var name as salesforce-debugtool, so
         # a Heroku deployment that already sets one for that app needs nothing
         # new here. Empty means the login buttons stay hidden.

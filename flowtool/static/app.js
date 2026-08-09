@@ -668,12 +668,18 @@ async function boot() {
     // Refresh once the key is finished, not on every keystroke.
     $("apiKey").addEventListener("change", loadModels);
 
-    const org = $("org");
-    if (config.orgs.length) {
-      org.add(new Option("(default org)", ""));
-      config.orgs.forEach((name) => org.add(new Option(name, name)));
+    // With no sf CLI on this host, the picker can only ever offer "sf CLI not
+    // installed" - not a choice, just noise next to the OAuth login buttons.
+    if (config.sf_cli) {
+      const org = $("org");
+      if (config.orgs.length) {
+        org.add(new Option("(default org)", ""));
+        config.orgs.forEach((name) => org.add(new Option(name, name)));
+      } else {
+        org.add(new Option("no orgs", ""));
+      }
     } else {
-      org.add(new Option(config.sf_cli ? "no orgs" : "sf CLI not installed", ""));
+      $("org").closest(".header-org").hidden = true;
     }
 
     if (config.clientId) {
@@ -687,12 +693,18 @@ async function boot() {
     renderOAuthStatus();
 
     const bits = [];
-    bits.push(
-      config.providers.length
-        ? `LLM: ${config.providers.join(", ")}`
-        : `no LLM key - add one to ${config.env_file}`
-    );
-    if (!config.sf_cli) bits.push("sf CLI not found - validation unavailable");
+    if (config.providers.length) {
+      bits.push(`LLM: ${config.providers.join(", ")}`);
+    } else if (config.heroku) {
+      bits.push("no LLM key - set ANTHROPIC_API_KEY or GEMINI_API_KEY as a config var");
+    } else {
+      bits.push(`no LLM key - add one to ${config.env_file}`);
+    }
+    // sf CLI is only the way in when there is no OAuth login configured either -
+    // with a clientId set, the login buttons already cover validate/deploy.
+    if (!config.sf_cli && !config.clientId) {
+      bits.push("sf CLI not found - validation unavailable");
+    }
     $("env").textContent = bits.join("  ·  ");
   } catch (err) {
     $("env").textContent = "Could not reach the server: " + err.message;

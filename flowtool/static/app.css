@@ -29,6 +29,13 @@
 
 * { box-sizing: border-box; }
 
+/* Several header blocks set their own `display` unconditionally (flex, for
+   alignment), which otherwise beats the UA stylesheet's `[hidden]{display:
+   none}` - an author rule always wins over a user-agent one regardless of
+   specificity. Without this, toggling `.hidden` on those elements does
+   nothing visible. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
