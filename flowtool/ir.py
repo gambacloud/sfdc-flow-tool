@@ -1607,7 +1607,8 @@ class Start(BaseModel):
         Literal["Create", "Update", "CreateAndUpdate", "Delete"]
     ] = None
     trigger_type: Optional[
-        Literal["RecordAfterSave", "RecordBeforeSave", "RecordBeforeDelete", "Scheduled"]
+        Literal["RecordAfterSave", "RecordBeforeSave", "RecordBeforeDelete",
+                "Scheduled", "PlatformEvent"]
     ] = None
     filters: List[RecordFilter] = Field(default_factory=list)
     filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
@@ -1655,8 +1656,19 @@ class Start(BaseModel):
             raise ValueError("a record-triggered start requires trigger_type")
         if self.trigger_type and self.trigger_type != "Scheduled" and not self.object:
             raise ValueError(f"trigger_type {self.trigger_type} requires an object")
-        if self.object and not self.record_trigger_type:
+        # A platform event has no create-or-update to distinguish: the event is
+        # published, and that is the only thing that ever happens to one. The
+        # org takes a recordTriggerType here and ignores it; requiring one would
+        # mean asking for an answer to a question the trigger does not pose.
+        if (self.object and not self.record_trigger_type
+                and self.trigger_type != "PlatformEvent"):
             raise ValueError("a record-triggered start requires record_trigger_type")
+        if self.trigger_type == "PlatformEvent" and self.record_trigger_type:
+            raise ValueError(
+                "a platform event is only ever published, so "
+                f"record_trigger_type {self.record_trigger_type!r} has nothing "
+                "to describe. Leave it empty."
+            )
         return self
 
 

@@ -61,7 +61,21 @@ NS = {"m": METADATA_NS}
 # should keep counting them - the count is the evidence for the decision - but
 # never recommend building them. Without this the report kept naming migrated
 # Workflow Rules as the biggest available win, survey after survey.
-OUT_OF_SCOPE = frozenset({"process_type:Workflow"})
+#
+# CustomEvent joined them after being looked at properly. It sounds like the
+# platform-event trigger and is not: the org refuses to let a CustomEvent flow
+# carry one ("Flows of type CustomEvent can't have the trigger type
+# PlatformEvent"). Both in the public corpus are Process Builder migrations -
+# myVariable_* names, an interviewLabel ending -6_InterviewLabel, no <start> at
+# all - and the event they listen for is recorded only in processMetadataValues,
+# which is Process Builder's own commentary and is neither read nor written
+# here. Parsing one and deploying it back would drop the record of which event
+# starts it: a flow that looks editable and loses something on the way out,
+# which is the one thing this parser exists to prevent.
+#
+# What people actually build today is an AutoLaunchedFlow with
+# triggerType PlatformEvent, and that is supported.
+OUT_OF_SCOPE = frozenset({"process_type:Workflow", "process_type:CustomEvent"})
 
 
 @dataclass(frozen=True)

@@ -64,7 +64,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-776 tests, none of which need a key, a network, or an org.
+788 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -273,7 +273,7 @@ should always be empty.
 
 ## What it covers
 
-Record-triggered, autolaunched, and screen flows:
+Record-triggered, platform-event-triggered, autolaunched, and screen flows:
 
 | | |
 |---|---|
@@ -345,12 +345,27 @@ character by character.
 
 ### Deliberately out of scope
 
-**Migrated Workflow Rules** (`processType: Workflow`). They are a legacy
-migration artefact, not something anyone authors today, and supporting them
+**Migrated Workflow Rules** (`processType: Workflow`) and **migrated Process
+Builder platform-event processes** (`processType: CustomEvent`). Both are legacy
+migration artefacts, not something anyone authors today, and supporting them
 would mean carrying their shape forever. A survey keeps counting them — the
 count is the evidence for the decision — but marks them `(out of scope)` and
-never recommends them. Before that, the headline recommended building them
-every single run.
+never recommends them. Before that, the headline recommended building them every
+single run.
+
+`CustomEvent` is worth spelling out, because the name makes it look like the
+platform-event trigger and it is not — the org refuses to let one carry that
+trigger at all: *"Flows of type CustomEvent can't have the trigger type
+PlatformEvent."* Both in the public corpus are Process Builder migrations, and
+the event they listen for is recorded only inside `processMetadataValues`, which
+is Process Builder's own commentary and is neither read nor written here. Parsing
+one and deploying it back would drop the record of which event starts it — a flow
+that looks editable and loses something on the way out.
+
+What people build today is an autolaunched flow with `triggerType:
+PlatformEvent`, and **that is supported**: set the start's `object` to the event
+and read its fields as `$Record`. It takes no `record_trigger_type`, because an
+event is only ever published.
 
 **Screen flows** are complete as far as the planned stages went: text and
 inputs, choices, LWC and Aura components, and then sections, columns,

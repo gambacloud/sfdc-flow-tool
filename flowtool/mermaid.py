@@ -303,13 +303,20 @@ def _start_caption(flow: Flow) -> str:
         return "Start\nRun by a user"
     if not flow.start.object:
         return "Start\nAutolaunched"
-    trigger = {
-        "RecordAfterSave": "after save",
-        "RecordBeforeSave": "before save",
-        "RecordBeforeDelete": "before delete",
-        "Scheduled": "scheduled",
-    }.get(flow.start.trigger_type or "", flow.start.trigger_type or "")
-    caption = f"{flow.start.object} {flow.start.record_trigger_type} ({trigger})"
+    # A platform event has no record_trigger_type - it is only ever published -
+    # so the usual "Object Create (after save)" shape would read
+    # "My_Event__e None (platform event)".
+    if flow.start.trigger_type == "PlatformEvent":
+        caption = f"{flow.start.object} published"
+    else:
+        trigger = {
+            "RecordAfterSave": "after save",
+            "RecordBeforeSave": "before save",
+            "RecordBeforeDelete": "before delete",
+            "Scheduled": "scheduled",
+        }.get(flow.start.trigger_type or "", flow.start.trigger_type or "")
+        caption = (f"{flow.start.object} {flow.start.record_trigger_type} "
+                   f"({trigger})")
     if flow.start.filters:
         caption += "\n" + _join(
             (filter_text(f) for f in flow.start.filters), flow.start.filter_logic
@@ -335,7 +342,11 @@ def to_mermaid(flow: Flow) -> str:
             needs_end = True
         arrow = "-.->" if dotted else "-->"
         if label:
-            edges.append(f"    {source} {arrow}|{_escape(label)}| {target}")
+            # Unlike node labels, edge pipe-text is unquoted by default, so
+            # parentheses or a colon in the text (e.g. "Success (200/201): ...")
+            # get read as Mermaid syntax instead of label text. Quoting it,
+            # like every node label already is, fixes that.
+            edges.append(f'    {source} {arrow}|"{_escape(label)}"| {target}')
         else:
             edges.append(f"    {source} {arrow} {target}")
 
@@ -630,7 +641,13 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
         lines.append(
             f"- **Object**: `{flow.start.object}`"
         )
-        lines.append(f"- **When**: {flow.start.record_trigger_type} / {flow.start.trigger_type}")
+        if flow.start.trigger_type == "PlatformEvent":
+            lines.append("- **When**: every time one of these events is published")
+        else:
+            lines.append(
+                f"- **When**: {flow.start.record_trigger_type} / "
+                f"{flow.start.trigger_type}"
+            )
         if flow.start.filters:
             criteria = _join(
                 (filter_text(f) for f in flow.start.filters), flow.start.filter_logic

@@ -224,6 +224,16 @@ SHAPES: List[Shape] = [
     Shape("records", "update the triggering record", triggered(
         "Update_Trigger", mark_hot(),
     )),
+    Shape("records", "triggered by a platform event", Flow(
+        api_name="Flow_Tool_Verify_Platform_Event",
+        label="Flow Tool Verify Platform Event",
+        start=Start(next="Note", object="BatchApexErrorEvent",
+                    trigger_type="PlatformEvent"),
+        variables=[TEXT],
+        elements=[Assignment(name="Note", label="Note", items=[
+            AssignmentItem(to_reference="v_Text",
+                           value=Value(string_value="seen"))])],
+    ), "BatchApexErrorEvent is standard, so this needs nothing set up"),
     Shape("records", "delete by criteria", flow(
         "Delete_By_Criteria",
         RecordDelete(name="Remove", label="Remove", object="Task",
@@ -573,6 +583,11 @@ GUARDS: List[Guard] = [
                              name="value", assign_to_reference="v_Count")]),
           org="rejects it, quoted verbatim in the IR's message"),
 
+    Guard("records", "a platform event asked which record change started it",
+          lambda: Start(next="Note", object="Order_Placed__e",
+                        trigger_type="PlatformEvent",
+                        record_trigger_type="Create"),
+          org="accepts it and ignores it - an event is only ever published"),
     Guard("records", "a field assigned into a variable that does not exist",
           lambda: flow("X", GetRecords(
               name="Get", label="Get", object="Account",

@@ -157,6 +157,11 @@ cannot assign into its fields. To change values on it, use Update Records by \
 criteria filtered on its Id.
 - Record-triggered flows must set `object`, `record_trigger_type`, and \
 `trigger_type` on start. Autolaunched flows leave all three empty.
+- A flow that runs when a platform event is published sets `object` to the \
+event (`Order_Placed__e`) and `trigger_type` to `PlatformEvent`, and leaves \
+`record_trigger_type` empty - an event is only ever published, so there is no \
+create-or-update to choose between. Its fields are read as `$Record` like any \
+other triggering record.
 - Reference the triggering record as `$Record` (for example `$Record.Amount`), \
 and a retrieved record by its element name (for example `Get_Account.Id`).
 - Element names, variable names and screen field names share one namespace. \

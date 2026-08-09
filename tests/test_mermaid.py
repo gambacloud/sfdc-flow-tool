@@ -97,7 +97,7 @@ class TestFaultPaths:
             ],
         )
         diagram = to_mermaid(flow)
-        assert "Get -.->|on error| Log" in diagram
+        assert 'Get -.->|"on error"| Log' in diagram
 
 
 class TestLabels:
