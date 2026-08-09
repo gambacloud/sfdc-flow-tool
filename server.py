@@ -547,7 +547,11 @@ async def explain_status(session_id: str) -> Dict[str, Any]:
         explanation = task.result()
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"done": True, "explanation": explanation}
+    return {
+        "done": True,
+        "explanation": explanation,
+        "usage": session.generator.provider.usage.as_dict(),
+    }
 
 
 def _start_llm(session: Session, func, *args, note: str) -> None:

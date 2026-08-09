@@ -11,6 +11,8 @@ const state = {
   artifacts: {},
   tab: "diagram",
   org: null, // { accessToken, instanceUrl } once logged into Salesforce directly
+  usage: null, // cumulative token usage for this session, refreshed on every model call
+  errors: [], // every error message shown to the user this session, newest first
 };
 
 let mermaid = null;
@@ -85,6 +87,63 @@ function showError(where, message) {
   node.className = "error";
   node.textContent = message;
   where.appendChild(node);
+}
+
+// Every error the user sees also lands in the Logs panel, so a failure that
+// happened three actions ago is still findable instead of gone the moment the
+// next click clears it from view.
+function logError(label, message) {
+  if (!message) return;
+  state.errors.unshift({ time: new Date(), label, message });
+  if (state.errors.length > 50) state.errors.length = 50;
+  renderLogs();
+}
+
+// Shared by the inline usage line under the flow header and the Logs panel,
+// so the two never disagree about what a session has cost so far.
+function usageText(usage) {
+  if (!usage || !usage.calls) return "";
+  const bits = [
+    `${usage.calls} model call${usage.calls === 1 ? "" : "s"}`,
+    `${usage.input_tokens.toLocaleString()} in`,
+    `${usage.output_tokens.toLocaleString()} out`,
+  ];
+  // Cached input bills at roughly a tenth, so it is worth showing apart.
+  if (usage.cached_input_tokens) {
+    bits.push(`${usage.cached_input_tokens.toLocaleString()} cached`);
+  }
+  if (usage.thinking_tokens) {
+    bits.push(`${usage.thinking_tokens.toLocaleString()} thinking`);
+  }
+  return bits.join("  ·  ");
+}
+
+function renderLogs() {
+  $("logsUsage").textContent = usageText(state.usage) || "No model calls yet.";
+
+  const errors = state.errors;
+  $("logsErrorCount").textContent = errors.length ? `(${errors.length})` : "";
+  const box = $("logsErrors");
+  box.innerHTML = "";
+  if (!errors.length) {
+    box.textContent = "No errors yet.";
+  } else {
+    errors.forEach((entry) => {
+      const node = document.createElement("div");
+      node.className = "logs-entry";
+      const time = document.createElement("div");
+      time.className = "t";
+      time.textContent = `${entry.time.toLocaleTimeString()} · ${entry.label}`;
+      const message = document.createElement("div");
+      message.textContent = entry.message;
+      node.append(time, message);
+      box.appendChild(node);
+    });
+  }
+
+  const count = $("logCount");
+  count.hidden = !errors.length;
+  count.textContent = String(errors.length);
 }
 
 // --------------------------------------------------------------------------
@@ -172,22 +231,10 @@ function renderFlow(data) {
   badge.className = "badge " + (data.status === "Active" ? "active" : "draft");
   $("versionBadge").textContent = "v" + data.version;
 
-  const usage = data.usage || {};
-  if (usage.calls) {
-    const bits = [
-      `${usage.calls} model call${usage.calls === 1 ? "" : "s"}`,
-      `${usage.input_tokens.toLocaleString()} in`,
-      `${usage.output_tokens.toLocaleString()} out`,
-    ];
-    // Cached input bills at roughly a tenth, so it is worth showing apart.
-    if (usage.cached_input_tokens) {
-      bits.push(`${usage.cached_input_tokens.toLocaleString()} cached`);
-    }
-    if (usage.thinking_tokens) {
-      bits.push(`${usage.thinking_tokens.toLocaleString()} thinking`);
-    }
-    $("usage").textContent = bits.join("  ·  ");
-  }
+  if (data.usage) state.usage = data.usage;
+  const text = usageText(state.usage);
+  if (text) $("usage").textContent = text;
+  renderLogs();
 
   $("log").innerHTML = "";
   data.history.forEach((entry) => {
@@ -281,6 +328,7 @@ async function design() {
     renderFlow(data);
   } catch (err) {
     showError(button.parentElement, err.message);
+    logError("Design", err.message);
   } finally {
     busy(button, false);
   }
@@ -306,6 +354,7 @@ async function loadFlows() {
     picker.innerHTML = "";
     picker.add(new Option("could not list flows", ""));
     showError($("openPane"), err.message);
+    logError("Load flows", err.message);
   }
 }
 
@@ -330,6 +379,7 @@ async function importFlow() {
     renderFlow(data);
   } catch (err) {
     showError($("openPane"), err.message);
+    logError("Import", err.message);
   } finally {
     busy(button, false);
   }
@@ -349,9 +399,16 @@ async function explainFlow() {
     const data = await poll("api/explain/status", { session_id: state.sessionId });
     target.textContent = data.explanation;
     target.className = "explanation filled";
+    if (data.usage) {
+      state.usage = data.usage;
+      const text = usageText(state.usage);
+      if (text) $("usage").textContent = text;
+      renderLogs();
+    }
   } catch (err) {
     target.textContent = err.message;
     target.className = "explanation dim";
+    logError("Explain", err.message);
   } finally {
     busy(button, false);
   }
@@ -371,6 +428,7 @@ async function refine() {
     renderFlow(data);
   } catch (err) {
     showError(button.parentElement, err.message);
+    logError("Refine", err.message);
   } finally {
     busy(button, false);
   }
@@ -388,6 +446,7 @@ async function approve() {
     renderFlow(data);
   } catch (err) {
     showError($("gate").parentElement, err.message);
+    logError("Approve", err.message);
   }
 }
 
@@ -406,6 +465,7 @@ async function validate() {
     renderGate();
   } catch (err) {
     showError($("gate").parentElement, err.message);
+    logError("Validate", err.message);
   } finally {
     busy(button, false);
   }
@@ -420,6 +480,7 @@ async function repair(button) {
     renderFlow(data);
   } catch (err) {
     showError($("gate").parentElement, err.message);
+    logError("Repair", err.message);
   } finally {
     busy(button, false);
   }
@@ -445,6 +506,7 @@ async function deploy() {
     renderResult(result);
   } catch (err) {
     showError($("gate").parentElement, err.message);
+    logError("Deploy", err.message);
   } finally {
     busy(button, false);
   }
@@ -502,7 +564,7 @@ async function loadModels() {
     // provider the user has since forgotten they were on.
     showError($("options"), `${providerName}: ${err.message}`);
     $("options").open = true; // an error inside a collapsed panel is no error
-
+    logError("Models", err.message);
   } finally {
     select.disabled = false;
   }
@@ -677,6 +739,28 @@ async function boot() {
   $("instruction").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) refine();
   });
+
+  const logsBtn = $("logsBtn");
+  const logsPanel = $("logsPanel");
+  const closeLogs = () => {
+    logsPanel.hidden = true;
+    logsBtn.setAttribute("aria-expanded", "false");
+  };
+  logsBtn.onclick = (event) => {
+    event.stopPropagation();
+    const opening = logsPanel.hidden;
+    logsPanel.hidden = !opening;
+    logsBtn.setAttribute("aria-expanded", String(opening));
+  };
+  document.addEventListener("click", (event) => {
+    if (!logsPanel.hidden && !logsPanel.contains(event.target) && event.target !== logsBtn) {
+      closeLogs();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeLogs();
+  });
+  renderLogs();
 }
 
 boot();

@@ -20,6 +20,25 @@
     <button id="loginProdBtn" type="button">Log in (Prod)</button>
     <button id="loginSandboxBtn" type="button">Log in (Sandbox)</button>
   </div>
+  <div class="logs-wrap">
+    <button id="logsBtn" class="logs-btn" type="button" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path fill="currentColor" d="M2 2h12v2H2V2zm0 5h12v2H2V7zm0 5h8v2H2v-2z"/>
+      </svg>
+      Logs
+      <span class="log-count" id="logCount" hidden></span>
+    </button>
+    <div class="logs-panel" id="logsPanel" hidden>
+      <div class="logs-section">
+        <h4>Usage this session</h4>
+        <div id="logsUsage" class="dim">No model calls yet.</div>
+      </div>
+      <div class="logs-section">
+        <h4>Errors <span id="logsErrorCount" class="dim"></span></h4>
+        <div id="logsErrors" class="dim">No errors yet.</div>
+      </div>
+    </div>
+  </div>
 </header>
 
 <main>
