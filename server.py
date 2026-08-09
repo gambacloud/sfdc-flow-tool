@@ -11,6 +11,7 @@ user approved is still the current one. A client-side check would be decoration.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import uuid
@@ -47,6 +48,10 @@ from flowtool.xmlgen import generate as generate_xml
 ROOT = Path(__file__).parent
 load_env(ROOT)
 
+# Lives inside the flowtool package (rather than beside server.py) so it ships
+# as package data when this repo is installed as a dependency elsewhere.
+STATIC = ROOT / "flowtool" / "static"
+
 app = FastAPI(title="SFDC Flow Tool")
 
 PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider}
@@ -60,6 +65,21 @@ PROVIDER_KEYS = {
 # --------------------------------------------------------------------------
 # Session state
 # --------------------------------------------------------------------------
+
+
+@dataclass
+class PendingDeploy:
+    """
+    A validate/deploy running in the background. Heroku's router kills any
+    single request after 30s, and a Salesforce deploy can occasionally run
+    longer than that, so /start kicks the work off as a background task and
+    /status polls it - the task itself is the same validate_flow() call this
+    used to just await directly.
+    """
+
+    task: "asyncio.Task"
+    instance_url: str
+    token: str
 
 
 @dataclass
@@ -77,6 +97,7 @@ class Session:
     last_failures: List[str] = field(default_factory=list)
     # True when the flow came out of the org rather than from a description.
     imported: bool = False
+    pending_deploy: Optional[PendingDeploy] = None
 
     @property
     def flow(self) -> Flow:
@@ -99,6 +120,19 @@ class Session:
 
 
 SESSIONS: Dict[str, Session] = {}
+
+
+@dataclass
+class PendingImport:
+    """A retrieve running in the background - no session exists yet to hang it
+    on, so it gets its own id until the flow comes back and adopts one."""
+
+    task: "asyncio.Task"
+    instance_url: str
+    request: "ImportRequest"
+
+
+IMPORTS: Dict[str, PendingImport] = {}
 
 
 def get_session(session_id: str) -> Session:
@@ -173,8 +207,20 @@ def build_provider(
     return PROVIDERS[name](**options)
 
 
-def credentials(org_alias: Optional[str]) -> tuple[str, str]:
-    """Only the sf CLI path is exposed over HTTP - no token ever crosses it."""
+def credentials(
+    org_alias: Optional[str],
+    instance_url: Optional[str] = None,
+    access_token: Optional[str] = None,
+) -> tuple[str, str]:
+    """
+    A token the browser already has (from logging into Salesforce itself, via
+    the OAuth implicit flow) wins - it never touches this server's disk or
+    config either way. Otherwise fall back to the sf CLI, the only path when
+    the browser did not send its own credentials.
+    """
+    if instance_url and access_token:
+        return instance_url, access_token
+
     from flowtool.orgs import SfCliError, get_org
 
     try:
@@ -212,6 +258,10 @@ class ApproveRequest(BaseModel):
 class OrgRequest(BaseModel):
     session_id: str
     org: Optional[str] = None
+    # Set when the browser logged into Salesforce itself (OAuth implicit
+    # flow); takes over from `org` when present. See credentials().
+    instance_url: Optional[str] = None
+    access_token: Optional[str] = None
 
 
 class DeployRequest(OrgRequest):
@@ -221,6 +271,8 @@ class DeployRequest(OrgRequest):
 class ImportRequest(BaseModel):
     api_name: str
     org: Optional[str] = None
+    instance_url: Optional[str] = None
+    access_token: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
     effort: str = "high"
@@ -263,6 +315,10 @@ def config() -> Dict[str, Any]:
         "orgs": orgs,
         "sf_cli": cli,
         "env_file": str(ROOT / ".env"),
+        # Same Connected App and same env var name as salesforce-debugtool, so
+        # a Heroku deployment that already sets one for that app needs nothing
+        # new here. Empty means the login buttons stay hidden.
+        "clientId": os.environ.get("SF_CLIENT_ID", ""),
     }
 
 
@@ -316,10 +372,14 @@ def design(body: DesignRequest) -> Dict[str, Any]:
 
 
 @app.get("/api/flows")
-async def flows(org: Optional[str] = None) -> Dict[str, Any]:
-    instance_url, token = credentials(org)
+async def flows(
+    org: Optional[str] = None,
+    instance_url: Optional[str] = None,
+    access_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    url, token = credentials(org, instance_url, access_token)
     try:
-        found = await list_flows(instance_url, token)
+        found = await list_flows(url, token)
     except RetrieveError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {
@@ -336,20 +396,41 @@ async def flows(org: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-@app.post("/api/import")
-async def import_flow(body: ImportRequest) -> Dict[str, Any]:
+@app.post("/api/import/start")
+async def import_start(body: ImportRequest) -> Dict[str, Any]:
+    """
+    Kick off a retrieve in the background and hand back a job id. A retrieve
+    can run long enough to cross Heroku's 30s request limit, so the browser
+    polls /api/import/status instead of waiting on one request.
+    """
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    task = asyncio.create_task(
+        retrieve_flow(url, token, body.api_name, api_version=body.api_version)
+    )
+    job_id = uuid.uuid4().hex
+    IMPORTS[job_id] = PendingImport(task=task, instance_url=url, request=body)
+    return {"job_id": job_id}
+
+
+@app.get("/api/import/status")
+def import_status(job_id: str) -> Dict[str, Any]:
     """
     Pull a flow out of the org and adopt it, so the next refinement edits it
     rather than designing a replacement from its description.
     """
-    instance_url, token = credentials(body.org)
+    pending = IMPORTS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown import job.")
+    if not pending.task.done():
+        return {"done": False}
+    del IMPORTS[job_id]
+
     try:
-        xml = await retrieve_flow(
-            instance_url, token, body.api_name, api_version=body.api_version
-        )
+        xml = pending.task.result()
     except (RetrieveError, TimeoutError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    body = pending.request
     try:
         flow = parse_flow(xml, api_name=body.api_name)
     except UnsupportedFlow as exc:
@@ -366,7 +447,9 @@ async def import_flow(body: ImportRequest) -> Dict[str, Any]:
     session_id = uuid.uuid4().hex
     session = Session(
         generator=generator,
-        result=generator.adopt(flow, f"the flow {body.api_name} from {instance_url}"),
+        result=generator.adopt(
+            flow, f"the flow {body.api_name} from {pending.instance_url}"
+        ),
         # An imported flow keeps the status it already has in the org, so
         # opening one to read it cannot quietly propose deactivating it.
         activate=flow.status == "Active",
@@ -376,7 +459,7 @@ async def import_flow(body: ImportRequest) -> Dict[str, Any]:
     )
     session.apply_policy()
     SESSIONS[session_id] = session
-    return view(session_id, session)
+    return {"done": True, **view(session_id, session)}
 
 
 @app.post("/api/explain")
@@ -414,26 +497,59 @@ def approve(body: ApproveRequest) -> Dict[str, Any]:
     return view(body.session_id, session)
 
 
-@app.post("/api/validate")
-async def validate(body: OrgRequest) -> Dict[str, Any]:
-    session = get_session(body.session_id)
-    if not session.approved:
-        raise HTTPException(403, "Approve the flow before validating it.")
-
-    instance_url, token = credentials(body.org)
-    result = await validate_flow(
-        instance_url,
-        token,
-        session.flow.api_name,
-        generate_xml(session.flow),
-        api_version=session.flow.api_version,
-        check_only=True,
+def _start_deploy(
+    session: Session,
+    org: Optional[str],
+    instance_url: Optional[str],
+    access_token: Optional[str],
+    check_only: bool,
+) -> None:
+    if session.pending_deploy is not None and not session.pending_deploy.task.done():
+        raise HTTPException(409, "A validate/deploy is already running for this flow.")
+    url, token = credentials(org, instance_url, access_token)
+    task = asyncio.create_task(
+        validate_flow(
+            url,
+            token,
+            session.flow.api_name,
+            generate_xml(session.flow),
+            api_version=session.flow.api_version,
+            check_only=check_only,
+        )
     )
+    session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
+
+
+def _failures(result) -> List[str]:
     failures = [str(failure) for failure in result.failures]
     if not failures and result.error_message:
         failures = [result.error_message]
+    return failures
+
+
+@app.post("/api/validate/start")
+async def validate_start(body: OrgRequest) -> Dict[str, Any]:
+    session = get_session(body.session_id)
+    if not session.approved:
+        raise HTTPException(403, "Approve the flow before validating it.")
+    _start_deploy(session, body.org, body.instance_url, body.access_token, check_only=True)
+    return {"started": True}
+
+
+@app.get("/api/validate/status")
+async def validate_status(session_id: str) -> Dict[str, Any]:
+    session = get_session(session_id)
+    pending = session.pending_deploy
+    if pending is None:
+        raise HTTPException(400, "No validation in progress - call /api/validate/start first.")
+    if not pending.task.done():
+        return {"done": False}
+    session.pending_deploy = None
+    result = pending.task.result()
+    failures = _failures(result)
     session.last_failures = failures
     return {
+        "done": True,
         "success": result.success,
         "status": result.status,
         "failures": failures,
@@ -457,36 +573,41 @@ def repair(body: OrgRequest) -> Dict[str, Any]:
     return view(body.session_id, session)
 
 
-@app.post("/api/deploy")
-async def deploy(body: DeployRequest) -> Dict[str, Any]:
+@app.post("/api/deploy/start")
+async def deploy_start(body: DeployRequest) -> Dict[str, Any]:
     session = get_session(body.session_id)
     if not session.approved:
         raise HTTPException(403, "Approve the flow before deploying it.")
     if not body.confirm:
         raise HTTPException(400, "Deploying needs an explicit confirmation.")
+    _start_deploy(session, body.org, body.instance_url, body.access_token, check_only=False)
+    return {"started": True}
 
-    instance_url, token = credentials(body.org)
-    result = await validate_flow(
-        instance_url,
-        token,
-        session.flow.api_name,
-        generate_xml(session.flow),
-        api_version=session.flow.api_version,
-        check_only=False,
-    )
-    failures = [str(failure) for failure in result.failures]
-    if not failures and result.error_message:
-        failures = [result.error_message]
-    link = await flow_builder_url(
-        instance_url, token, session.flow.api_name,
-        api_version=session.flow.api_version,
-    )
+
+@app.get("/api/deploy/status")
+async def deploy_status(session_id: str) -> Dict[str, Any]:
+    session = get_session(session_id)
+    pending = session.pending_deploy
+    if pending is None:
+        raise HTTPException(400, "No deploy in progress - call /api/deploy/start first.")
+    if not pending.task.done():
+        return {"done": False}
+    session.pending_deploy = None
+    result = pending.task.result()
+    failures = _failures(result)
+    link = None
+    if result.success:
+        link = await flow_builder_url(
+            pending.instance_url, pending.token, session.flow.api_name,
+            api_version=session.flow.api_version,
+        )
     return {
+        "done": True,
         "success": result.success,
         "status": result.status,
         "failures": failures,
-        "instance_url": instance_url,
-        "flow_url": link if result.success else None,
+        "instance_url": pending.instance_url,
+        "flow_url": link,
     }
 
 
@@ -507,10 +628,10 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(ROOT / "static" / "index.html")
+    return FileResponse(STATIC / "index.html")
 
 
-app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 def main() -> None:

@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SFDC Flow Tool</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230176D3'/%3E%3Ccircle cx='8' cy='9' r='3.4' fill='white'/%3E%3Ccircle cx='24' cy='9' r='3.4' fill='white'/%3E%3Ccircle cx='16' cy='23' r='3.4' fill='white'/%3E%3Cpath d='M8 12.4 L16 19.6 M24 12.4 L16 19.6' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="static/app.css">
 </head>
 <body>
 
@@ -14,6 +15,11 @@
   <label class="header-org">Org
     <select id="org"></select>
   </label>
+  <div class="header-oauth" id="oauthBox" hidden>
+    <span class="dim" id="orgConnected"></span>
+    <button id="loginProdBtn" type="button">Log in (Prod)</button>
+    <button id="loginSandboxBtn" type="button">Log in (Sandbox)</button>
+  </div>
 </header>
 
 <main>
@@ -107,16 +113,16 @@
       <p class="desc" id="flowDesc"></p>
       <div class="meta usage" id="usage"></div>
 
-      <div class="diagram-wrap">
-        <div id="diagram"></div>
-      </div>
-
       <div class="tabs">
         <button class="tab active" data-tab="diagram">Diagram</button>
         <button class="tab" data-tab="explain">Explain</button>
         <button class="tab" data-tab="markdown">Documentation</button>
         <button class="tab" data-tab="xml">Flow XML</button>
         <button class="tab" data-tab="ir">IR</button>
+      </div>
+
+      <div class="diagram-wrap">
+        <div id="diagram"></div>
       </div>
       <pre id="code" hidden></pre>
 
@@ -144,6 +150,6 @@
   </section>
 </main>
 
-<script src="/static/app.js"></script>
+<script src="static/app.js"></script>
 </body>
 </html>

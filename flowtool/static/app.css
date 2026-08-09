@@ -52,6 +52,7 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
   white-space: nowrap;
 }
 .header-org select { width: auto; min-width: 160px; padding: 4px 8px; }
+.header-oauth { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 
 main {
   display: grid;
@@ -152,7 +153,7 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .desc { color: var(--dim); font-size: 14px; margin: 10px 0 0; max-width: 70ch; }
 
 .diagram-wrap {
-  margin: 16px 0 0;
+  margin: 14px 0 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -161,7 +162,7 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 }
 #diagram svg { max-width: 100%; height: auto; }
 
-.tabs { display: flex; gap: 4px; margin: 14px 0 0; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; margin: 16px 0 0; flex-wrap: wrap; }
 .tab { font-size: 13px; padding: 5px 10px; }
 .tab.active { border-color: var(--accent); color: var(--accent); }
 

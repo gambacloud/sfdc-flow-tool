@@ -10,6 +10,7 @@ const state = {
   status: "Draft",
   artifacts: {},
   tab: "diagram",
+  org: null, // { accessToken, instanceUrl } once logged into Salesforce directly
 };
 
 let mermaid = null;
@@ -48,6 +49,22 @@ async function api(path, body) {
   }
   if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
   return payload;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A validate/deploy/import can run past Heroku's 30s request limit, so the
+// server hands back a job immediately and this polls for the result instead
+// of one request sitting open the whole time.
+async function poll(path, params) {
+  const query = new URLSearchParams(params).toString();
+  for (;;) {
+    const data = await api(`${path}?${query}`);
+    if (data.done) return data;
+    await sleep(1500);
+  }
 }
 
 function busy(button, on, label) {
@@ -194,7 +211,7 @@ function renderFlow(data) {
   renderGate();
 
   // The XML is generated server-side; fetch it lazily for the tab.
-  fetch(`/api/session/${data.session_id}/xml`)
+  fetch(`api/session/${data.session_id}/xml`)
     .then((r) => r.text())
     .then((text) => {
       state.artifacts.xml = text;
@@ -250,7 +267,7 @@ async function design() {
   showError(button.parentElement, "");
   busy(button, true, "Designing...");
   try {
-    const data = await api("/api/design", {
+    const data = await api("api/design", {
       request: $("request").value,
       provider: $("provider").value || null,
       effort: $("effort").value,
@@ -273,8 +290,8 @@ async function loadFlows() {
   picker.innerHTML = "";
   picker.add(new Option("Loading...", ""));
   try {
-    const org = $("org")?.value || "";
-    const data = await api(`/api/flows${org ? "?org=" + encodeURIComponent(org) : ""}`);
+    const query = new URLSearchParams(orgCredentials()).toString();
+    const data = await api(`api/flows${query ? "?" + query : ""}`);
     picker.innerHTML = "";
     if (!data.flows.length) {
       picker.add(new Option("no flows in this org", ""));
@@ -298,14 +315,15 @@ async function importFlow() {
   if (!apiName) return;
   busy(button, true, "Opening...");
   try {
-    const data = await api("/api/import", {
+    const { job_id } = await api("api/import/start", {
       api_name: apiName,
-      org: $("org")?.value || null,
+      ...orgCredentials(),
       effort: $("effort").value,
       provider: $("provider").value || null,
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
     });
+    const data = await poll("api/import/status", { job_id });
     state.validatedVersion = null;
     state.explanation = null;
     renderFlow(data);
@@ -323,7 +341,7 @@ async function explainFlow() {
   target.textContent = "Reading the flow...";
   target.className = "explanation dim";
   try {
-    const data = await api("/api/explain", {
+    const data = await api("api/explain", {
       session_id: state.sessionId,
       question: $("question").value.trim() || null,
     });
@@ -342,7 +360,7 @@ async function refine() {
   showError(button.parentElement, "");
   busy(button, true, "Revising...");
   try {
-    const data = await api("/api/refine", {
+    const data = await api("api/refine", {
       session_id: state.sessionId,
       instruction: $("instruction").value,
     });
@@ -360,7 +378,7 @@ async function approve() {
   try {
     // Sending the version we rendered means a flow that changed underneath us
     // is rejected rather than silently approved.
-    const data = await api("/api/approve", {
+    const data = await api("api/approve", {
       session_id: state.sessionId,
       version: state.version,
     });
@@ -375,10 +393,11 @@ async function validate() {
   showError($("gate").parentElement, "");
   busy(button, true, "Validating...");
   try {
-    const result = await api("/api/validate", {
+    await api("api/validate/start", {
       session_id: state.sessionId,
-      org: $("org").value || null,
+      ...orgCredentials(),
     });
+    const result = await poll("api/validate/status", { session_id: state.sessionId });
     if (result.success) state.validatedVersion = result.checked_version;
     renderResult(result);
     renderGate();
@@ -392,7 +411,7 @@ async function validate() {
 async function repair(button) {
   busy(button, true, "Repairing...");
   try {
-    const data = await api("/api/repair", { session_id: state.sessionId });
+    const data = await api("api/repair", { session_id: state.sessionId });
     state.validatedVersion = null;
     renderFlow(data);
   } catch (err) {
@@ -413,11 +432,12 @@ async function deploy() {
   showError($("gate").parentElement, "");
   busy(button, true, "Deploying...");
   try {
-    const result = await api("/api/deploy", {
+    await api("api/deploy/start", {
       session_id: state.sessionId,
-      org: $("org").value || null,
+      ...orgCredentials(),
       confirm: true,
     });
+    const result = await poll("api/deploy/status", { session_id: state.sessionId });
     renderResult(result);
   } catch (err) {
     showError($("gate").parentElement, err.message);
@@ -460,7 +480,7 @@ async function loadModels() {
   select.disabled = true;
   showError($("options"), "");
   try {
-    const data = await api("/api/models", {
+    const data = await api("api/models", {
       provider: providerName,
       api_key: $("apiKey").value.trim() || null,
     });
@@ -493,6 +513,53 @@ function rememberModel() {
 }
 
 // --------------------------------------------------------------------------
+// Salesforce login (OAuth implicit flow, same Connected App as the sibling
+// salesforce-debugtool - see authorization.component.ts / app.component.ts
+// there for the pattern this follows). No client secret, no server-side
+// token exchange: Salesforce hands the token straight to this page.
+// --------------------------------------------------------------------------
+
+function startOAuthLogin(clientId, host) {
+  const redirectUri = window.location.origin + window.location.pathname;
+  window.location.href =
+    `${host}/services/oauth2/authorize?response_type=token` +
+    `&client_id=${encodeURIComponent(clientId)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=flowtool`;
+}
+
+// Salesforce returns the token in the URL fragment, not a query string or a
+// redirect the server ever sees - read it here and scrub it from the address
+// bar so it doesn't linger in history.
+function restoreOAuthFromFragment() {
+  if (!location.hash) return;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const accessToken = params.get("access_token");
+  const instanceUrl = params.get("instance_url");
+  if (accessToken && instanceUrl) {
+    state.org = { accessToken, instanceUrl };
+    history.replaceState({}, document.title, location.pathname + location.search);
+  }
+}
+
+function renderOAuthStatus() {
+  $("orgConnected").textContent = state.org
+    ? `Connected: ${new URL(state.org.instanceUrl).host}`
+    : "Not connected to an org";
+}
+
+// The implicit flow issues no refresh token, so an expired session just
+// means logging in again - callers send whatever this returns and the
+// sf-CLI-backed `org` alias only applies when it is empty.
+function orgCredentials() {
+  if (state.org) {
+    return { instance_url: state.org.instanceUrl, access_token: state.org.accessToken };
+  }
+  const org = $("org")?.value;
+  return org ? { org } : {};
+}
+
+// --------------------------------------------------------------------------
 // Boot
 // --------------------------------------------------------------------------
 
@@ -500,7 +567,7 @@ async function boot() {
   loadMermaid();
 
   try {
-    const config = await api("/api/config");
+    const config = await api("api/config");
 
     const provider = $("provider");
     const known = config.all_providers?.length ? config.all_providers : config.providers;
@@ -542,6 +609,16 @@ async function boot() {
     } else {
       org.add(new Option(config.sf_cli ? "no orgs" : "sf CLI not installed", ""));
     }
+
+    if (config.clientId) {
+      $("oauthBox").hidden = false;
+      $("loginProdBtn").onclick = () =>
+        startOAuthLogin(config.clientId, "https://login.salesforce.com");
+      $("loginSandboxBtn").onclick = () =>
+        startOAuthLogin(config.clientId, "https://test.salesforce.com");
+    }
+    restoreOAuthFromFragment();
+    renderOAuthStatus();
 
     const bits = [];
     bits.push(

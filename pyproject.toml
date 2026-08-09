@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sfdc-flow-forge"
+version = "0.1.0"
+description = "Describe business logic in plain language, get a Salesforce Flow that deploys."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "pydantic>=2",
+    "google-genai",
+    "anthropic",
+]
+
+# server.py lives at the repo root, not inside the flowtool package, so it
+# needs to be listed explicitly - setuptools only auto-discovers packages.
+[tool.setuptools]
+py-modules = ["server"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["flowtool*"]
+
+[tool.setuptools.package-data]
+flowtool = ["static/*"]

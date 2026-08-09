@@ -19,7 +19,9 @@ ACTIVE = dict(VALID, status="Active", api_version="60.0")
 @pytest.fixture
 def client(monkeypatch):
     server.SESSIONS.clear()
-    monkeypatch.setattr(server, "credentials", lambda org: ("https://x", "tok"))
+    monkeypatch.setattr(
+        server, "credentials", lambda org, instance_url=None, access_token=None: ("https://x", "tok")
+    )
     return TestClient(server.app)
 
 
@@ -38,6 +40,21 @@ def design(client, **body):
     response = client.post("/api/design", json={"request": "build it", **body})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def poll(client, url, **params):
+    """
+    validate/deploy/import now hand back a job immediately and finish in the
+    background, so the tests poll the way the browser does instead of getting
+    a result on the first request. The fakes below have no real waiting, so
+    this settles within a call or two - the retry loop is just insurance
+    against event-loop timing, not a real wait.
+    """
+    for _ in range(50):
+        response = client.get(url, params=params)
+        if response.status_code != 200 or response.json().get("done"):
+            return response
+    raise AssertionError(f"{url} never completed")
 
 
 def stub_validate(monkeypatch, *results):
@@ -89,7 +106,7 @@ class TestApprovalGate:
         calls = stub_validate(monkeypatch, OK)
         session_id = design(client)["session_id"]
 
-        response = client.post("/api/validate", json={"session_id": session_id})
+        response = client.post("/api/validate/start", json={"session_id": session_id})
         assert response.status_code == 403
         assert not calls, "contacted the org without approval"
 
@@ -99,7 +116,7 @@ class TestApprovalGate:
         session_id = design(client)["session_id"]
 
         response = client.post(
-            "/api/deploy", json={"session_id": session_id, "confirm": True}
+            "/api/deploy/start", json={"session_id": session_id, "confirm": True}
         )
         assert response.status_code == 403
         assert not calls
@@ -110,7 +127,7 @@ class TestApprovalGate:
         session_id = design(client)["session_id"]
         client.post("/api/approve", json={"session_id": session_id, "version": 1})
 
-        response = client.post("/api/deploy", json={"session_id": session_id})
+        response = client.post("/api/deploy/start", json={"session_id": session_id})
         assert response.status_code == 400
         assert not calls
 
@@ -140,12 +157,14 @@ class TestApprovalGate:
         assert refined["approved"] is False
 
         assert client.post(
-            "/api/validate", json={"session_id": session_id}
+            "/api/validate/start", json={"session_id": session_id}
         ).status_code == 403
         assert not calls
 
     def test_unknown_session_is_a_404(self, client):
-        assert client.post("/api/validate", json={"session_id": "nope"}).status_code == 404
+        assert client.post(
+            "/api/validate/start", json={"session_id": "nope"}
+        ).status_code == 404
 
 
 class TestRepairLoop:
@@ -155,7 +174,10 @@ class TestRepairLoop:
         session_id = design(client)["session_id"]
         client.post("/api/approve", json={"session_id": session_id, "version": 1})
 
-        result = client.post("/api/validate", json={"session_id": session_id}).json()
+        client.post("/api/validate/start", json={"session_id": session_id})
+        result = poll(
+            client, "/api/validate/status", session_id=session_id
+        ).json()
         assert result["success"] is False
         assert "nothing is connected to Start" in result["failures"][0]
 
@@ -192,7 +214,8 @@ class TestDeploymentPolicy:
         stub_validate(monkeypatch, FAILED)
         session_id = design(client)["session_id"]
         client.post("/api/approve", json={"session_id": session_id, "version": 1})
-        client.post("/api/validate", json={"session_id": session_id})
+        client.post("/api/validate/start", json={"session_id": session_id})
+        poll(client, "/api/validate/status", session_id=session_id)
 
         repaired = client.post("/api/repair", json={"session_id": session_id}).json()
         assert repaired["status"] == "Draft"
@@ -251,7 +274,10 @@ class TestBrowseTheOrg:
     def test_imports_a_flow_as_a_diagram(self, client, scripted, monkeypatch):
         scripted(VALID)
         stub_org(monkeypatch)
-        data = client.post("/api/import", json={"api_name": "Existing_Flow"}).json()
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "Existing_Flow"}
+        ).json()["job_id"]
+        data = poll(client, "/api/import/status", job_id=job_id).json()
 
         assert data["imported"] is True
         assert data["api_name"] == "Existing_Flow"
@@ -261,13 +287,19 @@ class TestBrowseTheOrg:
     def test_import_does_not_call_the_model(self, client, scripted, monkeypatch):
         provider = scripted()  # no payloads queued: any call would IndexError
         stub_org(monkeypatch)
-        client.post("/api/import", json={"api_name": "Existing_Flow"})
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "Existing_Flow"}
+        ).json()["job_id"]
+        poll(client, "/api/import/status", job_id=job_id)
         assert provider.calls == [], "importing should be pure parsing"
 
     def test_an_imported_active_flow_stays_active(self, client, scripted, monkeypatch):
         scripted(VALID)
         stub_org(monkeypatch)
-        data = client.post("/api/import", json={"api_name": "Existing_Flow"}).json()
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "Existing_Flow"}
+        ).json()["job_id"]
+        data = poll(client, "/api/import/status", job_id=job_id).json()
         # Opening a live flow to read it must not quietly propose deactivating it.
         assert data["status"] == "Active"
 
@@ -276,16 +308,20 @@ class TestBrowseTheOrg:
     ):
         scripted(VALID)
         stub_org(monkeypatch, xml=UNSUPPORTED_XML)
-        response = client.post("/api/import", json={"api_name": "Existing_Flow"})
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "Existing_Flow"}
+        ).json()["job_id"]
+        response = poll(client, "/api/import/status", job_id=job_id)
         assert response.status_code == 422
         assert "rollback elements" in response.json()["detail"]
 
     def test_an_imported_flow_can_be_refined(self, client, scripted, monkeypatch):
         provider = scripted(VALID)
         stub_org(monkeypatch)
-        session_id = client.post(
-            "/api/import", json={"api_name": "Existing_Flow"}
-        ).json()["session_id"]
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "Existing_Flow"}
+        ).json()["job_id"]
+        session_id = poll(client, "/api/import/status", job_id=job_id).json()["session_id"]
 
         refined = client.post(
             "/api/refine",
@@ -335,11 +371,13 @@ class TestDeploy:
         calls = stub_validate(monkeypatch, OK, OK)
         session_id = design(client)["session_id"]
         client.post("/api/approve", json={"session_id": session_id, "version": 1})
-        client.post("/api/validate", json={"session_id": session_id})
+        client.post("/api/validate/start", json={"session_id": session_id})
+        poll(client, "/api/validate/status", session_id=session_id)
 
-        result = client.post(
-            "/api/deploy", json={"session_id": session_id, "confirm": True}
-        ).json()
+        client.post(
+            "/api/deploy/start", json={"session_id": session_id, "confirm": True}
+        )
+        result = poll(client, "/api/deploy/status", session_id=session_id).json()
         assert result["success"] is True
         assert calls == [True, False], "expected checkOnly then a real deploy"
 
