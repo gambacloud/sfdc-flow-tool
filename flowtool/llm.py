@@ -448,29 +448,19 @@ class AnthropicProvider:
                 raise
             raise LLMError(self._NO_KEY) from exc
 
-    def complete_json(
-        self, system: str, messages: List[Message], schema: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _create(self, **kwargs):
+        """
+        `messages.create`, with credential/rate-limit/model errors turned into
+        LLMError. Shared by complete_json and complete_text so a fix to one
+        covers both - complete_text used to skip all of this and let a
+        missing key surface as a raw TypeError instead of a message anyone
+        could act on, which FastAPI then turned into an opaque 500.
+        """
         import anthropic
 
         try:
-            response = self._client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                # The system prompt is byte-identical across requests, so it caches.
-                system=[
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[{"role": m.role, "content": m.content} for m in messages],
-                thinking={"type": "adaptive"},
-                output_config={
-                    "effort": self.effort,
-                    "format": {"type": "json_schema", "schema": strict_schema(schema)},
-                },
+            return self._client.messages.create(
+                model=self.model, max_tokens=self.max_tokens, **kwargs
             )
         except TypeError as exc:
             # The SDK resolves credentials lazily, so a missing key surfaces
@@ -492,6 +482,25 @@ class AnthropicProvider:
         except anthropic.APIStatusError as exc:
             raise LLMError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
 
+    def complete_json(
+        self, system: str, messages: List[Message], schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        response = self._create(
+            # The system prompt is byte-identical across requests, so it caches.
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": m.role, "content": m.content} for m in messages],
+            thinking={"type": "adaptive"},
+            output_config={
+                "effort": self.effort,
+                "format": {"type": "json_schema", "schema": strict_schema(schema)},
+            },
+        )
         self._record(response)
 
         if response.stop_reason == "refusal":
@@ -512,23 +521,15 @@ class AnthropicProvider:
             raise LLMError(f"The model returned malformed JSON: {exc}") from exc
 
     def complete_text(self, system: str, messages: List[Message]) -> str:
-        import anthropic
-
-        try:
-            response = self._client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=[
-                    {"type": "text", "text": system,
-                     "cache_control": {"type": "ephemeral"}}
-                ],
-                messages=[{"role": m.role, "content": m.content} for m in messages],
-                thinking={"type": "adaptive"},
-                output_config={"effort": self.effort},
-            )
-        except anthropic.APIStatusError as exc:
-            raise LLMError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
-
+        response = self._create(
+            system=[
+                {"type": "text", "text": system,
+                 "cache_control": {"type": "ephemeral"}}
+            ],
+            messages=[{"role": m.role, "content": m.content} for m in messages],
+            thinking={"type": "adaptive"},
+            output_config={"effort": self.effort},
+        )
         self._record(response)
         if response.stop_reason == "refusal":
             raise LLMError("The model declined this request.")

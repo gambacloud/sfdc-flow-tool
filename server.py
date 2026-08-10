@@ -165,6 +165,24 @@ class PendingDesign:
 DESIGN_JOBS: Dict[str, PendingDesign] = {}
 
 
+def llm_result(task: "asyncio.Task"):
+    """
+    Unwrap a background LLM task, turning any failure into an HTTPException
+    instead of letting an exception type nobody anticipated reach Starlette's
+    bare 500. That gap is exactly how a missing Anthropic key, surfaced by
+    complete_text as a raw TypeError instead of an LLMError, once turned into
+    a content-free "Internal Server Error" on Explain - complete_json caught
+    it, complete_text didn't. This is the backstop for the next provider gap
+    like it, whatever shape that turns out to be.
+    """
+    try:
+        return task.result()
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Unexpected error: {exc}") from exc
+
+
 def get_session(session_id: str) -> Session:
     session = SESSIONS.get(session_id)
     if session is None:
@@ -419,10 +437,7 @@ async def design_status(job_id: str) -> Dict[str, Any]:
         return {"done": False}
     del DESIGN_JOBS[job_id]
 
-    try:
-        result = pending.task.result()
-    except LLMError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    result = llm_result(pending.task)
 
     session_id = uuid.uuid4().hex
     session = Session(
@@ -548,10 +563,7 @@ async def explain_status(session_id: str) -> Dict[str, Any]:
     if not task.done():
         return {"done": False}
     session.pending_explain = None
-    try:
-        explanation = task.result()
-    except LLMError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    explanation = llm_result(task)
     return {
         "done": True,
         "explanation": explanation,
@@ -574,10 +586,7 @@ def _llm_status(session_id: str) -> Dict[str, Any]:
     if not pending.task.done():
         return {"done": False}
     session.pending_llm = None
-    try:
-        result = pending.task.result()
-    except LLMError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    result = llm_result(pending.task)
     session.record(result, pending.note)
     return {"done": True, **view(session_id, session)}
 
