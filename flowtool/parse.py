@@ -43,6 +43,7 @@ from .ir import (
     RecordDelete,
     RecordFilter,
     RecordUpdate,
+    Schedule,
     ScheduledPath,
     Screen,
     ScreenField,
@@ -330,8 +331,13 @@ _CHOICE_SET_CHILDREN = {
 _START_CHILDREN = {
     "locationX", "locationY", "connector", "object", "recordTriggerType",
     "triggerType", "filters", "filterLogic",
-    "doesRequireRecordChangedToMeetCriteria", "scheduledPaths",
+    "doesRequireRecordChangedToMeetCriteria", "scheduledPaths", "schedule",
 }
+
+# Confirmed against a real dev org's checkOnly validation: the org rejects
+# every field here except the three named, no matter the trigger. See the
+# Schedule docstring in ir.py for the refusal messages.
+_SCHEDULE_CHILDREN = {"startDate", "startTime", "frequency"}
 
 # A scheduled path is two shapes in one tag; pathType is what tells them apart.
 _SCHEDULED_PATH_CHILDREN = {
@@ -365,6 +371,13 @@ _CHILD_MEANING = {
     "assignNextValueToReference": "its own loop variable",
     "limit": "a record limit",
     "schedule": "a schedule",
+    # On a schedule - the org rejects all four outright, see the Schedule
+    # docstring in ir.py, so a live flow having one would mean the org's own
+    # rules changed since.
+    "endDate": "an end date on its schedule",
+    "frequencyNumber": "a run-every-N-periods schedule",
+    "dayOfMonthToRun": "a day-of-month schedule",
+    "daysOfWeekToRun": "a days-of-week schedule",
     "filterFormula": "a formula-based entry condition",
     "flowTransactionModel": "an explicit transaction model",
     "value": "a default value",
@@ -773,6 +786,19 @@ def _read_scheduled_paths(start_node: Optional[ET.Element]) -> List[ScheduledPat
     return paths
 
 
+def _read_schedule(start_node: Optional[ET.Element]) -> Optional[Schedule]:
+    if start_node is None:
+        return None
+    node = start_node.find("m:schedule", NS)
+    if node is None:
+        return None
+    return Schedule(
+        start_date=_text(node, "m:startDate") or "",
+        start_time=_text(node, "m:startTime") or "",
+        frequency=_text(node, "m:frequency") or "Once",
+    )
+
+
 def _read_component_inputs(item: ET.Element) -> List[InputAssignment]:
     inputs = []
     for parameter in item.findall("m:inputParameters", NS):
@@ -1089,6 +1115,11 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             reasons.extend(
                 _unknown_children(node, _SCHEDULED_PATH_CHILDREN, where)
             )
+        schedule_node = start_node.find("m:schedule", NS)
+        if schedule_node is not None:
+            reasons.extend(
+                _unknown_children(schedule_node, _SCHEDULE_CHILDREN, "the schedule")
+            )
 
     for node in root.findall("m:variables", NS):
         name = _text(node, "m:name") or "a variable"
@@ -1120,21 +1151,31 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     # is read rather than refused - though writing the flow back emits the
     # modern form, which is what Salesforce itself does on save.
     legacy_start = _text(root, "m:startElementReference")
-    start = Start(
-        next=(
-            (_target(start_node, "connector") if start_node is not None else None)
-            or legacy_start
-        ),
-        object=_text(start_node, "m:object"),
-        record_trigger_type=_text(start_node, "m:recordTriggerType"),
-        trigger_type=_text(start_node, "m:triggerType"),
-        filters=_filters(start_node) if start_node is not None else [],
-        filter_logic=_text(start_node, "m:filterLogic") or "and",
-        only_when_changed_to_meet_criteria=_bool(
-            start_node, "m:doesRequireRecordChangedToMeetCriteria"
-        ),
-        scheduled_paths=_read_scheduled_paths(start_node),
-    )
+    try:
+        start = Start(
+            next=(
+                (_target(start_node, "connector") if start_node is not None else None)
+                or legacy_start
+            ),
+            object=_text(start_node, "m:object"),
+            record_trigger_type=_text(start_node, "m:recordTriggerType"),
+            trigger_type=_text(start_node, "m:triggerType"),
+            schedule=_read_schedule(start_node),
+            filters=_filters(start_node) if start_node is not None else [],
+            filter_logic=_text(start_node, "m:filterLogic") or "and",
+            only_when_changed_to_meet_criteria=_bool(
+                start_node, "m:doesRequireRecordChangedToMeetCriteria"
+            ),
+            scheduled_paths=_read_scheduled_paths(start_node),
+        )
+    except ValueError as exc:
+        # As with an element: the flow is deployed and running, so a rejection
+        # here means the IR is stricter than Salesforce, not that the trigger
+        # is broken.
+        raise UnsupportedFlow(
+            [Gap("ir_mismatch", f"the trigger does not fit the model: {exc}")],
+            api_name or _text(root, "m:label") or "",
+        ) from exc
 
     variables = []
     for node in root.findall("m:variables", NS):

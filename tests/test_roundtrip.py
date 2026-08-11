@@ -32,6 +32,7 @@ from flowtool.ir import (
     RecordDelete,
     RecordFilter,
     RecordUpdate,
+    Schedule,
     Start,
     Subflow,
     SubflowOutputAssignment,
@@ -545,6 +546,38 @@ class TestFlowLevel:
     def test_autolaunched_start(self):
         assert_survives(_flow(GetRecords(name="Get", label="Get", object="Account")))
 
+    @pytest.mark.parametrize("frequency", ["Once", "Daily", "Weekly"])
+    def test_a_scheduled_start(self, frequency):
+        # Verified end to end against a real dev org's checkOnly validation.
+        # Monthly, Yearly, Hourly, Weekdays and OnActivate are in the org's
+        # own enum for this field but were all refused when actually
+        # deployed - see the Schedule docstring in ir.py.
+        assert_survives(_flow(
+            GetRecords(name="Get", label="Get", object="Account"),
+            start=Start(
+                trigger_type="Scheduled",
+                schedule=Schedule(start_date="2026-08-15",
+                                  start_time="02:00:00.000Z", frequency=frequency),
+                next="Get",
+            ),
+        ))
+
+    def test_a_scheduled_trigger_needs_a_schedule(self):
+        # The org's own words: "You set the flow trigger type to Scheduled,
+        # so you must also set the frequency."
+        with pytest.raises(ValidationError, match="Scheduled"):
+            Start(trigger_type="Scheduled", next="Get")
+
+    def test_a_schedule_needs_a_scheduled_trigger(self):
+        with pytest.raises(ValidationError, match="Scheduled"):
+            Start(
+                trigger_type="RecordAfterSave", object="Account",
+                record_trigger_type="Update",
+                schedule=Schedule(start_date="2026-08-15",
+                                  start_time="02:00:00.000Z", frequency="Daily"),
+                next="Get",
+            )
+
     def test_description_and_status(self):
         assert_survives(_flow(
             GetRecords(name="Get", label="Get", object="Account"),
@@ -679,14 +712,28 @@ class TestNestedUnknownsAreRefused:
         assert "E uses" in str(caught.value), "the message should name the element"
 
     @pytest.mark.parametrize("extra,expected", [
-        # scheduledPaths used to be here. It is modelled now, and its own
-        # children get the same allowlist treatment - see test_scheduled_paths.
+        # scheduledPaths and schedule used to be here. Both are modelled now,
+        # and schedule's own children get the same allowlist treatment - see
+        # test_scheduled_paths.py and TestSchedule below.
         ("<filterFormula>x</filterFormula>", "formula-based entry condition"),
-        ("<schedule><frequency>Daily</frequency></schedule>", "a schedule"),
     ])
     def test_unknown_child_of_the_start(self, extra, expected):
         with pytest.raises(UnsupportedFlow, match=expected):
             parse_flow(self._flow_xml(self._lookup(), start_extra=extra))
+
+    def test_a_schedule_on_a_non_scheduled_trigger_is_rejected(self):
+        # This base flow's trigger is RecordAfterSave; a schedule attached to
+        # it is not a gap in the IR's coverage, it is the flow disagreeing
+        # with itself.
+        with pytest.raises(UnsupportedFlow, match="the trigger does not fit the model"):
+            parse_flow(self._flow_xml(
+                self._lookup(),
+                start_extra=(
+                    "<schedule><startDate>2026-08-15</startDate>"
+                    "<startTime>02:00:00.000Z</startTime>"
+                    "<frequency>Daily</frequency></schedule>"
+                ),
+            ))
 
     def test_unknown_child_of_a_variable(self):
         body = self._lookup() + (

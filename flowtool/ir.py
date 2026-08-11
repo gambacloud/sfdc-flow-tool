@@ -1893,6 +1893,27 @@ class ScheduledPath(BaseModel):
         return self
 
 
+class Schedule(BaseModel):
+    """
+    When a `trigger_type: 'Scheduled'` flow first runs, and how often.
+
+    Confirmed against a real dev org's checkOnly validation. The schema this
+    is drawn from carries more fields than are used here - `end_date`,
+    `frequency_number`, `day_of_month_to_run`, `days_of_week_to_run` - and
+    `frequency` allows more values than the three below - but the org rejected
+    every one of them outright when actually deploying a Scheduled trigger:
+    "the End Date field isn't supported", "the Frequency Number field isn't
+    supported", "the Frequency field can't be set to 'Monthly'" (also tried:
+    Yearly, Hourly, Weekdays, OnActivate - all refused the same way). Those
+    belong to something else that reuses this shape; a flow's own schedule
+    only ever uses the three fields modelled here.
+    """
+
+    start_date: str = Field(description="ISO date, e.g. '2026-08-15'.")
+    start_time: str = Field(description="ISO time, e.g. '02:00:00.000Z'.")
+    frequency: Literal["Once", "Daily", "Weekly"]
+
+
 class Start(BaseModel):
     """
     Record-triggered flows set object + trigger_type. Autolaunched flows leave
@@ -1908,6 +1929,8 @@ class Start(BaseModel):
         Literal["RecordAfterSave", "RecordBeforeSave", "RecordBeforeDelete",
                 "Scheduled", "PlatformEvent"]
     ] = None
+    # Only meaningful, and only allowed, when trigger_type is 'Scheduled'.
+    schedule: Optional[Schedule] = None
     filters: List[RecordFilter] = Field(default_factory=list)
     filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
     # "Only when a record is updated to meet the condition requirements".
@@ -1918,6 +1941,21 @@ class Start(BaseModel):
         description="Extra branches that run later, or in their own "
         "transaction. Only on a RecordAfterSave trigger.",
     )
+
+    @model_validator(mode="after")
+    def scheduled_trigger_has_a_schedule(self) -> "Start":
+        if self.trigger_type == "Scheduled" and not self.schedule:
+            raise ValueError(
+                "\"You set the flow trigger type to Scheduled, so you must "
+                "also set the frequency.\" Set schedule with start_date, "
+                "start_time and frequency."
+            )
+        if self.schedule and self.trigger_type != "Scheduled":
+            raise ValueError(
+                "a schedule only means something when trigger_type is "
+                "'Scheduled'"
+            )
+        return self
 
     @model_validator(mode="after")
     def scheduled_paths_belong_on_an_after_save_trigger(self) -> "Start":

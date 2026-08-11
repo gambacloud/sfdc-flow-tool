@@ -686,6 +686,11 @@ def generate(flow: Flow) -> str:
         _sub(start, "doesRequireRecordChangedToMeetCriteria", "true")
     if flow.start.record_trigger_type:
         _sub(start, "recordTriggerType", flow.start.record_trigger_type)
+    if flow.start.schedule:
+        node = _sub(start, "schedule")
+        _sub(node, "frequency", flow.start.schedule.frequency)
+        _sub(node, "startDate", flow.start.schedule.start_date)
+        _sub(node, "startTime", flow.start.schedule.start_time)
     # Alphabetical among the start's children, as everywhere else, which puts
     # scheduledPaths between recordTriggerType and triggerType.
     for path in flow.start.scheduled_paths:

@@ -306,9 +306,18 @@ def _element_caption(element: Element) -> str:
     return element.label
 
 
+def _schedule_text(schedule) -> str:
+    when = {"Once": "once", "Daily": "every day", "Weekly": "every week"}.get(
+        schedule.frequency, schedule.frequency.lower()
+    )
+    return f"{when}, starting {schedule.start_date} at {schedule.start_time}"
+
+
 def _start_caption(flow: Flow) -> str:
     if flow.process_type == "Flow":
         return "Start\nRun by a user"
+    if flow.start.schedule:
+        return f"Start\nScheduled: {_schedule_text(flow.start.schedule)}"
     if not flow.start.object:
         return "Start\nAutolaunched"
     # A platform event has no record_trigger_type - it is only ever published -
@@ -705,6 +714,8 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
                 f"`{path.next or 'nothing'}`"
                 + (f" ({name})" if path.label and path.label != path.name else "")
             )
+    elif flow.start.schedule:
+        lines.append(f"- **Scheduled**: {_schedule_text(flow.start.schedule)}")
     else:
         lines.append("- **Autolaunched** — invoked from Apex, another flow, or a process.")
     lines += ["", f"- **API name**: `{flow.api_name}`", f"- **API version**: {flow.api_version}",
