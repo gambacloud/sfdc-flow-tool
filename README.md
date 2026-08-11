@@ -96,7 +96,7 @@ deploy — with a link straight into Flow Builder when it lands.
 | `--activate` | Deploy Active. Without it, flows deploy as Drafts |
 | `--provider` | `gemini`, `anthropic`, or `ollama` (default: whichever key is set) |
 | `--model` | Override the provider's default model |
-| `--effort` | `low` … `max` (default `high`) |
+| `--effort` | `medium` or `high` (default `medium`) |
 
 ## How it works
 

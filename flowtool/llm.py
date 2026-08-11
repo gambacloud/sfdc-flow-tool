@@ -403,7 +403,7 @@ class AnthropicProvider:
         self,
         api_key: Optional[str] = None,
         model: str = "claude-opus-5",
-        effort: str = "high",
+        effort: str = "medium",
         max_tokens: int = 16000,
     ):
         try:
@@ -540,14 +540,9 @@ class AnthropicProvider:
 # Gemini provider
 # --------------------------------------------------------------------------
 
-# Gemini exposes coarser thinking levels than Anthropic's effort scale, so the
-# top two collapse onto HIGH.
 _GEMINI_THINKING = {
-    "low": "LOW",
     "medium": "MEDIUM",
     "high": "HIGH",
-    "xhigh": "HIGH",
-    "max": "HIGH",
 }
 
 # Gemini caps how large a response_json_schema may be, and it counts the schema
@@ -655,7 +650,7 @@ class GeminiProvider:
         self,
         api_key: Optional[str] = None,
         model: str = "gemini-3.6-flash",
-        effort: str = "high",
+        effort: str = "medium",
         # Gemini counts thinking towards the output cap, so this needs more
         # headroom than a provider that bills thinking separately.
         max_tokens: int = 48000,
@@ -869,14 +864,9 @@ class GeminiProvider:
 # Ollama provider
 # --------------------------------------------------------------------------
 
-# Ollama's `think` takes the same low/medium/high vocabulary Anthropic's effort
-# does, so xhigh and max collapse onto high exactly as they do for Gemini.
 _OLLAMA_THINK = {
-    "low": "low",
     "medium": "medium",
     "high": "high",
-    "xhigh": "high",
-    "max": "high",
 }
 
 # Cloud by default - api.ollama.com, not the local daemon - but OLLAMA_HOST
@@ -899,7 +889,7 @@ class OllamaProvider:
         self,
         api_key: Optional[str] = None,
         model: str = "gpt-oss:120b-cloud",
-        effort: str = "high",
+        effort: str = "medium",
         max_tokens: int = 16000,
         host: Optional[str] = None,
     ):

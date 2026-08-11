@@ -345,8 +345,8 @@ def main() -> int:
     parser.add_argument("--provider", choices=sorted(PROVIDERS),
                         help="defaults to whichever API key is set")
     parser.add_argument("--model", help="overrides the provider's default model")
-    parser.add_argument("--effort", default="high",
-                        choices=["low", "medium", "high", "xhigh", "max"])
+    parser.add_argument("--effort", default="medium",
+                        choices=["medium", "high"])
     args = parser.parse_args()
 
     if args.file:

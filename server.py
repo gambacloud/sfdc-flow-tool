@@ -17,7 +17,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -288,7 +288,7 @@ class DesignRequest(BaseModel):
     request: str
     provider: Optional[str] = None
     model: Optional[str] = None
-    effort: str = "high"
+    effort: Literal["medium", "high"] = "medium"
     activate: bool = False
     api_version: str = "62.0"
     api_key: Optional[str] = None
@@ -324,7 +324,7 @@ class ImportRequest(BaseModel):
     access_token: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
-    effort: str = "high"
+    effort: Literal["medium", "high"] = "medium"
     api_version: str = "62.0"
     api_key: Optional[str] = None
 
@@ -386,7 +386,7 @@ def models(body: ModelsRequest) -> Dict[str, Any]:
     runs out on one model and the work can continue on another.
     """
     try:
-        provider = build_provider(body.provider, None, "high", body.api_key)
+        provider = build_provider(body.provider, None, "medium", body.api_key)
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
