@@ -38,20 +38,31 @@
 
 body {
   margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
 }
 
+/* Wraps as whole groups (title, org status, Log in buttons, Manual entry,
+   Logs) rather than shrinking - without this, a header too narrow for one
+   line squeezed every item instead, and a squeezed h1 has nowhere to put the
+   overflow except wrapping "SFDC Flow Tool" onto three lines of its own. */
 header {
+  flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 16px;
+  row-gap: 10px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--line);
 }
-header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+header h1 { flex-shrink: 0; white-space: nowrap; font-size: 16px; margin: 0; letter-spacing: -0.01em; }
 .header-org {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -66,6 +77,7 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
    after it would lose its right alignment along with it. .header-connect is
    never hidden, so it is the one every layout can anchor on. */
 .header-connect {
+  flex-shrink: 0;
   margin: 0 0 0 auto;
   display: flex;
   align-items: center;
@@ -73,7 +85,7 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
   white-space: nowrap;
 }
 
-.dropdown-wrap { position: relative; }
+.dropdown-wrap { flex-shrink: 0; position: relative; }
 .dropdown-btn {
   display: flex;
   align-items: center;
@@ -130,13 +142,18 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
   border-radius: 4px;
 }
 
+/* flex:1 fills whatever height the header - now variable, since it wraps -
+   left behind, instead of the fixed calc(100vh - 49px) this used to be,
+   which assumed a single-line header and left a gap or an overflow the
+   moment header grew past that. */
 main {
   display: grid;
   grid-template-columns: minmax(320px, 30%) 1fr;
-  height: calc(100vh - 49px);
+  flex: 1;
+  min-height: 0;
 }
 @media (max-width: 860px) {
-  main { grid-template-columns: 1fr; height: auto; }
+  main { grid-template-columns: 1fr; flex: none; height: auto; }
 }
 
 .panel { overflow-y: auto; }
