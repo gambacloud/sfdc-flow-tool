@@ -2,6 +2,12 @@
 
 const $ = (id) => document.getElementById(id);
 
+// sessionStorage, not localStorage: this is about surviving a reload of this
+// tab (the OAuth redirect, a plain F5), not resurrecting a session days
+// later in a fresh tab against a server that has very likely since restarted
+// and forgotten it.
+const SESSION_STORAGE_KEY = "flowtool.sessionId";
+
 const state = {
   sessionId: null,
   version: 0,
@@ -234,6 +240,7 @@ function renderGate() {
 
 function renderFlow(data) {
   state.sessionId = data.session_id;
+  sessionStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
   state.version = data.version;
   state.approved = data.approved;
   state.status = data.status;
@@ -639,6 +646,25 @@ function renderOAuthStatus() {
     : "Not connected to an org";
 }
 
+// The session itself lives server-side, independent of the browser - a
+// reload only loses the browser's copy of it. Re-fetching here means the
+// OAuth redirect (a full navigation, not an AJAX call) and a plain F5 both
+// stop being a way to lose an in-progress design. A session the server no
+// longer has (restarted since, or just old) fails quietly and clears the
+// stale pointer rather than showing an error for something the user didn't
+// just do.
+async function restoreSession() {
+  const sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (!sessionId) return;
+  try {
+    const data = await api(`api/session/${sessionId}`);
+    state.validatedVersion = null;
+    renderFlow(data);
+  } catch {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+}
+
 // The implicit flow issues no refresh token, so an expired session just
 // means logging in again - callers send whatever this returns and the
 // sf-CLI-backed `org` alias only applies when it is empty.
@@ -743,6 +769,7 @@ async function boot() {
     }
     restoreOAuthFromFragment();
     renderOAuthStatus();
+    await restoreSession();
 
     const bits = [];
     if (config.providers.length) {

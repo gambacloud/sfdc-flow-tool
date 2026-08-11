@@ -739,6 +739,20 @@ async def deploy_status(session_id: str) -> Dict[str, Any]:
     }
 
 
+@app.get("/api/session/{session_id}")
+def session_view(session_id: str) -> Dict[str, Any]:
+    """
+    Re-fetch a session's current state. Exists so the browser can restore the
+    flow it had on screen after something reloads the page out from under it
+    - the OAuth login redirect, or a plain F5 - without that being a reason
+    to lose an unsaved design. The session itself already lives here, in
+    memory, independent of the browser; this just lets the browser ask for
+    it again.
+    """
+    session = get_session(session_id)
+    return view(session_id, session)
+
+
 @app.get("/api/session/{session_id}/{artifact}")
 def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     session = get_session(session_id)
