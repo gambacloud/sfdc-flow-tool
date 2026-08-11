@@ -437,6 +437,23 @@ class TestNestedUnknownsAreRefused:
     def test_a_clean_element_still_parses(self):
         parse_flow(self._flow_xml(self._lookup()))
 
+    def test_actionCalls_tolerates_the_orgs_own_nameSegment_echo(self):
+        """
+        xmlgen never writes nameSegment/versionSegment - the org adds them on
+        save regardless, splitting actionName's value back out into its parts
+        (e.g. "emailSimple" comes back with nameSegment "emailSimple"). A flow
+        built and deployed by this tool therefore failed to re-import, purely
+        from reading back what the org itself had added.
+        """
+        body = (
+            "<actionCalls><name>E</name><label>E</label>"
+            "<actionName>emailSimple</actionName><actionType>emailSimple</actionType>"
+            "<nameSegment>emailSimple</nameSegment><versionSegment>1</versionSegment>"
+            "</actionCalls>"
+        )
+        flow = parse_flow(self._flow_xml(body))
+        assert flow.elements[0].action_name == "emailSimple"
+
     def test_every_supported_element_has_a_child_allowlist(self):
         # A new element type without one would silently ignore everything
         # inside it - the exact hole this closes.

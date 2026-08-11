@@ -201,6 +201,12 @@ _ELEMENT_CHILDREN = {
     "actionCalls": _ELEMENT_COMMON | _FAULT | {
         "actionName", "actionType", "inputParameters", "storeOutputAutomatically",
         "flowTransactionModel",
+        # Salesforce's own echo of actionName, split into its versioned parts
+        # (e.g. actionName "emailSimple" comes back as nameSegment "emailSimple"
+        # with no versionSegment). Retrieved, never written - the org adds these
+        # on save regardless of what was deployed, and actionName alone is
+        # enough to redeploy the same action.
+        "nameSegment", "versionSegment",
     },
     "waits": _ELEMENT_COMMON | _FAULT | {
         "waitEvents", "defaultConnector", "defaultConnectorLabel",
