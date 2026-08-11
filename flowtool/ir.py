@@ -1182,8 +1182,16 @@ class ScreenField(BaseModel):
     )
     data_type: Optional[ScreenDataType] = Field(
         default=None,
-        description="Required for InputField and for any field with choices.",
+        description="Required for InputField and for any field with choices, "
+        "and for a field bound to a record with object_field_reference.",
     )
+    # Binds the field straight to a record field instead of collecting a value
+    # of its own - e.g. '$Record.Name' or 'Get_Account.Name'. Confirmed
+    # against a real dev org's checkOnly validation: the org rejects the field
+    # outright ("You can't save a flow without setting the data type value")
+    # unless data_type is also set, even though the value being shown already
+    # has a type.
+    object_field_reference: Optional[str] = None
     data_type_mappings: List[DataTypeMapping] = Field(
         default_factory=list,
         description="Pins a generic Apex-typed component to concrete types, "

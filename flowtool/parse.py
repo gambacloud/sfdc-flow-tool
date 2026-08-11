@@ -292,6 +292,8 @@ _SCREEN_FIELD_CHILDREN = {
     "dataTypeMappings",
     # Shows the value without letting it be edited, or greys the field out.
     "isReadOnly", "isDisabled", "isVisible",
+    # Binds the field straight to a record field, e.g. '$Record.Name'.
+    "objectFieldReference",
 }
 
 # Everything else on a screen - region containers, and the field types that
@@ -377,7 +379,6 @@ _CHILD_MEANING = {
     "validationRule": "a validation rule",
     "helpText": "help text",
     "fields": "nested sections or columns",
-    "objectFieldReference": "a bound record field",
     "inputsOnNextNavToAssocScrn": "revisit behaviour",
     "userInput": "a choice that lets the user type their own answer",
 }
@@ -820,6 +821,7 @@ def _read_screen_field(item: ET.Element) -> ScreenField:
         is_read_only=_value(item.find("m:isReadOnly", NS)),
         is_disabled=_value(item.find("m:isDisabled", NS)),
         is_visible=_opt_bool(item, "m:isVisible"),
+        object_field_reference=_text(item, "m:objectFieldReference"),
         data_type_mappings=_data_type_mappings(item),
         choice_references=[
             (ref.text or "") for ref in item.findall("m:choiceReferences", NS)

@@ -216,6 +216,18 @@ class TestRoundTrip:
             ),
         ]))
 
+    def test_a_field_bound_directly_to_a_record_field_survives(self):
+        # Verified end to end against a real dev org's checkOnly validation:
+        # the org rejects this outright without data_type set, even though
+        # the value being shown already has a type of its own.
+        assert_survives(one_screen(fields=[
+            ScreenField(
+                name="Bound_Name", field_type="InputField", data_type="String",
+                field_text="Name", object_field_reference="$Record.Name",
+                is_required=False,
+            ),
+        ]))
+
     def test_a_real_orgs_component_choice_field_parses(self):
         """
         Real XML from ava-orange-education/Ultimate-Salesforce-LWC-Developers-
@@ -448,9 +460,9 @@ class TestTheParserRefuses:
         assert "Ask.Pick" in str(caught.value)
 
     @pytest.mark.parametrize("tag,expected", [
-        # visibilityRule, validationRule and helpText used to be here. They are
-        # modelled now - see tests/test_screen_layout.py.
-        ("objectFieldReference", "a bound record field"),
+        # visibilityRule, validationRule, helpText and objectFieldReference
+        # used to be here. They are modelled now - see test_screen_layout.py
+        # and test_a_field_bound_directly_to_a_record_field_survives below.
         ("inputsOnNextNavToAssocScrn2", "<inputsOnNextNavToAssocScrn2>"),
     ])
     def test_extras_on_a_field_are_refused(self, tag, expected):

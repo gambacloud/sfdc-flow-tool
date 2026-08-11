@@ -404,6 +404,8 @@ def _write_screen_field(parent: ET.Element, screen_field) -> None:
         _sub(f, "isRequired", _bool(screen_field.is_required))
     if screen_field.is_visible is not None:
         _sub(f, "isVisible", _bool(screen_field.is_visible))
+    if screen_field.object_field_reference:
+        _sub(f, "objectFieldReference", screen_field.object_field_reference)
     for parameter in screen_field.output_parameters:
         op = _sub(f, "outputParameters")
         _sub(op, "assignToReference", parameter.assign_to_reference)
