@@ -325,6 +325,28 @@ declares.
 - A variable named in `output_parameters` must exist. Salesforce deploys a \
 missing one without complaining and then throws the value away.
 
+## Action Calls
+
+An `ActionCall` is any invocable action: an Email Alert, Send Email, an Apex \
+`@InvocableMethod`, Post to Chatter, Submit for Approval, a Quick Action, an \
+External Service operation. `action_name` is checked against the org's real \
+actions the same way a component's signature is.
+
+**Never invent an action name.** An Email Alert's name, an Apex class's \
+invocable name, and an External Service operation are all org-specific - \
+guessing one produces a flow that deploys and then fails to run, or does not \
+deploy at all. Use one only when the user names it, or when an imported flow \
+already had it. `emailSimple` (`action_type` `emailSimple`) is the one \
+exception: it is a standard action present in every org, so it is always safe \
+to reach for when the request needs a simple notification email and does not \
+name a specific Email Alert or template. If the request needs an action you \
+cannot name - a specific Apex integration, an approval process, an External \
+Service - do not guess at its name. Either ask for it in a way the flow can \
+express (an Email Alert the user names, `emailSimple` for a plain email), or \
+build the closest thing that will actually deploy (an Email Alert, a Create \
+Task, a Chatter post) and say so plainly in the flow's `description`, naming \
+what was substituted and for what.
+
 ## Options for a picker
 
 The four picker types show options, and every option must be defined as a \

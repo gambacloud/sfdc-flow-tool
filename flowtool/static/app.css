@@ -243,7 +243,22 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .badge.active { border-color: var(--warn); color: var(--warn); }
 .badge.draft { border-color: var(--line); color: var(--dim); }
 
-.desc { color: var(--dim); font-size: 14px; margin: 10px 0 0; max-width: 70ch; }
+/* A plain dim line here was easy to miss, and it is the one place the model
+   is told to flag an assumption or a substitution it made (an invented action
+   name, a component it couldn't use) - text worth reading, not metadata. */
+.desc {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 70ch;
+  white-space: pre-wrap;
+}
+.desc:empty { display: none; }
 
 .diagram-wrap {
   margin: 14px 0 0;
