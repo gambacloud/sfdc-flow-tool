@@ -55,8 +55,12 @@
           </p>
           <p>
             <strong>With the <a href="https://developer.salesforce.com/tools/salesforcecli" target="_blank" rel="noopener">sf CLI</a></strong>
-            installed and logged in: <code>sf org display --verbose --json</code>
-            - copy <code>accessToken</code> and <code>instanceUrl</code> from the output.
+            installed and logged in: <code>sf org display -o your-alias --verbose --json</code>
+            for <code>instanceUrl</code>, then <code>sf org auth show-access-token -o your-alias</code>
+            for the token - recent CLI versions redact it from <code>org display</code>
+            and require the separate command. No alias set as default yet?
+            <code>sf org list</code> shows what you have, or
+            <code>sf org login web -a your-alias</code> connects a new one.
           </p>
           <p class="dim">None of these are stored anywhere - sent only with requests, same as OAuth.</p>
         </details>
