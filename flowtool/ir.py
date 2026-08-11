@@ -648,6 +648,93 @@ class Loop(BaseElement):
     # `next` is the no-more-values connector (what runs after the loop).
 
 
+class CollectionFilter(BaseElement):
+    """
+    Keeps only the items of a collection that match conditions - the same shape
+    as a Get Records filter, but over a collection already in memory instead of
+    a query.
+
+    Evaluating a condition needs a name for "the item being tested right now",
+    the same way a Loop needs one for the current item - `current_item` is that
+    placeholder, read from `conditions` as e.g. `{name}.Status`. The result is
+    this element's own output, read as `{!ElementName}`, the same as automatic
+    storage everywhere else in this IR.
+    """
+
+    type: Literal["CollectionFilter"] = "CollectionFilter"
+    collection_reference: str
+    current_item: str = Field(
+        description="A variable to hold the item while a condition is being "
+        "tested. Referenced from conditions as e.g. '{name}.Field'."
+    )
+    conditions: List[Condition] = Field(min_length=1)
+    condition_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+
+    @model_validator(mode="after")
+    def logic_matches_conditions(self) -> "CollectionFilter":
+        _check_logic(self.condition_logic, len(self.conditions),
+                     f"collection filter {self.name!r}", "condition_logic",
+                     "condition")
+        return self
+
+
+class CollectionSortOption(BaseModel):
+    sort_field: str
+    sort_order: Literal["Asc", "Desc"] = "Asc"
+    # Where a blank or missing value sorts to. Salesforce writes this alongside
+    # every sort option it has ever been seen to emit, so it is modelled rather
+    # than assumed - a round trip that dropped it would change where empty
+    # values land without anyone asking for that.
+    does_put_empty_string_and_null_first: bool = False
+
+
+class CollectionSort(BaseElement):
+    """Reorders a collection already in memory. The result is this element's
+    own output, read as `{!ElementName}`."""
+
+    type: Literal["CollectionSort"] = "CollectionSort"
+    collection_reference: str
+    sort_options: List[CollectionSortOption] = Field(min_length=1)
+
+
+class DataTypeMapping(BaseModel):
+    """
+    One generic Apex type parameter, pinned to a concrete type for this call.
+
+    Some invocable actions and components are written against a generic type -
+    `T__inputRecord` rather than a fixed SObject - so the same action can run
+    against any object. `type_name` is the generic parameter as the action
+    declares it; `type_value` is what it means here, almost always an SObject
+    API name.
+    """
+
+    type_name: str = Field(
+        description="The generic type parameter's name, e.g. 'T__inputRecord'."
+    )
+    type_value: str = Field(
+        description="The concrete type it stands for in this call, e.g. 'Account'."
+    )
+
+
+class ComponentOutput(BaseModel):
+    """
+    One value a component or action hands back, and the variable it lands in.
+
+    The mirror image of an input: an input is named on the component and carries
+    a value in, an output is named on the component and names a flow resource to
+    write out to. Both names belong to the component's own signature, and the org
+    checks them - "We can't find this output attribute" - so a wrong one fails
+    validation rather than deploying and silently doing nothing.
+    """
+
+    name: str = Field(
+        description="The property the component exposes, e.g. 'value'."
+    )
+    assign_to_reference: str = Field(
+        description="The variable to store it in."
+    )
+
+
 class ActionCall(FaultCapable):
     """
     Any invocable action: an email alert, Send Email, an Apex @InvocableMethod,
@@ -659,6 +746,11 @@ class ActionCall(FaultCapable):
     """
 
     type: Literal["ActionCall"] = "ActionCall"
+    data_type_mappings: List[DataTypeMapping] = Field(
+        default_factory=list,
+        description="Pins a generic Apex-typed action to concrete types, for "
+        "actions written against T__ style type parameters.",
+    )
     # Whether the action runs inside the flow's transaction or gets its own.
     # Which values a given action allows is the action's business, and the org
     # says so by name - "The action 'EMAILSIMPLE' only supports
@@ -680,12 +772,67 @@ class ActionCall(FaultCapable):
     )
     input_parameters: List["InputAssignment"] = Field(default_factory=list)
     store_output_automatically: bool = False
+    # The older alternative to automatic storage: each output assigned to a
+    # variable by name instead of all of them kept under the element's own
+    # name. Mirrors the same choice on a screen component. Never both.
+    output_parameters: List[ComponentOutput] = Field(default_factory=list)
+    # For an action that runs asynchronously (an external service, a long-running
+    # Apex action): wait for it to finish rather than continuing immediately.
+    # Confirmed against the org's own live Metadata API schema
+    # (describeValueType on FlowActionCall) rather than a public sample - this
+    # combination is real but was not found in any example flow.
+    is_wait_until_completed: bool = False
+    # How long to wait before giving up and following timeout_next instead.
+    # Same shape as a scheduled path's offset: both or neither.
+    timeout_offset: Optional[int] = None
+    timeout_offset_unit: Optional[
+        Literal["Minutes", "Hours", "Days", "Weeks", "Months"]
+    ] = None
+    timeout_next: Optional[str] = Field(
+        default=None,
+        description="Where to go if the action does not finish within the "
+        "timeout. Only meaningful alongside is_wait_until_completed.",
+    )
+
+    @model_validator(mode="after")
+    def one_way_to_get_the_outputs(self) -> "ActionCall":
+        if self.output_parameters and self.store_output_automatically:
+            raise ValueError(
+                f"{self.name}: \"You can't use the storeOutputAutomatically "
+                "field with the outputParameters field.\" Either assign each "
+                "output to a variable, or set store_output_automatically and "
+                f"read them as {{!{self.name}.outputName}}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def timeout_needs_both_halves(self) -> "ActionCall":
+        if (self.timeout_offset is None) != (self.timeout_offset_unit is None):
+            missing = "timeout_offset_unit" if self.timeout_offset_unit is None else "timeout_offset"
+            raise ValueError(
+                f"{self.name}: a timeout needs both timeout_offset and "
+                f"timeout_offset_unit, and {missing} is missing."
+            )
+        return self
+
+
+class SubflowOutputAssignment(BaseModel):
+    """One of the called flow's own output variables, put into a variable here."""
+
+    name: str = Field(description="The output variable's name in the called flow.")
+    assign_to_reference: str = Field(description="The variable in this flow it goes into.")
 
 
 class Subflow(FaultCapable):
     type: Literal["Subflow"] = "Subflow"
     flow_name: str
     input_assignments: List[InputAssignment] = Field(default_factory=list)
+    # The two ways to read back what the called flow produced. Manual
+    # assignment names each output one at a time; automatic storage keeps them
+    # all under this element's own name, read as {!Subflow_Element.OutputVar}.
+    # Mirrors the same choice on Get Records and Create Records.
+    output_assignments: List[SubflowOutputAssignment] = Field(default_factory=list)
+    store_output_automatically: bool = False
 
 
 ScreenFieldType = Literal[
@@ -697,6 +844,10 @@ ScreenFieldType = Literal[
     "MultiSelectCheckboxes",
     "MultiSelectPicklist",
     "ComponentInstance",
+    # A standard component that also picks from a list of options - the
+    # "Choice Lookup" component (flowruntime:choiceLookup), which is a
+    # component in every way except that it takes choice_references too.
+    "ComponentChoice",
     # Layout rather than content. A RegionContainer is a section and holds
     # Regions; a Region is a column and holds ordinary fields. Exactly two
     # levels: the org refuses a container inside a region by name.
@@ -718,10 +869,19 @@ ScreenDataType = Literal[
 ]
 
 # The field types that present a list of options rather than a free-text box.
-# Each one needs at least one choice to show, and nothing else may carry choices.
+# Each one needs at least one choice to show, and nothing else may carry choices
+# - except ComponentChoice, which may but does not have to: see
+# _OPTIONALLY_CHOICE_FIELD_TYPES below.
 CHOICE_FIELD_TYPES = frozenset(
     {"RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "MultiSelectPicklist"}
 )
+
+# ComponentChoice (the "Choice Lookup" standard component) offers options built
+# from a Choice or DynamicChoiceSet the same way RadioButtons etc. do, but it is
+# also seen with none at all - other standard lookup components share the same
+# fieldType without offering a fixed list. So choice_references is permitted
+# here without being required, unlike the plain choice field types above.
+_OPTIONALLY_CHOICE_FIELD_TYPES = frozenset({"ComponentChoice"})
 
 # Types that hold no value at all.
 _NO_VALUE_FIELD_TYPES = frozenset({"DisplayText", "LargeTextArea"})
@@ -734,7 +894,7 @@ _NO_VALUE_FIELD_TYPES = frozenset({"DisplayText", "LargeTextArea"})
 # section or a column holds no value at all, and the org takes a dataType on
 # any of the three without complaint.
 _OPTIONAL_DATA_TYPE_FIELD_TYPES = frozenset(
-    {"ComponentInstance", "RegionContainer", "Region"}
+    {"ComponentInstance", "ComponentChoice", "RegionContainer", "Region"}
 )
 
 
@@ -762,9 +922,10 @@ class Choice(BaseModel):
 
 class DynamicChoiceSet(BaseModel):
     """
-    Options built when the flow runs, in one of two ways: from records, or from
-    a picklist field's values. The two are exclusive - a choice set drawn from
-    records has no picklist to read, and vice versa.
+    Options built when the flow runs, in one of three ways: a live query
+    against an object, a collection already in memory, or a picklist field's
+    values. Exactly one - a choice set drawn from records has no picklist to
+    read, and a fixed collection needs no filters of its own to query with.
     """
 
     name: str
@@ -773,19 +934,32 @@ class DynamicChoiceSet(BaseModel):
         "Picklist", "Multipicklist",
     ] = "String"
 
-    # Record mode: one option per matching record.
+    # Query mode: one option per matching record, queried live.
     object: Optional[str] = None
+    filters: List["RecordFilter"] = Field(default_factory=list)
+    filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+    sort_field: Optional[str] = None
+    sort_order: Optional[Literal["Asc", "Desc"]] = None
+    limit: Optional[int] = None
+
+    # Shared by query mode and collection mode: which field of each record is
+    # shown, and which is stored.
     display_field: Optional[str] = Field(
         default=None, description="Record field shown to the user, e.g. 'Name'."
     )
     value_field: Optional[str] = Field(
         default=None, description="Record field stored, e.g. 'Id'."
     )
-    filters: List["RecordFilter"] = Field(default_factory=list)
-    filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
-    sort_field: Optional[str] = None
-    sort_order: Optional[Literal["Asc", "Desc"]] = None
-    limit: Optional[int] = None
+
+    # Collection mode: one option per record already in memory, in this
+    # collection variable, instead of a live query. Confirmed against the
+    # org's own live Metadata API schema (describeValueType on
+    # FlowDynamicChoiceSet) - real, but not found in any public sample flow.
+    collection_reference: Optional[str] = Field(
+        default=None,
+        description="A collection variable to build options from, instead of "
+        "querying an object. Still needs display_field and value_field.",
+    )
 
     # Picklist mode: one option per value defined on a picklist field.
     picklist_object: Optional[str] = None
@@ -804,16 +978,18 @@ class DynamicChoiceSet(BaseModel):
 
     @model_validator(mode="after")
     def one_mode_or_the_other(self) -> "DynamicChoiceSet":
-        record_mode = any(
-            (self.object, self.display_field, self.value_field, self.filters,
-             self.sort_field, self.limit)
+        query_mode = any(
+            (self.object, self.filters, self.sort_field, self.limit)
         )
+        collection_mode = bool(self.collection_reference)
         picklist_mode = any((self.picklist_object, self.picklist_field))
-        if record_mode and picklist_mode:
+
+        if sum((query_mode, collection_mode, picklist_mode)) > 1:
             raise ValueError(
-                f"choice set {self.name!r}: options come either from records "
-                "(object + display_field + value_field) or from a picklist "
-                "(picklist_object + picklist_field), not both."
+                f"choice set {self.name!r}: options come from exactly one of a "
+                "live query (object + filters/sort_field/limit), a collection "
+                "already in memory (collection_reference), or a picklist "
+                "(picklist_object + picklist_field) - not more than one."
             )
         if picklist_mode:
             if not (self.picklist_object and self.picklist_field):
@@ -831,11 +1007,27 @@ class DynamicChoiceSet(BaseModel):
                     f"picklist field itself is multi-select - not {self.data_type!r}."
                 )
             return self
-        if not record_mode:
+        if collection_mode:
+            missing = [
+                field for field, value in (
+                    ("display_field", self.display_field),
+                    ("value_field", self.value_field),
+                ) if not value
+            ]
+            if missing:
+                raise ValueError(
+                    f"choice set {self.name!r}: a choice set built from a "
+                    f"collection needs {missing} - which field of each item is "
+                    "shown, and which is stored."
+                )
+            return self
+        if not query_mode and not (self.display_field or self.value_field):
             raise ValueError(
-                f"choice set {self.name!r}: needs either records "
-                "(object + display_field + value_field) or a picklist "
-                "(picklist_object + picklist_field) to build its options from."
+                f"choice set {self.name!r}: needs a live query "
+                "(object + display_field + value_field), a collection "
+                "(collection_reference + display_field + value_field), or a "
+                "picklist (picklist_object + picklist_field) to build its "
+                "options from."
             )
         missing = [
             field for field, value in (
@@ -966,25 +1158,6 @@ class ValidationRule(BaseModel):
     )
 
 
-class ComponentOutput(BaseModel):
-    """
-    One value a screen component hands back, and the variable it lands in.
-
-    The mirror image of an input: an input is named on the component and carries
-    a value in, an output is named on the component and names a flow resource to
-    write out to. Both names belong to the component's own signature, and the org
-    checks them - "We can't find this output attribute" - so a wrong one fails
-    validation rather than deploying and silently doing nothing.
-    """
-
-    name: str = Field(
-        description="The property the component exposes, e.g. 'value'."
-    )
-    assign_to_reference: str = Field(
-        description="The variable to store it in."
-    )
-
-
 class ScreenField(BaseModel):
     """
     One thing on a screen: a paragraph of text, a box the user types into, a
@@ -1011,7 +1184,27 @@ class ScreenField(BaseModel):
         default=None,
         description="Required for InputField and for any field with choices.",
     )
+    data_type_mappings: List[DataTypeMapping] = Field(
+        default_factory=list,
+        description="Pins a generic Apex-typed component to concrete types, "
+        "for components written against T__ style type parameters.",
+    )
     is_required: bool = False
+    # Shows the field's value without letting it be edited, or greys it out
+    # entirely. Distinct flags Salesforce has been seen to emit independently
+    # of each other, so both are modelled rather than folded into one.
+    #
+    # A full Value rather than a plain bool: confirmed against the org's own
+    # live Metadata API schema (describeValueType on FlowScreenField), both
+    # soapType FlowElementReferenceOrValue - so either can be a literal true or
+    # a reference to a variable/formula, the same as default_value below. A
+    # plain bool would silently read a dynamic one as false.
+    is_read_only: Optional[Value] = None
+    is_disabled: Optional[Value] = None
+    # Confirmed present on the same live schema, alongside the two above.
+    # Never seen set in any example examined - modelled as a plain optional
+    # bool since the org describes it as a simple boolean, not a Value.
+    is_visible: Optional[bool] = None
     choice_references: List[str] = Field(
         default_factory=list,
         description="Names of Choice or DynamicChoiceSet resources, in the order "
@@ -1166,7 +1359,8 @@ class ScreenField(BaseModel):
     @model_validator(mode="after")
     def shape_matches_type(self) -> "ScreenField":
         takes_choices = self.field_type in CHOICE_FIELD_TYPES
-        is_component = self.field_type == "ComponentInstance"
+        may_have_choices = takes_choices or self.field_type in _OPTIONALLY_CHOICE_FIELD_TYPES
+        is_component = self.field_type in ("ComponentInstance", "ComponentChoice")
         is_layout = self.field_type in LAYOUT_FIELD_TYPES
 
         if self.validation and self.field_type == "DisplayText":
@@ -1178,8 +1372,9 @@ class ScreenField(BaseModel):
 
         if is_component and not self.extension_name:
             raise ValueError(
-                f"screen field {self.name!r}: a ComponentInstance is a placeholder "
-                "for a component, so it needs extension_name to say which one."
+                f"screen field {self.name!r}: a {self.field_type} is a "
+                "placeholder for a component, so it needs extension_name to "
+                "say which one."
             )
         if not is_component:
             # A Region is the one exception, and it is not really one: its width
@@ -1223,7 +1418,7 @@ class ScreenField(BaseModel):
                 "options, so it needs at least one entry in choice_references "
                 "naming a Choice or a DynamicChoiceSet."
             )
-        if self.choice_references and not takes_choices:
+        if self.choice_references and not may_have_choices:
             raise ValueError(
                 f"screen field {self.name!r}: a {self.field_type} has nowhere to "
                 f"show options, so it cannot carry choice_references. Use one of "
@@ -1323,6 +1518,14 @@ class Screen(BaseElement):
     allow_pause: bool = True
     show_header: bool = True
     show_footer: bool = True
+    # Custom wording for the navigation buttons. None means Salesforce's own
+    # default label, not an empty button - so these are only written when set.
+    paused_text: Optional[str] = None
+    next_or_finish_button_label: Optional[str] = None
+    back_button_label: Optional[str] = None
+    pause_button_label: Optional[str] = None
+    # Behind the screen's own help icon - distinct from a field's help_text.
+    help_text: Optional[str] = None
 
 
 class WaitEvent(BaseModel):
@@ -1410,6 +1613,90 @@ class WaitEvent(BaseModel):
         return self
 
 
+TransformActionType = Literal[
+    "Map", "Count", "Sum", "GetItemByIndex", "InnerJoin", "InvocableAction"
+]
+
+
+class TransformValueAction(BaseModel):
+    """
+    One thing that produces a value inside a Transform.
+
+    `transform_type` has six shapes, confirmed against the org's own live
+    Metadata API schema (describeValueType on FlowTransformValueAction) -
+    'Map' is the simple case, a value copied straight from a field or
+    variable. The other five are aggregations over a collection or a call to
+    an action, and this build has no example of any of them to model their
+    individual shapes confidently - so, like a Wait event's parameters, they
+    are read and written back through `input_parameters` rather than guessed
+    at. A flow using one of the five still round-trips exactly; it is only
+    not drawn as anything more specific than "a transform action".
+    """
+
+    name: Optional[str] = None
+    transform_type: TransformActionType
+    value: Optional[Value] = Field(
+        default=None, description="The source, for transform_type 'Map'."
+    )
+    output_field_api_name: Optional[str] = None
+    assign_to_reference: Optional[str] = None
+    input_parameters: List[InputAssignment] = Field(default_factory=list)
+
+
+class TransformValue(BaseModel):
+    """
+    One path of the transform's output, and what fills it.
+
+    For everything but an InnerJoin, the path is named on each action instead
+    - `output_field_api_name` for a field, or nothing at all for a value that
+    stands alone. Verified against a real dev org's own checkOnly validation:
+    a Map action's TransformValue named directly was rejected outright -
+    "The flow metadata specifies 'Name' for the name of a transformValue,
+    which is supported only if transformType is InnerJoin."
+    """
+
+    name: Optional[str] = None
+    label: Optional[str] = None
+    description: Optional[str] = None
+    actions: List[TransformValueAction] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def name_only_for_a_join(self) -> "TransformValue":
+        if self.name and any(a.transform_type != "InnerJoin" for a in self.actions):
+            raise ValueError(
+                f"\"The flow metadata specifies {self.name!r} for the name of "
+                "a transformValue, which is supported only if transformType "
+                "is InnerJoin.\" Drop the name, or name the field on each "
+                "action instead with output_field_api_name."
+            )
+        return self
+
+
+class Transform(BaseElement):
+    """
+    Builds a record or an Apex-defined object from other values - the
+    structured alternative to assembling one field at a time with Assignment.
+
+    Confirmed against the org's own live Metadata API schema (describeValueType
+    on FlowTransform) rather than a public sample flow - none was found using
+    it. No fault path: unlike a DML element, nothing here can fail at runtime
+    in a way the flow can catch.
+    """
+
+    type: Literal["Transform"] = "Transform"
+    # Exactly what shape the output takes: an SObject (object_type) or an
+    # instance of an Apex-defined class (apex_class). Not validated as
+    # mutually exclusive - no confirmed example shows both empty or both set,
+    # so nothing here assumes which.
+    object_type: Optional[str] = None
+    apex_class: Optional[str] = None
+    is_collection: bool = False
+    scale: Optional[int] = None
+    schema_uri: Optional[str] = None
+    store_output_automatically: bool = False
+    transform_values: List[TransformValue] = Field(default_factory=list)
+
+
 class Wait(FaultCapable):
     """
     Pause: the flow stops here and Salesforce resumes it later.
@@ -1455,6 +1742,8 @@ Element = Annotated[
     Union[
         ActionCall,
         Assignment,
+        CollectionFilter,
+        CollectionSort,
         Decision,
         GetRecords,
         RecordCreate,
@@ -1463,6 +1752,7 @@ Element = Annotated[
         Loop,
         Screen,
         Subflow,
+        Transform,
         Wait,
     ],
     Field(discriminator="type"),
@@ -1722,6 +2012,9 @@ class Flow(BaseModel):
         fault = getattr(element, "fault_next", None)
         if fault:
             targets.append(fault)
+        timeout = getattr(element, "timeout_next", None)
+        if timeout:
+            targets.append(timeout)
         if element.next:
             targets.append(element.next)
         return targets
@@ -1762,6 +2055,9 @@ class Flow(BaseModel):
             fault = getattr(element, "fault_next", None)
             if fault:
                 lines.append(f"  {element.name} on fault -> {fault}")
+            timeout = getattr(element, "timeout_next", None)
+            if timeout:
+                lines.append(f"  {element.name} on timeout -> {timeout}")
         return "\n".join(lines)
 
     def reachable(self) -> set:
@@ -1825,6 +2121,7 @@ class Flow(BaseModel):
             if isinstance(el, Loop):
                 check(el.first_element, f"{el.name}.first_element")
             check(getattr(el, "fault_next", None), f"{el.name}.fault_next")
+            check(getattr(el, "timeout_next", None), f"{el.name}.timeout_next")
 
         if problems:
             raise ValueError("unresolved references: " + "; ".join(problems))

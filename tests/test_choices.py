@@ -274,7 +274,7 @@ class TestOneNamespace:
 
 class TestChoiceSetModes:
     def test_records_and_a_picklist_cannot_be_mixed(self):
-        with pytest.raises(ValidationError, match="not both"):
+        with pytest.raises(ValidationError, match="not more than one"):
             DynamicChoiceSet(name="Mixed", object="Account", display_field="Name",
                              value_field="Id", picklist_object="Account",
                              picklist_field="Industry")
@@ -290,7 +290,7 @@ class TestChoiceSetModes:
             DynamicChoiceSet(name="Partial", picklist_field="Industry")
 
     def test_a_set_with_no_source_at_all_is_rejected(self):
-        with pytest.raises(ValidationError, match="needs either records"):
+        with pytest.raises(ValidationError, match="needs a live query"):
             DynamicChoiceSet(name="Empty")
 
 
@@ -396,15 +396,44 @@ class TestParsing:
             parse_flow(xml, api_name="Ask")
         assert "child:outputAssignments" in caught.value.codes
 
-    def test_options_built_from_a_collection_are_refused(self):
+    def test_options_built_from_a_collection_parse(self):
+        # collectionReference/displayField/valueField: confirmed against the
+        # org's own live Metadata API schema (describeValueType on
+        # FlowDynamicChoiceSet) - real, but not found in any public sample flow.
         xml = org_xml(
             "<dynamicChoiceSets><name>Red</name><dataType>String</dataType>"
             "<collectionReference>v_Items</collectionReference>"
-            "<displayField>Name</displayField></dynamicChoiceSets>"
+            "<displayField>Name</displayField><valueField>Id</valueField>"
+            "</dynamicChoiceSets>"
         )
-        with pytest.raises(UnsupportedFlow) as caught:
-            parse_flow(xml, api_name="Ask")
-        assert "child:collectionReference" in caught.value.codes
+        flow = parse_flow(xml, api_name="Ask")
+        choice_set = flow.dynamic_choice_sets[0]
+        assert choice_set.collection_reference == "v_Items"
+        assert choice_set.display_field == "Name"
+        assert choice_set.value_field == "Id"
+
+    def test_a_collection_choice_set_survives_a_round_trip(self):
+        assert_survives(flow_with(
+            picker(references=("Items",)),
+            choices=[],
+            choice_sets=[DynamicChoiceSet(
+                name="Items", object=None, collection_reference="v_Items",
+                display_field="Name", value_field="Id",
+            )],
+        ))
+
+    def test_a_collection_choice_set_needs_display_and_value_fields(self):
+        with pytest.raises(ValidationError) as caught:
+            DynamicChoiceSet(name="Items", collection_reference="v_Items")
+        assert "display_field" in str(caught.value)
+        assert "value_field" in str(caught.value)
+
+    def test_a_collection_reference_cannot_be_mixed_with_a_live_query(self):
+        with pytest.raises(ValidationError, match="not more than one"):
+            DynamicChoiceSet(
+                name="Items", object="Account", collection_reference="v_Items",
+                display_field="Name", value_field="Id",
+            )
 
     def test_a_dangling_reference_in_an_org_flow_is_reported_not_crashed(self):
         """The screen names an option the flow never defines."""

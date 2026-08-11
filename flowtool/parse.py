@@ -21,9 +21,13 @@ from .ir import (
     Assignment,
     AssignmentItem,
     Choice,
+    CollectionFilter,
+    CollectionSort,
+    CollectionSortOption,
     ComponentOutput,
     Condition,
     Constant,
+    DataTypeMapping,
     Decision,
     DynamicChoiceSet,
     Element,
@@ -44,7 +48,11 @@ from .ir import (
     ScreenField,
     Start,
     Subflow,
+    SubflowOutputAssignment,
     TextTemplate,
+    Transform,
+    TransformValue,
+    TransformValueAction,
     ValidationRule,
     Value,
     Variable,
@@ -130,8 +138,9 @@ _IGNORED = {
 
 # Element collections this module can turn into IR.
 _SUPPORTED_ELEMENTS = {
-    "actionCalls", "assignments", "decisions", "loops", "recordCreates", "recordDeletes",
-    "recordLookups", "recordUpdates", "screens", "subflows", "waits",
+    "actionCalls", "assignments", "collectionProcessors", "decisions", "loops",
+    "recordCreates", "recordDeletes", "recordLookups", "recordUpdates", "screens",
+    "subflows", "transforms", "waits",
 }
 
 # Resources rather than elements: nothing connects to them, screen fields name
@@ -148,8 +157,6 @@ _KNOWN_UNSUPPORTED = {
     "steps": "steps",
     "orchestratedStages": "orchestration stages",
     "stages": "stages",
-    "collectionProcessors": "collection filter/sort elements",
-    "transforms": "transform elements",
     "customErrors": "custom error elements",
     "exitRules": "exit rules",
     "filters": "top-level filters",
@@ -197,24 +204,68 @@ _ELEMENT_CHILDREN = {
     "recordDeletes": _ELEMENT_COMMON | _FAULT | {
         "object", "filters", "filterLogic", "inputReference",
     },
-    "subflows": _ELEMENT_COMMON | _FAULT | {"flowName", "inputAssignments"},
+    "subflows": _ELEMENT_COMMON | _FAULT | {
+        "flowName", "inputAssignments",
+        # The two ways to read back what the called flow produced - mirrors
+        # Get Records' outputAssignments/storeOutputAutomatically.
+        "outputAssignments", "storeOutputAutomatically",
+    },
     "actionCalls": _ELEMENT_COMMON | _FAULT | {
         "actionName", "actionType", "inputParameters", "storeOutputAutomatically",
         "flowTransactionModel",
+        # Pins a generic Apex-typed action to concrete types.
+        "dataTypeMappings",
+        # The alternative to automatic storage: each output assigned to a
+        # variable by name.
+        "outputParameters",
+        # For an action that runs asynchronously: wait for it, for how long,
+        # and where to go if it times out. Confirmed against the org's own
+        # live schema (describeValueType on FlowActionCall) - real, but not
+        # found in any public sample flow.
+        "isWaitUntilCompleted", "offset", "offsetUnit", "timeoutConnector",
         # Salesforce's own echo of actionName, split into its versioned parts
         # (e.g. actionName "emailSimple" comes back as nameSegment "emailSimple"
         # with no versionSegment). Retrieved, never written - the org adds these
         # on save regardless of what was deployed, and actionName alone is
         # enough to redeploy the same action.
-        "nameSegment", "versionSegment",
+        "nameSegment", "versionSegment", "versionString",
+        # A generic type discriminator this schema reuses across several
+        # element kinds (waits, collectionProcessors, orchestration steps).
+        # Never seen populated on an actionCalls node in any example examined;
+        # retrieved and ignored like the echo fields above rather than modelled
+        # on faith.
+        "elementSubtype",
     },
     "waits": _ELEMENT_COMMON | _FAULT | {
         "waitEvents", "defaultConnector", "defaultConnectorLabel",
     },
+    # No faultConnector: confirmed against the org's own live Metadata API
+    # schema (describeValueType on FlowTransform) - nothing here can fail at
+    # runtime the way a DML element can.
+    "transforms": _ELEMENT_COMMON | {
+        "apexClass", "objectType", "isCollection", "scale", "schemaUri",
+        "storeOutputAutomatically", "transformValues", "elementSubtype",
+    },
     # No faultConnector: a screen cannot fail the way a DML element can.
     "screens": _ELEMENT_COMMON | {
         "fields", "allowBack", "allowFinish", "allowPause", "showFooter", "showHeader",
+        # Custom wording for the navigation buttons.
+        "pausedText", "nextOrFinishButtonLabel", "backButtonLabel", "pauseButtonLabel",
+        # Behind the screen's own help icon - distinct from a field's helpText.
+        "helpText",
     },
+}
+
+# collectionProcessors is one XML tag wearing two different shapes,
+# discriminated by collectionProcessorType - checked separately below rather
+# than through the table above, which assumes one shape per tag.
+_COLLECTION_FILTER_CHILDREN = _ELEMENT_COMMON | {
+    "collectionProcessorType", "elementSubtype", "collectionReference",
+    "assignNextValueToReference", "conditions", "conditionLogic",
+}
+_COLLECTION_SORT_CHILDREN = _ELEMENT_COMMON | {
+    "collectionProcessorType", "elementSubtype", "collectionReference",
+    "sortOptions",
 }
 
 # Two levels below the root, and the reason this pass exists at all: a screen
@@ -237,6 +288,10 @@ _SCREEN_FIELD_CHILDREN = {
     # column holds fields, which is why _read_screen_field calls itself.
     "fields", "regionContainerType", "helpText", "visibilityRule",
     "validationRule",
+    # Pins a generic Apex-typed component to concrete types.
+    "dataTypeMappings",
+    # Shows the value without letting it be edited, or greys the field out.
+    "isReadOnly", "isDisabled", "isVisible",
 }
 
 # Everything else on a screen - region containers, and the field types that
@@ -245,7 +300,7 @@ _SCREEN_FIELD_CHILDREN = {
 _SUPPORTED_SCREEN_FIELD_TYPES = {
     "DisplayText", "InputField", "LargeTextArea",
     "RadioButtons", "DropdownBox", "MultiSelectCheckboxes", "MultiSelectPicklist",
-    "ComponentInstance", "RegionContainer", "Region",
+    "ComponentInstance", "ComponentChoice", "RegionContainer", "Region",
 }
 
 _CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataValues"}
@@ -265,6 +320,9 @@ _CHOICE_SET_CHILDREN = {
     "name", "dataType", "displayField", "valueField", "object", "filters",
     "filterLogic", "limit", "sortField", "sortOrder",
     "picklistField", "picklistObject", "processMetadataValues",
+    # Collection mode: options built from a collection already in memory
+    # instead of a live query.
+    "collectionReference",
 }
 
 _START_CHILDREN = {
@@ -279,6 +337,19 @@ _SCHEDULED_PATH_CHILDREN = {
     "recordField", "maxBatchSize", "pathType",
 }
 
+# transformValues nests two levels below a Transform - a value's own name and
+# label, then the actions that produce it. Confirmed against the org's own
+# live Metadata API schema (describeValueType on FlowTransformValue and
+# FlowTransformValueAction).
+_TRANSFORM_VALUE_CHILDREN = {
+    "transformValueName", "transformValueLabel", "transformValueDescription",
+    "transformValueActions", "processMetadataValues",
+}
+_TRANSFORM_VALUE_ACTION_CHILDREN = {
+    "name", "transformType", "value", "outputFieldApiName", "assignToReference",
+    "inputParameters", "processMetadataValues",
+}
+
 _VARIABLE_CHILDREN = {
     "name", "dataType", "isCollection", "isInput", "isOutput", "objectType",
     "description", "scale", "value",
@@ -289,7 +360,6 @@ _VARIABLE_CHILDREN = {
 _CHILD_MEANING = {
     "outputReference": "manual output storage",
     "outputAssignments": "manually assigned outputs",
-    "outputParameters": "an action's output parameters",
     "assignNextValueToReference": "its own loop variable",
     "limit": "a record limit",
     "schedule": "a schedule",
@@ -310,12 +380,6 @@ _CHILD_MEANING = {
     "objectFieldReference": "a bound record field",
     "inputsOnNextNavToAssocScrn": "revisit behaviour",
     "userInput": "a choice that lets the user type their own answer",
-    "collectionReference": "options built from a collection",
-    # On a screen.
-    "pausedText": "custom pause text",
-    "nextOrFinishButtonLabel": "a custom button label",
-    "backButtonLabel": "a custom button label",
-    "pauseButtonLabel": "a custom button label",
 }
 
 
@@ -567,6 +631,16 @@ def _read_loop(node: ET.Element) -> Loop:
     )
 
 
+def _data_type_mappings(node: ET.Element) -> List[DataTypeMapping]:
+    return [
+        DataTypeMapping(
+            type_name=_text(item, "m:typeName") or "",
+            type_value=_text(item, "m:typeValue") or "",
+        )
+        for item in node.findall("m:dataTypeMappings", NS)
+    ]
+
+
 def _read_action_call(node: ET.Element) -> ActionCall:
     parameters = []
     for item in node.findall("m:inputParameters", NS):
@@ -574,6 +648,7 @@ def _read_action_call(node: ET.Element) -> ActionCall:
         if value is None:
             continue
         parameters.append(InputAssignment(name=_text(item, "m:name") or "", value=value))
+    offset = _text(node, "m:offset")
     return ActionCall(
         **_fault_common(node),
         flow_transaction_model=_text(node, "m:flowTransactionModel"),
@@ -581,6 +656,12 @@ def _read_action_call(node: ET.Element) -> ActionCall:
         action_type=_text(node, "m:actionType") or "",
         input_parameters=parameters,
         store_output_automatically=_bool(node, "m:storeOutputAutomatically"),
+        data_type_mappings=_data_type_mappings(node),
+        output_parameters=_read_component_outputs(node),
+        is_wait_until_completed=_bool(node, "m:isWaitUntilCompleted"),
+        timeout_offset=int(offset) if offset else None,
+        timeout_offset_unit=_text(node, "m:offsetUnit"),
+        timeout_next=_target(node, "timeoutConnector"),
     )
 
 
@@ -608,6 +689,7 @@ def _read_choice_set(node: ET.Element) -> DynamicChoiceSet:
         limit=int(limit) if limit else None,
         picklist_object=_text(node, "m:picklistObject"),
         picklist_field=_text(node, "m:picklistField"),
+        collection_reference=_text(node, "m:collectionReference"),
     )
 
 
@@ -628,6 +710,42 @@ def _read_wait(node: ET.Element) -> Wait:
         wait_events=events,
         default_next=_target(node, "defaultConnector"),
         default_label=_text(node, "m:defaultConnectorLabel") or "Anything else",
+    )
+
+
+def _read_transform_value_action(item: ET.Element) -> TransformValueAction:
+    return TransformValueAction(
+        name=_text(item, "m:name"),
+        transform_type=_text(item, "m:transformType") or "Map",
+        value=_value(item.find("m:value", NS)),
+        output_field_api_name=_text(item, "m:outputFieldApiName"),
+        assign_to_reference=_text(item, "m:assignToReference"),
+        input_parameters=_read_component_inputs(item),
+    )
+
+
+def _read_transform(node: ET.Element) -> Transform:
+    values = []
+    for item in node.findall("m:transformValues", NS):
+        values.append(TransformValue(
+            name=_text(item, "m:transformValueName"),
+            label=_text(item, "m:transformValueLabel"),
+            description=_text(item, "m:transformValueDescription"),
+            actions=[
+                _read_transform_value_action(action)
+                for action in item.findall("m:transformValueActions", NS)
+            ],
+        ))
+    scale = _text(node, "m:scale")
+    return Transform(
+        **_common(node),
+        object_type=_text(node, "m:objectType"),
+        apex_class=_text(node, "m:apexClass"),
+        is_collection=_bool(node, "m:isCollection"),
+        scale=int(scale) if scale else None,
+        schema_uri=_text(node, "m:schemaUri"),
+        store_output_automatically=_bool(node, "m:storeOutputAutomatically"),
+        transform_values=values,
     )
 
 
@@ -699,6 +817,10 @@ def _read_screen_field(item: ET.Element) -> ScreenField:
         ),
         inputs_on_revisit=_text(item, "m:inputsOnNextNavToAssocScrn"),
         is_required=_bool(item, "m:isRequired"),
+        is_read_only=_value(item.find("m:isReadOnly", NS)),
+        is_disabled=_value(item.find("m:isDisabled", NS)),
+        is_visible=_opt_bool(item, "m:isVisible"),
+        data_type_mappings=_data_type_mappings(item),
         choice_references=[
             (ref.text or "") for ref in item.findall("m:choiceReferences", NS)
         ],
@@ -749,6 +871,11 @@ def _read_screen(node: ET.Element) -> Screen:
         allow_pause=_bool(node, "m:allowPause", True),
         show_footer=_bool(node, "m:showFooter", True),
         show_header=_bool(node, "m:showHeader", True),
+        paused_text=_text(node, "m:pausedText"),
+        next_or_finish_button_label=_text(node, "m:nextOrFinishButtonLabel"),
+        back_button_label=_text(node, "m:backButtonLabel"),
+        pause_button_label=_text(node, "m:pauseButtonLabel"),
+        help_text=_text(node, "m:helpText"),
     )
 
 
@@ -759,16 +886,65 @@ def _read_subflow(node: ET.Element) -> Subflow:
         if value is None:
             continue
         inputs.append(InputAssignment(name=_text(item, "m:name") or "", value=value))
+    outputs = [
+        SubflowOutputAssignment(
+            name=_text(item, "m:name") or "",
+            assign_to_reference=_text(item, "m:assignToReference") or "",
+        )
+        for item in node.findall("m:outputAssignments", NS)
+    ]
     return Subflow(
         **_fault_common(node),
         flow_name=_text(node, "m:flowName") or "",
         input_assignments=inputs,
+        output_assignments=outputs,
+        store_output_automatically=_bool(node, "m:storeOutputAutomatically"),
     )
+
+
+def _read_collection_filter(node: ET.Element) -> CollectionFilter:
+    return CollectionFilter(
+        **_common(node),
+        collection_reference=_text(node, "m:collectionReference") or "",
+        current_item=_text(node, "m:assignNextValueToReference") or "",
+        conditions=_conditions(node),
+        condition_logic=_text(node, "m:conditionLogic") or "and",
+    )
+
+
+def _read_collection_sort(node: ET.Element) -> CollectionSort:
+    options = [
+        CollectionSortOption(
+            sort_field=_text(item, "m:sortField") or "",
+            sort_order=_text(item, "m:sortOrder") or "Asc",
+            does_put_empty_string_and_null_first=_bool(
+                item, "m:doesPutEmptyStringAndNullFirst"
+            ),
+        )
+        for item in node.findall("m:sortOptions", NS)
+    ]
+    return CollectionSort(
+        **_common(node),
+        collection_reference=_text(node, "m:collectionReference") or "",
+        sort_options=options,
+    )
+
+
+def _read_collection_processor(node: ET.Element):
+    """
+    Dispatches on collectionProcessorType, which is checked and known-good by
+    the time this runs - the gap check above already refused anything that is
+    not a Filter or a Sort, so every node reaching here is one of the two.
+    """
+    if _text(node, "m:collectionProcessorType") == "SortCollectionProcessor":
+        return _read_collection_sort(node)
+    return _read_collection_filter(node)
 
 
 _READERS = {
     "actionCalls": _read_action_call,
     "assignments": _read_assignment,
+    "collectionProcessors": _read_collection_processor,
     "decisions": _read_decision,
     "loops": _read_loop,
     "recordCreates": _read_record_create,
@@ -778,6 +954,7 @@ _READERS = {
     "screens": _read_screen,
     "waits": _read_wait,
     "subflows": _read_subflow,
+    "transforms": _read_transform,
 }
 
 
@@ -827,6 +1004,23 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             name = _text(node, "m:name") or tag
             reasons.extend(_unknown_children(node, allowed, name))
 
+    # collectionProcessors is not in the table above: Filter and Sort share one
+    # tag but not one shape, so which allow-list applies depends on a child's
+    # own value rather than the tag alone.
+    for node in root.findall("m:collectionProcessors", NS):
+        name = _text(node, "m:name") or "a collection processor"
+        proc_type = _text(node, "m:collectionProcessorType")
+        if proc_type == "FilterCollectionProcessor":
+            reasons.extend(_unknown_children(node, _COLLECTION_FILTER_CHILDREN, name))
+        elif proc_type == "SortCollectionProcessor":
+            reasons.extend(_unknown_children(node, _COLLECTION_SORT_CHILDREN, name))
+        else:
+            reasons.append(Gap(
+                f"collection_processor_type:{proc_type}",
+                f"{name} is a {proc_type or '(untyped)'} collection processor - "
+                "this build only reads a filter or a sort",
+            ))
+
     # And one level down again, for the two elements that nest. A wait event is
     # where the flow's resume condition lives, so an attribute read as absent
     # there is a flow that comes back at the wrong time - or not at all.
@@ -835,6 +1029,21 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             where = (f"{_text(node, 'm:name') or 'a Pause'}."
                      f"{_text(item, 'm:name') or '(unnamed event)'}")
             reasons.extend(_unknown_children(item, _WAIT_EVENT_CHILDREN, where))
+
+    # transformValues nests two levels deep, same reasoning as a wait event:
+    # an attribute read as absent on the way down is a value silently wrong on
+    # the way out.
+    for node in root.findall("m:transforms", NS):
+        for tv in node.findall("m:transformValues", NS):
+            where = (f"{_text(node, 'm:name') or 'a Transform'}."
+                     f"{_text(tv, 'm:transformValueName') or '(unnamed value)'}")
+            reasons.extend(_unknown_children(tv, _TRANSFORM_VALUE_CHILDREN, where))
+            for action in tv.findall("m:transformValueActions", NS):
+                action_where = f"{where}.{_text(action, 'm:name') or '(unnamed action)'}"
+                reasons.extend(
+                    _unknown_children(action, _TRANSFORM_VALUE_ACTION_CHILDREN,
+                                     action_where)
+                )
 
     # Resources get the same treatment: a choice read without its userInput would
     # lose the user's own typed answer on the next deploy.

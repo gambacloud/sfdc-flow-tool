@@ -7,13 +7,19 @@ than what is in the org, and editing that flow would deploy the difference.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from flowtool.ir import (
     ActionCall,
     Assignment,
     AssignmentItem,
+    CollectionFilter,
+    CollectionSort,
+    CollectionSortOption,
+    ComponentOutput,
     Condition,
     Constant,
+    DataTypeMapping,
     Decision,
     FieldValue,
     Flow,
@@ -28,7 +34,11 @@ from flowtool.ir import (
     RecordUpdate,
     Start,
     Subflow,
+    SubflowOutputAssignment,
     TextTemplate,
+    Transform,
+    TransformValue,
+    TransformValueAction,
     Value,
     Variable,
 )
@@ -250,6 +260,274 @@ class TestElements:
             )
         ))
 
+    def test_subflow_with_manually_assigned_outputs(self):
+        assert_survives(_flow(
+            Subflow(
+                name="Call_It", label="Call it", flow_name="Some_Other_Flow",
+                output_assignments=[
+                    SubflowOutputAssignment(name="OutputId",
+                                            assign_to_reference="v_NewId"),
+                    SubflowOutputAssignment(name="OutputStatus",
+                                            assign_to_reference="v_Status"),
+                ],
+            )
+        ))
+
+    def test_subflow_with_automatic_output_storage(self):
+        assert_survives(_flow(
+            Subflow(
+                name="Call_It", label="Call it", flow_name="Some_Other_Flow",
+                store_output_automatically=True,
+            )
+        ))
+
+    def test_collection_filter(self):
+        assert_survives(_flow(
+            CollectionFilter(
+                name="Filter", label="Filter",
+                collection_reference="ContactRoles",
+                current_item="currentItem_Filter",
+                conditions=[
+                    Condition(left="currentItem_Filter.Role", operator="EqualTo",
+                             right=Value(string_value="Decision Maker")),
+                ],
+            )
+        ))
+
+    def test_collection_sort(self):
+        assert_survives(_flow(
+            CollectionSort(
+                name="Sort_Contact_Roles", label="Sort Contact Roles",
+                collection_reference="ContactRoles",
+                sort_options=[
+                    CollectionSortOption(sort_field="LastModifiedDate", sort_order="Asc"),
+                ],
+            )
+        ))
+
+    def test_a_real_orgs_filter_and_sort_parse_as_expected(self):
+        """
+        Not a round trip - real XML retrieved from an org (via
+        toddhalfpenny/salesforce-flow-visualiser's test fixtures), parsed
+        directly, to check the reader's assumptions against something this
+        tool did not itself produce.
+        """
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>59.0</apiVersion><label>X</label>"
+            "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+            "<collectionProcessors>"
+            "<name>Filter</name>"
+            "<elementSubtype>FilterCollectionProcessor</elementSubtype>"
+            "<label>Filter</label><locationX>176</locationX><locationY>539</locationY>"
+            "<assignNextValueToReference>currentItem_Filter</assignNextValueToReference>"
+            "<collectionProcessorType>FilterCollectionProcessor</collectionProcessorType>"
+            "<collectionReference>ContactRoles</collectionReference>"
+            "<conditionLogic>and</conditionLogic>"
+            "<conditions><leftValueReference>currentItem_Filter.Role</leftValueReference>"
+            "<operator>EqualTo</operator><rightValue><stringValue>Decision Maker</stringValue>"
+            "</rightValue></conditions>"
+            "</collectionProcessors>"
+            "<collectionProcessors>"
+            "<name>Sort_Contact_Roles</name>"
+            "<elementSubtype>SortCollectionProcessor</elementSubtype>"
+            "<label>Sort Contact Roles</label><locationX>176</locationX><locationY>431</locationY>"
+            "<collectionProcessorType>SortCollectionProcessor</collectionProcessorType>"
+            "<collectionReference>ContactRoles</collectionReference>"
+            "<connector><targetReference>Filter</targetReference></connector>"
+            "<sortOptions><doesPutEmptyStringAndNullFirst>false</doesPutEmptyStringAndNullFirst>"
+            "<sortField>LastModifiedDate</sortField><sortOrder>Asc</sortOrder></sortOptions>"
+            "</collectionProcessors>"
+            "<start><connector><targetReference>Sort_Contact_Roles</targetReference>"
+            "</connector></start>"
+            "</Flow>"
+        )
+        flow = parse_flow(xml, api_name="X")
+        by_name = {e.name: e for e in flow.elements}
+        sort = by_name["Sort_Contact_Roles"]
+        assert isinstance(sort, CollectionSort)
+        assert sort.collection_reference == "ContactRoles"
+        assert sort.next == "Filter"
+        assert sort.sort_options == [
+            CollectionSortOption(sort_field="LastModifiedDate", sort_order="Asc",
+                                 does_put_empty_string_and_null_first=False)
+        ]
+
+        filt = by_name["Filter"]
+        assert isinstance(filt, CollectionFilter)
+        assert filt.current_item == "currentItem_Filter"
+        assert filt.conditions[0].left == "currentItem_Filter.Role"
+
+    def test_transform_maps_fields_from_variables(self):
+        # Verified end to end against a real dev org's checkOnly validation
+        # (`sf project deploy start --dry-run`), not just the schema: this
+        # exact shape - output_field_api_name per action, no name on the
+        # TransformValue itself - is what the org actually accepts for Map.
+        assert_survives(_flow(
+            Transform(
+                name="Build_Account", label="Build account",
+                object_type="Account",
+                transform_values=[
+                    TransformValue(
+                        actions=[TransformValueAction(
+                            transform_type="Map",
+                            output_field_api_name="Name",
+                            value=Value(element_reference="v_Name"),
+                        )],
+                    ),
+                    TransformValue(
+                        actions=[TransformValueAction(
+                            transform_type="Map",
+                            output_field_api_name="BillingCity",
+                            value=Value(string_value="Springfield"),
+                        )],
+                    ),
+                ],
+            )
+        ))
+
+    def test_a_transform_values_name_is_rejected_unless_it_is_an_inner_join(self):
+        # The org's own words, from a real checkOnly deploy: "The flow
+        # metadata specifies 'Name' for the name of a transformValue, which is
+        # supported only if transformType is InnerJoin."
+        with pytest.raises(ValidationError, match="InnerJoin"):
+            TransformValue(
+                name="Name",
+                actions=[TransformValueAction(
+                    transform_type="Map", value=Value(string_value="x"),
+                )],
+            )
+
+    def test_transform_with_an_unmodelled_action_type_still_round_trips(self):
+        # Sum/Count/GetItemByIndex/InnerJoin/InvocableAction: no confirmed
+        # example of any of their individual shapes, so they round-trip
+        # through input_parameters rather than being guessed at.
+        assert_survives(_flow(
+            Transform(
+                name="Summarise", label="Summarise", object_type="Account",
+                is_collection=False,
+                transform_values=[
+                    TransformValue(
+                        actions=[TransformValueAction(
+                            name="Sum_Amounts",
+                            transform_type="Sum",
+                            output_field_api_name="AnnualRevenue",
+                            input_parameters=[
+                                InputAssignment(
+                                    name="sourceCollectionReference",
+                                    value=Value(element_reference="col_Opportunities"),
+                                ),
+                                InputAssignment(
+                                    name="sourceField",
+                                    value=Value(string_value="Amount"),
+                                ),
+                            ],
+                        )],
+                    ),
+                ],
+            )
+        ))
+
+    def test_action_call_with_data_type_mappings(self):
+        # A generic Apex-typed action, pinned to a concrete SObject for this call.
+        assert_survives(_flow(
+            ActionCall(
+                name="Generate_Report", label="Generate report",
+                action_name="GenerateCollectionReport", action_type="apex",
+                data_type_mappings=[
+                    DataTypeMapping(type_name="T__inputRecord", type_value="Account"),
+                    DataTypeMapping(type_name="T__inputRecordCollection",
+                                    type_value="Account"),
+                ],
+            )
+        ))
+
+    def test_action_call_with_manually_assigned_outputs(self):
+        assert_survives(_flow(
+            ActionCall(
+                name="Geocode", label="Geocode",
+                action_name="geocodeAddress", action_type="apex",
+                output_parameters=[
+                    ComponentOutput(name="lat", assign_to_reference="v_Lat"),
+                    ComponentOutput(name="lng", assign_to_reference="v_Lng"),
+                ],
+            )
+        ))
+
+    def test_action_call_cannot_mix_automatic_and_manual_outputs(self):
+        with pytest.raises(ValidationError, match="storeOutputAutomatically"):
+            ActionCall(
+                name="Geocode", label="Geocode",
+                action_name="geocodeAddress", action_type="apex",
+                store_output_automatically=True,
+                output_parameters=[
+                    ComponentOutput(name="lat", assign_to_reference="v_Lat"),
+                ],
+            )
+
+    def test_action_call_waits_for_an_async_action_with_a_timeout(self):
+        # isWaitUntilCompleted/offset/offsetUnit/timeoutConnector: confirmed
+        # against the org's own live Metadata API schema (describeValueType
+        # on FlowActionCall), not found in any public sample flow.
+        assert_survives(_flow(
+            ActionCall(
+                name="Call_External_Service", label="Call external service",
+                action_name="externalServiceAction", action_type="externalService",
+                is_wait_until_completed=True,
+                timeout_offset=5, timeout_offset_unit="Minutes",
+                timeout_next="Handle_Timeout",
+            ),
+            Assignment(name="Handle_Timeout", label="Handle timeout", items=[
+                AssignmentItem(to_reference="v_TimedOut", value=Value(boolean_value=True)),
+            ]),
+        ))
+
+    def test_action_call_timeout_needs_both_offset_and_unit(self):
+        with pytest.raises(ValidationError, match="timeout_offset_unit"):
+            ActionCall(
+                name="Call_It", label="Call it",
+                action_name="externalServiceAction", action_type="externalService",
+                timeout_offset=5,
+            )
+
+    def test_the_orgs_own_offset_and_timeout_fields_parse_as_expected(self):
+        """
+        Not a round trip - the exact tag names and shapes as confirmed live
+        against a connected dev org's Metadata API
+        (describeValueType on FlowActionCall), parsed directly.
+        """
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>62.0</apiVersion><label>X</label>"
+            "<processType>AutoLaunchedFlow</processType><status>Draft</status>"
+            "<actionCalls>"
+            "<name>Call_External_Service</name><label>Call external service</label>"
+            "<locationX>0</locationX><locationY>0</locationY>"
+            "<actionName>externalServiceAction</actionName>"
+            "<actionType>externalService</actionType>"
+            "<isWaitUntilCompleted>true</isWaitUntilCompleted>"
+            "<offset>5</offset><offsetUnit>Minutes</offsetUnit>"
+            "<timeoutConnector><targetReference>Handle_Timeout</targetReference>"
+            "</timeoutConnector>"
+            "<connector><targetReference>Handle_Timeout</targetReference></connector>"
+            "</actionCalls>"
+            "<assignments><name>Handle_Timeout</name><label>Handle timeout</label>"
+            "<assignmentItems><assignToReference>v</assignToReference>"
+            "<operator>Assign</operator><value><booleanValue>true</booleanValue>"
+            "</value></assignmentItems></assignments>"
+            "<start><connector><targetReference>Call_External_Service</targetReference>"
+            "</connector></start>"
+            "</Flow>"
+        )
+        flow = parse_flow(xml, api_name="X")
+        call = flow.by_name()["Call_External_Service"]
+        assert call.is_wait_until_completed is True
+        assert call.timeout_offset == 5
+        assert call.timeout_offset_unit == "Minutes"
+        assert call.timeout_next == "Handle_Timeout"
+
 
 class TestFlowLevel:
     def test_record_triggered_start(self):
@@ -456,10 +734,13 @@ class TestNestedUnknownsAreRefused:
 
     def test_every_supported_element_has_a_child_allowlist(self):
         # A new element type without one would silently ignore everything
-        # inside it - the exact hole this closes.
+        # inside it - the exact hole this closes. collectionProcessors is the
+        # one exception: it is one tag wearing two shapes (Filter and Sort),
+        # so it is checked separately against its own two allowlists instead
+        # of the shared table.
         from flowtool.parse import _ELEMENT_CHILDREN, _READERS
 
-        assert set(_READERS) == set(_ELEMENT_CHILDREN)
+        assert set(_READERS) == set(_ELEMENT_CHILDREN) | {"collectionProcessors"}
 
     def test_the_allowlists_cover_what_the_compiler_writes(self):
         """
@@ -508,13 +789,24 @@ class TestUnsupported:
 
     @pytest.mark.parametrize("tag,expected", [
         ("recordRollbacks", "rollback elements"),
-        ("transforms", "transform elements"),
-        ("collectionProcessors", "collection filter/sort"),
+        ("customErrors", "custom error elements"),
     ])
     def test_named_constructs_are_refused(self, tag, expected):
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self._xml(f"<{tag}><name>A</name></{tag}>"))
         assert expected in str(caught.value)
+
+    def test_a_collection_processor_of_an_unhandled_type_is_refused(self):
+        # Filter and Sort are the two this build knows. A third type -
+        # RecommendationMapCollectionProcessor is the one seen in the wild -
+        # is named rather than silently misread as one of the two it does know.
+        xml = self._xml(
+            "<collectionProcessors><name>A</name>"
+            "<collectionProcessorType>RecommendationMapCollectionProcessor</collectionProcessorType>"
+            "</collectionProcessors>"
+        )
+        with pytest.raises(UnsupportedFlow, match="RecommendationMapCollectionProcessor"):
+            parse_flow(xml)
 
     def test_an_unknown_tag_is_still_refused(self):
         with pytest.raises(UnsupportedFlow, match="somethingNew"):
@@ -530,7 +822,7 @@ class TestUnsupported:
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self._xml(
                 "<recordRollbacks><name>A</name></recordRollbacks>"
-                "<transforms><name>B</name></transforms>"
+                "<customErrors><name>B</name></customErrors>"
             ))
         assert len(caught.value.reasons) == 2
 

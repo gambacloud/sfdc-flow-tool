@@ -21,6 +21,7 @@ from flowtool.ir import (
     Assignment,
     AssignmentItem,
     Flow,
+    InputAssignment,
     RecordUpdate,
     Screen,
     ScreenField,
@@ -131,6 +132,127 @@ class TestRoundTrip:
 
     def test_a_screen_carries_its_description(self):
         assert_survives(one_screen(description="Asks the customer for an email."))
+
+    def test_custom_button_labels_survive(self):
+        assert_survives(one_screen(
+            paused_text="Come back and finish this later.",
+            next_or_finish_button_label="Send Now",
+            back_button_label="Go Back",
+            pause_button_label="Save for Later",
+        ))
+
+    def test_the_screens_own_help_text_survives(self):
+        # Distinct from a field's help_text - this one is behind the screen's
+        # own help icon, not any particular field's.
+        assert_survives(one_screen(help_text="Please fill all the fields."))
+
+    def test_a_read_only_and_a_disabled_field_survive(self):
+        # A full Value, not a plain bool: confirmed against the org's own live
+        # schema (FlowElementReferenceOrValue) - either can be a literal or a
+        # reference to a variable/formula.
+        assert_survives(one_screen(fields=[
+            input_field(name="Account_Name", required=False).model_copy(
+                update={"is_read_only": Value(boolean_value=True)}
+            ),
+            input_field(name="Locked_Field", required=False).model_copy(
+                update={"is_disabled": Value(boolean_value=True)}
+            ),
+        ]))
+
+    def test_a_read_only_field_driven_by_a_reference_survives(self):
+        # The dynamic case a plain bool would have silently misread as false.
+        assert_survives(one_screen(fields=[
+            input_field(name="Account_Name", required=False).model_copy(
+                update={"is_read_only": Value(element_reference="v_IsLocked")}
+            ),
+        ]))
+
+    def test_a_component_field_with_data_type_mappings_survives(self):
+        from flowtool.ir import DataTypeMapping
+
+        assert_survives(one_screen(fields=[
+            ScreenField(
+                name="DT_Products", field_type="ComponentInstance",
+                extension_name="c:productTable",
+                data_type_mappings=[
+                    DataTypeMapping(type_name="T__record", type_value="Product2"),
+                ],
+            ),
+        ]))
+
+    def test_a_component_choice_field_survives(self):
+        # The standard "Choice Lookup" component (flowruntime:choiceLookup):
+        # a component that also offers choice_references, unlike a plain
+        # ComponentInstance.
+        from flowtool.ir import DynamicChoiceSet
+
+        assert_survives(screen_flow(
+            Screen(name="Ask", label="Ask", fields=[
+                ScreenField(
+                    name="AccountLookup", field_type="ComponentChoice",
+                    extension_name="flowruntime:choiceLookup",
+                    field_text="Account", choice_references=["Accounts"],
+                    input_parameters=[InputAssignment(
+                        name="placeholder", value=Value(string_value="Pick one"))],
+                    is_required=True,
+                ),
+            ]),
+            dynamic_choice_sets=[
+                DynamicChoiceSet(name="Accounts", object="Account",
+                                 display_field="Name", value_field="Id"),
+            ],
+        ))
+
+    def test_a_component_choice_field_with_no_options_survives(self):
+        # The other standard lookup component (flowruntime:lookup) shares the
+        # same fieldType without offering a fixed list at all.
+        assert_survives(one_screen(fields=[
+            ScreenField(
+                name="AccountLookup", field_type="ComponentChoice",
+                extension_name="flowruntime:lookup",
+                input_parameters=[InputAssignment(
+                    name="objectApiName", value=Value(string_value="Account"))],
+                is_required=True,
+            ),
+        ]))
+
+    def test_a_real_orgs_component_choice_field_parses(self):
+        """
+        Real XML from ava-orange-education/Ultimate-Salesforce-LWC-Developers-
+        Handbook's sample flows, parsed directly rather than round-tripped.
+        """
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Flow xmlns="http://soap.sforce.com/2006/04/metadata">'
+            "<apiVersion>58.0</apiVersion><label>Ask</label>"
+            "<processType>Flow</processType><status>Draft</status>"
+            "<dynamicChoiceSets><name>Accounts</name><dataType>String</dataType>"
+            "<displayField>Name</displayField><object>Account</object>"
+            "<valueField>Id</valueField></dynamicChoiceSets>"
+            "<screens><name>Ask</name><label>Ask</label>"
+            "<fields>"
+            "<name>AccountLookup</name>"
+            "<choiceReferences>Accounts</choiceReferences>"
+            "<extensionName>flowruntime:choiceLookup</extensionName>"
+            "<fieldText>Account</fieldText>"
+            "<fieldType>ComponentChoice</fieldType>"
+            "<inputParameters><name>placeholder</name>"
+            "<value><stringValue>Please select the account</stringValue></value>"
+            "</inputParameters>"
+            "<inputsOnNextNavToAssocScrn>ResetValues</inputsOnNextNavToAssocScrn>"
+            "<isRequired>true</isRequired>"
+            "<storeOutputAutomatically>true</storeOutputAutomatically>"
+            "</fields>"
+            "</screens>"
+            "<start><connector><targetReference>Ask</targetReference></connector></start>"
+            "</Flow>"
+        )
+        flow = parse_flow(xml, api_name="Ask")
+        field = flow.elements[0].fields[0]
+        assert field.field_type == "ComponentChoice"
+        assert field.extension_name == "flowruntime:choiceLookup"
+        assert field.choice_references == ["Accounts"]
+        assert field.store_output_automatically is True
 
 
 # --------------------------------------------------------------------------
@@ -339,7 +461,9 @@ class TestTheParserRefuses:
         assert "Ask.Email" in str(caught.value), "the refusal must name the field"
 
     @pytest.mark.parametrize("tag", [
-        "pausedText", "nextOrFinishButtonLabel", "backButtonLabel", "helpText",
+        # Not a real Flow tag at all, so a survey can tell "not modelled yet"
+        # apart from "not a real thing".
+        "somethingMadeUp",
     ])
     def test_extras_on_the_screen_are_refused(self, tag):
         with pytest.raises(UnsupportedFlow) as caught:

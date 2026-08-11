@@ -15,6 +15,8 @@ from .ir import (
     ActionCall,
     Assignment,
     Choice,
+    CollectionFilter,
+    CollectionSort,
     Constant,
     Decision,
     DynamicChoiceSet,
@@ -30,6 +32,7 @@ from .ir import (
     Screen,
     Subflow,
     TextTemplate,
+    Transform,
     Value,
     Wait,
 )
@@ -289,6 +292,10 @@ def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
     _sub(node, "actionName", el.action_name)
     _sub(node, "actionType", el.action_type)
     _connector(node, "connector", el.next)
+    for mapping in el.data_type_mappings:
+        dtm = _sub(node, "dataTypeMappings")
+        _sub(dtm, "typeName", mapping.type_name)
+        _sub(dtm, "typeValue", mapping.type_value)
     _fault(node, el)
     if el.flow_transaction_model:
         _sub(node, "flowTransactionModel", el.flow_transaction_model)
@@ -296,8 +303,19 @@ def _write_action_call(root: ET.Element, el: ActionCall, xy) -> None:
         ip = _sub(node, "inputParameters")
         _sub(ip, "name", parameter.name)
         _value_el(ip, "value", parameter.value)
+    if el.is_wait_until_completed:
+        _sub(node, "isWaitUntilCompleted", "true")
+    if el.timeout_offset is not None:
+        _sub(node, "offset", str(el.timeout_offset))
+    if el.timeout_offset_unit:
+        _sub(node, "offsetUnit", el.timeout_offset_unit)
+    for parameter in el.output_parameters:
+        op = _sub(node, "outputParameters")
+        _sub(op, "assignToReference", parameter.assign_to_reference)
+        _sub(op, "name", parameter.name)
     if el.store_output_automatically:
         _sub(node, "storeOutputAutomatically", "true")
+    _connector(node, "timeoutConnector", el.timeout_next)
 
 
 def _write_choice(root: ET.Element, choice: Choice) -> None:
@@ -314,6 +332,8 @@ def _write_choice_set(root: ET.Element, choice_set: DynamicChoiceSet) -> None:
     node = _sub(root, "dynamicChoiceSets")
     _sub(node, "name", choice_set.name)
     _sub(node, "dataType", choice_set.data_type)
+    if choice_set.collection_reference:
+        _sub(node, "collectionReference", choice_set.collection_reference)
     if choice_set.display_field:
         _sub(node, "displayField", choice_set.display_field)
     if choice_set.filters:
@@ -350,6 +370,10 @@ def _write_screen_field(parent: ET.Element, screen_field) -> None:
         _sub(f, "choiceReferences", reference)
     if screen_field.data_type:
         _sub(f, "dataType", screen_field.data_type)
+    for mapping in screen_field.data_type_mappings:
+        dtm = _sub(f, "dataTypeMappings")
+        _sub(dtm, "typeName", mapping.type_name)
+        _sub(dtm, "typeValue", mapping.type_value)
     if screen_field.default_selected_choice:
         _sub(f, "defaultSelectedChoiceReference",
              screen_field.default_selected_choice)
@@ -370,10 +394,16 @@ def _write_screen_field(parent: ET.Element, screen_field) -> None:
         _value_el(ip, "value", parameter.value)
     if screen_field.inputs_on_revisit:
         _sub(f, "inputsOnNextNavToAssocScrn", screen_field.inputs_on_revisit)
+    if screen_field.is_disabled is not None:
+        _value_el(f, "isDisabled", screen_field.is_disabled)
+    if screen_field.is_read_only is not None:
+        _value_el(f, "isReadOnly", screen_field.is_read_only)
     # DisplayText collects nothing, so isRequired would be meaningless on it -
     # and Salesforce omits it there too.
     if screen_field.field_type != "DisplayText":
         _sub(f, "isRequired", _bool(screen_field.is_required))
+    if screen_field.is_visible is not None:
+        _sub(f, "isVisible", _bool(screen_field.is_visible))
     for parameter in screen_field.output_parameters:
         op = _sub(f, "outputParameters")
         _sub(op, "assignToReference", parameter.assign_to_reference)
@@ -406,9 +436,19 @@ def _write_screen(root: ET.Element, el: Screen, xy) -> None:
     _sub(node, "allowBack", _bool(el.allow_back))
     _sub(node, "allowFinish", _bool(el.allow_finish))
     _sub(node, "allowPause", _bool(el.allow_pause))
+    if el.back_button_label:
+        _sub(node, "backButtonLabel", el.back_button_label)
     _connector(node, "connector", el.next)
     for screen_field in el.fields:
         _write_screen_field(node, screen_field)
+    if el.help_text:
+        _sub(node, "helpText", el.help_text)
+    if el.next_or_finish_button_label:
+        _sub(node, "nextOrFinishButtonLabel", el.next_or_finish_button_label)
+    if el.pause_button_label:
+        _sub(node, "pauseButtonLabel", el.pause_button_label)
+    if el.paused_text:
+        _sub(node, "pausedText", el.paused_text)
     _sub(node, "showFooter", _bool(el.show_footer))
     _sub(node, "showHeader", _bool(el.show_header))
 
@@ -442,6 +482,47 @@ def _write_wait(root: ET.Element, el: Wait, xy) -> None:
             _sub(item, "label", event.label)
 
 
+def _write_transform(root: ET.Element, el: Transform, xy) -> None:
+    node = _sub(root, "transforms")
+    _write_common(node, el, xy)
+    if el.apex_class:
+        _sub(node, "apexClass", el.apex_class)
+    _connector(node, "connector", el.next)
+    if el.is_collection:
+        _sub(node, "isCollection", "true")
+    if el.object_type:
+        _sub(node, "objectType", el.object_type)
+    if el.scale is not None:
+        _sub(node, "scale", str(el.scale))
+    if el.schema_uri:
+        _sub(node, "schemaUri", el.schema_uri)
+    if el.store_output_automatically:
+        _sub(node, "storeOutputAutomatically", "true")
+    for tv in el.transform_values:
+        item = _sub(node, "transformValues")
+        for action in tv.actions:
+            a = _sub(item, "transformValueActions")
+            if action.assign_to_reference:
+                _sub(a, "assignToReference", action.assign_to_reference)
+            for parameter in action.input_parameters:
+                ip = _sub(a, "inputParameters")
+                _sub(ip, "name", parameter.name)
+                _value_el(ip, "value", parameter.value)
+            if action.name:
+                _sub(a, "name", action.name)
+            if action.output_field_api_name:
+                _sub(a, "outputFieldApiName", action.output_field_api_name)
+            _sub(a, "transformType", action.transform_type)
+            if action.value is not None:
+                _value_el(a, "value", action.value)
+        if tv.description:
+            _sub(item, "transformValueDescription", tv.description)
+        if tv.label:
+            _sub(item, "transformValueLabel", tv.label)
+        if tv.name:
+            _sub(item, "transformValueName", tv.name)
+
+
 def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
@@ -452,11 +533,51 @@ def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
         ia = _sub(node, "inputAssignments")
         _sub(ia, "name", assignment.name)
         _value_el(ia, "value", assignment.value)
+    for assignment in el.output_assignments:
+        oa = _sub(node, "outputAssignments")
+        _sub(oa, "assignToReference", assignment.assign_to_reference)
+        _sub(oa, "name", assignment.name)
+    if el.store_output_automatically:
+        _sub(node, "storeOutputAutomatically", "true")
+
+
+def _write_collection_filter(root: ET.Element, el: CollectionFilter, xy) -> None:
+    node = _sub(root, "collectionProcessors")
+    _write_common(node, el, xy)
+    _sub(node, "assignNextValueToReference", el.current_item)
+    _sub(node, "collectionProcessorType", "FilterCollectionProcessor")
+    _sub(node, "collectionReference", el.collection_reference)
+    _sub(node, "conditionLogic", el.condition_logic)
+    for cond in el.conditions:
+        c = _sub(node, "conditions")
+        _sub(c, "leftValueReference", cond.left)
+        _sub(c, "operator", cond.operator)
+        if cond.right is not None:
+            _value_el(c, "rightValue", cond.right)
+    _connector(node, "connector", el.next)
+    _sub(node, "elementSubtype", "FilterCollectionProcessor")
+
+
+def _write_collection_sort(root: ET.Element, el: CollectionSort, xy) -> None:
+    node = _sub(root, "collectionProcessors")
+    _write_common(node, el, xy)
+    _sub(node, "collectionProcessorType", "SortCollectionProcessor")
+    _sub(node, "collectionReference", el.collection_reference)
+    _connector(node, "connector", el.next)
+    _sub(node, "elementSubtype", "SortCollectionProcessor")
+    for option in el.sort_options:
+        so = _sub(node, "sortOptions")
+        _sub(so, "doesPutEmptyStringAndNullFirst",
+             _bool(option.does_put_empty_string_and_null_first))
+        _sub(so, "sortField", option.sort_field)
+        _sub(so, "sortOrder", option.sort_order)
 
 
 _WRITERS = {
     ActionCall: ("actionCalls", _write_action_call),
     Assignment: ("assignments", _write_assignment),
+    CollectionFilter: ("collectionProcessors", _write_collection_filter),
+    CollectionSort: ("collectionProcessors", _write_collection_sort),
     Decision: ("decisions", _write_decision),
     Loop: ("loops", _write_loop),
     RecordCreate: ("recordCreates", _write_record_create),
@@ -466,6 +587,7 @@ _WRITERS = {
     Screen: ("screens", _write_screen),
     Wait: ("waits", _write_wait),
     Subflow: ("subflows", _write_subflow),
+    Transform: ("transforms", _write_transform),
 }
 
 # The order Salesforce emits Flow children in. Alphabetical, which interleaves
@@ -477,6 +599,7 @@ _ROOT_ORDER = [
     "actionCalls",
     "assignments",
     "choices",
+    "collectionProcessors",
     "constants",
     "decisions",
     "dynamicChoiceSets",
@@ -488,6 +611,7 @@ _ROOT_ORDER = [
     "recordUpdates",
     "screens",
     "subflows",
+    "transforms",
     "waits",
 ]
 

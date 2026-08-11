@@ -248,6 +248,21 @@ expression still naming 3 is now pointing past the end.
 Use every condition you list. One the expression never names is evaluated and \
 then ignored, which is almost always a mistake in the expression.
 
+## Filtering or sorting a collection already in memory
+
+`CollectionFilter` and `CollectionSort` reshape a collection you already have - \
+the output of a Loop's collection, a Get Records with `store_output_automatically`, \
+or another collection variable. They do not query the database; for that, filter \
+on Get Records instead.
+
+- Both read `{!ElementName}` as their result, the same as any element with \
+automatic output storage - there is no separate output field to set.
+- A filter needs `current_item`: a name for "the item being tested", used only \
+while its `conditions` are evaluated - write them as `{current_item}.Field`. It \
+is not the final result and nothing else in the flow can reference it.
+- A sort takes one or more `sort_options`, each a field and an order. List more \
+than one only when the request asks to break ties on a second field.
+
 ## Screens
 
 Set `process_type` to `Flow` when the logic needs a person to see or type \

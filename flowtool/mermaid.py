@@ -14,6 +14,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from .ir import (
     ActionCall,
     Assignment,
+    CollectionFilter,
+    CollectionSort,
     Condition,
     Decision,
     Element,
@@ -254,7 +256,8 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
     if isinstance(element, ActionCall):
         # Mermaid's trapezoid ends with a literal backslash, hence the raw string.
         return rf'{name}[/"{text}"\]'
-    if isinstance(element, (RecordCreate, RecordUpdate, RecordDelete, GetRecords)):
+    if isinstance(element, (RecordCreate, RecordUpdate, RecordDelete, GetRecords,
+                            CollectionFilter, CollectionSort)):
         return f'{name}[("{text}")]'
     return f'{name}["{text}"]'
 
@@ -282,6 +285,11 @@ def _element_caption(element: Element) -> str:
         return f"{element.label}\n{detail}"
     if isinstance(element, Loop):
         return f"{element.label}\nFor each {element.collection_reference}"
+    if isinstance(element, CollectionFilter):
+        return f"{element.label}\nFilter {element.collection_reference}"
+    if isinstance(element, CollectionSort):
+        fields = ", ".join(o.sort_field for o in element.sort_options)
+        return f"{element.label}\nSort {element.collection_reference} by {fields}"
     if isinstance(element, Wait):
         return f"{element.label}\n{_wait_caption(element)}"
     if isinstance(element, Subflow):
@@ -391,6 +399,10 @@ def to_mermaid(flow: Flow) -> str:
         if fault:
             edge(element.name, fault, "on error", dotted=True)
 
+        timeout = getattr(element, "timeout_next", None)
+        if timeout:
+            edge(element.name, timeout, "on timeout", dotted=True)
+
     if needs_end:
         lines.append("    " + _node(_END_NODE, "End", None))
 
@@ -415,6 +427,8 @@ _TYPE_LABEL = {
     Wait: "Pause",
     Subflow: "Subflow",
     ActionCall: "Action",
+    CollectionFilter: "Collection Filter",
+    CollectionSort: "Collection Sort",
 }
 
 _FIELD_LABEL = {
@@ -568,6 +582,17 @@ def _element_detail(element: Element) -> str:
             parts.append(detail)
         return "<br>".join(parts)
 
+    if isinstance(element, CollectionFilter):
+        condition = _join(
+            (condition_text(c) for c in element.conditions), element.condition_logic
+        )
+        return f"`{element.collection_reference}` where {condition}, tested as `{element.current_item}`"
+
+    if isinstance(element, CollectionSort):
+        return f"`{element.collection_reference}` by " + ", ".join(
+            f"{o.sort_field} ({o.sort_order})" for o in element.sort_options
+        )
+
     if isinstance(element, Wait):
         parts = []
         for event in element.wait_events:
@@ -597,8 +622,21 @@ def _element_detail(element: Element) -> str:
                 f"{p.name} = {value_text(p.value)}"
                 for p in element.input_parameters
             )
-        if element.store_output_automatically:
+        if element.output_parameters:
+            detail += " → " + ", ".join(
+                f"{p.name} into `{p.assign_to_reference}`"
+                for p in element.output_parameters
+            )
+        elif element.store_output_automatically:
             detail += f", results read as `{{!{element.name}.…}}`"
+        if element.is_wait_until_completed:
+            detail += ", waits for it to finish"
+            if element.timeout_offset is not None and element.timeout_offset_unit:
+                detail += (
+                    f" (times out after {element.timeout_offset} "
+                    f"{element.timeout_offset_unit.lower()} -> "
+                    f"`{element.timeout_next or 'End'}`)"
+                )
         return detail
 
     if isinstance(element, Subflow):
@@ -608,6 +646,13 @@ def _element_detail(element: Element) -> str:
                 f"{a.name} = {value_text(a.value)}" for a in element.input_assignments
             )
             detail += f" with {inputs}"
+        if element.output_assignments:
+            detail += " → " + ", ".join(
+                f"{a.name} into `{a.assign_to_reference}`"
+                for a in element.output_assignments
+            )
+        elif element.store_output_automatically:
+            detail += f", results read as `{{!{element.name}.…}}`"
         return detail
 
     return ""
