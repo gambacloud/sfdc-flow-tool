@@ -35,6 +35,7 @@ from flowtool.llm import (
     GeminiProvider,
     GenerationResult,
     LLMError,
+    OllamaProvider,
     Provider,
 )
 from flowtool.mermaid import to_markdown, to_mermaid
@@ -293,7 +294,7 @@ async def run(args: argparse.Namespace, provider: Provider, request: str) -> int
     return 0 if result.success else 1
 
 
-PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider}
+PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider, "ollama": OllamaProvider}
 
 
 def choose_provider(name: Optional[str]) -> str:
@@ -304,6 +305,8 @@ def choose_provider(name: Optional[str]) -> str:
         return "anthropic"
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
         return "gemini"
+    if os.environ.get("OLLAMA_API_KEY"):
+        return "ollama"
     # Never put a key in this file - it is the one place it would get committed.
     raise LLMError(env_help(Path(__file__).parent))
 

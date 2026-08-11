@@ -33,7 +33,7 @@ from flowtool.llm import (
     LLMError,
     Provider,
 )
-from flowtool.llm import GeminiProvider
+from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.mermaid import to_markdown, to_mermaid
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.sfdc import (
@@ -54,11 +54,12 @@ STATIC = ROOT / "flowtool" / "static"
 
 app = FastAPI(title="SFDC Flow Tool")
 
-PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider}
+PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider, "ollama": OllamaProvider}
 
 PROVIDER_KEYS = {
     "anthropic": ("ANTHROPIC_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "ollama": ("OLLAMA_API_KEY",),
 }
 
 
@@ -241,8 +242,8 @@ def build_provider(
         if not found:
             raise LLMError(
                 "No LLM key found. Either paste one in the UI's Options panel, or "
-                f"put GEMINI_API_KEY or ANTHROPIC_API_KEY in a {ROOT / '.env'} "
-                "file and restart the server."
+                f"put GEMINI_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_API_KEY in a "
+                f"{ROOT / '.env'} file and restart the server."
             )
         name = found[0]
     if name not in PROVIDERS:

@@ -31,8 +31,8 @@ Create a file called `.env` next to `forge.py`:
 GEMINI_API_KEY=your-key
 ```
 
-`ANTHROPIC_API_KEY=sk-ant-...` works too — whichever key is present is the one
-used. `.env` is gitignored.
+`ANTHROPIC_API_KEY=sk-ant-...` or `OLLAMA_API_KEY=...` (Ollama Cloud) work too
+— whichever key is present is the one used. `.env` is gitignored.
 
 Use the file rather than a shell variable. A variable set with `$env:` or
 `export` only lives in that one shell, so setting it in one command and running
@@ -94,7 +94,7 @@ deploy — with a link straight into Flow Builder when it lands.
 | `--no-validate` | Design only; never contacts the org |
 | `--deploy` | Offer to deploy after validation passes |
 | `--activate` | Deploy Active. Without it, flows deploy as Drafts |
-| `--provider` | `gemini` or `anthropic` (default: whichever key is set) |
+| `--provider` | `gemini`, `anthropic`, or `ollama` (default: whichever key is set) |
 | `--model` | Override the provider's default model |
 | `--effort` | `low` … `max` (default `high`) |
 

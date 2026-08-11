@@ -3,10 +3,11 @@ uvicorn
 httpx
 pydantic>=2
 
-# LLM providers - bring your own key. Install only the one you use; both are
-# imported lazily and the CLI picks whichever key is set.
+# LLM providers - bring your own key. Install only the one you use; all three
+# are imported lazily and the CLI picks whichever key is set.
 google-genai
 anthropic
+ollama
 
 # Dev
 pytest

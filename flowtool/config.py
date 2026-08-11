@@ -22,6 +22,7 @@ KNOWN_KEYS = [
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    "OLLAMA_API_KEY",
     "SF_INSTANCE_URL",
     "SF_SESSION_ID",
 ]
@@ -84,7 +85,8 @@ def env_help(directory: Path | str = ".") -> str:
         "No LLM key found.\n\n"
         f"Create {path} with one line:\n\n"
         "    GEMINI_API_KEY=your-key\n"
-        "    # or: ANTHROPIC_API_KEY=sk-ant-...\n\n"
+        "    # or: ANTHROPIC_API_KEY=sk-ant-...\n"
+        "    # or: OLLAMA_API_KEY=...\n\n"
         "A key exported with $env: only lasts for that one shell, which is why\n"
         "setting it in one command and running the tool in the next does nothing.\n"
         "The file is gitignored."

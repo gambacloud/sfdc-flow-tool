@@ -866,6 +866,139 @@ class GeminiProvider:
 
 
 # --------------------------------------------------------------------------
+# Ollama provider
+# --------------------------------------------------------------------------
+
+# Ollama's `think` takes the same low/medium/high vocabulary Anthropic's effort
+# does, so xhigh and max collapse onto high exactly as they do for Gemini.
+_OLLAMA_THINK = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "high",
+    "max": "high",
+}
+
+# Cloud by default - api.ollama.com, not the local daemon - but OLLAMA_HOST
+# still overrides it, so a local Ollama works by setting that one variable
+# rather than passing a provider option nothing else exposes.
+_OLLAMA_CLOUD_HOST = "https://api.ollama.com"
+
+
+class OllamaProvider:
+    """
+    Talks to Ollama Cloud (or a local Ollama) over `/api/chat`. `format` takes
+    a raw JSON Schema and is enforced by grammar-constrained decoding - the
+    same shape guarantee Anthropic and Gemini give, from an open-weights model
+    neither of them is.
+    """
+
+    name = "ollama"
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-oss:120b-cloud",
+        effort: str = "high",
+        max_tokens: int = 16000,
+        host: Optional[str] = None,
+    ):
+        try:
+            import ollama
+        except ImportError as exc:
+            raise LLMError(
+                "The ollama package is required for this provider:\n"
+                "    pip install ollama"
+            ) from exc
+
+        key = api_key or os.environ.get("OLLAMA_API_KEY")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        self._ollama = ollama
+        self._client = ollama.Client(
+            host=host or os.environ.get("OLLAMA_HOST") or _OLLAMA_CLOUD_HOST,
+            headers=headers,
+        )
+        self.model = model
+        self.effort = effort
+        self.max_tokens = max_tokens
+        self.usage = Usage()
+
+    def _record(self, response) -> None:
+        self.usage.add(
+            input_tokens=response.prompt_eval_count or 0,
+            output_tokens=response.eval_count or 0,
+        )
+        log.info("%s %s -> %s", self.name, self.model, self.usage)
+
+    def list_models(self) -> List[str]:
+        try:
+            return sorted(m.model for m in self._client.list().models if m.model)
+        except Exception:  # listing is a nicety; never mask the original error
+            return []
+
+    def _chat(self, **kwargs):
+        try:
+            return self._client.chat(
+                model=self.model,
+                think=_OLLAMA_THINK.get(self.effort, "high"),
+                options={"num_predict": self.max_tokens},
+                **kwargs,
+            )
+        except self._ollama.ResponseError as exc:
+            if exc.status_code == 401:
+                raise LLMError("Ollama rejected the API key.") from exc
+            if exc.status_code == 404:
+                available = self.list_models()
+                hint = (
+                    "\nModels available to this key:\n  " + "\n  ".join(available)
+                    if available else ""
+                )
+                raise LLMError(f"Model {self.model!r} was not found.{hint}") from exc
+            if exc.status_code == 429:
+                raise LLMError("Rate limited by Ollama. Try again shortly.") from exc
+            raise LLMError(f"Ollama API error {exc.status_code}: {exc.error}") from exc
+        except ConnectionError as exc:
+            raise LLMError(f"Could not reach Ollama: {exc}") from exc
+        except self._ollama.RequestError as exc:
+            raise LLMError(str(exc)) from exc
+
+    def complete_json(
+        self, system: str, messages: List[Message], schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        response = self._chat(
+            messages=[{"role": "system", "content": system}]
+            + [{"role": m.role, "content": m.content} for m in messages],
+            # Reuses the Anthropic dialect. Untested against llama.cpp's own
+            # schema-to-grammar compiler, but closing every object and
+            # dropping the same handful of validation keywords can only
+            # narrow what the model may emit - Pydantic still enforces them
+            # on the way back in either way, so a wrong guess costs nothing
+            # but an extra repair round, never a false accept.
+            format=strict_schema(schema),
+        )
+        self._record(response)
+
+        text = response.message.content
+        if not text:
+            raise LLMError("The model returned no JSON.")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"The model returned malformed JSON: {exc}") from exc
+
+    def complete_text(self, system: str, messages: List[Message]) -> str:
+        response = self._chat(
+            messages=[{"role": "system", "content": system}]
+            + [{"role": m.role, "content": m.content} for m in messages],
+        )
+        self._record(response)
+        text = response.message.content
+        if not text:
+            raise LLMError("Ollama returned no text.")
+        return text.strip()
+
+
+# --------------------------------------------------------------------------
 # Generator
 # --------------------------------------------------------------------------
 
