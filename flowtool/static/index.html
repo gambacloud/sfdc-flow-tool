@@ -15,20 +15,63 @@
   <label class="header-org">Org
     <select id="org"></select>
   </label>
-  <div class="header-oauth" id="oauthBox" hidden>
+  <div class="header-connect">
     <span class="dim" id="orgConnected"></span>
-    <button id="loginProdBtn" type="button">Log in (Prod)</button>
-    <button id="loginSandboxBtn" type="button">Log in (Sandbox)</button>
+    <div class="header-oauth" id="oauthBox" hidden>
+      <button id="loginProdBtn" type="button">Log in (Prod)</button>
+      <button id="loginSandboxBtn" type="button">Log in (Sandbox)</button>
+    </div>
+    <div class="dropdown-wrap manual-wrap">
+      <button id="manualBtn" class="dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false">
+        Manual entry
+      </button>
+      <div class="dropdown-panel manual-panel" id="manualPanel" hidden>
+        <label>Instance URL
+          <input id="manualInstanceUrl" type="text" placeholder="https://yourorg.my.salesforce.com">
+        </label>
+        <label>Session ID / access token
+          <input id="manualToken" type="password" autocomplete="off" placeholder="00D...!AQ...">
+        </label>
+        <button id="manualConnectBtn" type="button" class="primary">Connect</button>
+        <details class="manual-help">
+          <summary>How do I get this?</summary>
+          <p>
+            <strong>No install</strong> - log in to the org in this browser, open
+            DevTools (F12) &rarr; Network, click any request to
+            <code>/services/data/...</code> (Setup and Lightning make these
+            constantly), and copy the value after <code>Bearer</code> or
+            <code>OAuth</code> in its <code>Authorization</code> request header -
+            that is the session ID/access token. The instance URL is the
+            address bar's origin. The same trick works on any request made by
+            a browser extension that talks to the org, Salesforce Inspector
+            Reloaded included - it reuses your login rather than issuing its
+            own token, so there's nothing to copy from the extension itself.
+          </p>
+          <p>
+            <strong>Native to Salesforce</strong> - Setup &rarr; Visualforce Pages
+            &rarr; edit or create one &rarr; add <code>{!GETSESSIONID()}</code>
+            to the markup &rarr; open the page. Needs Visualforce access
+            (System Administrator has it by default).
+          </p>
+          <p>
+            <strong>With the <a href="https://developer.salesforce.com/tools/salesforcecli" target="_blank" rel="noopener">sf CLI</a></strong>
+            installed and logged in: <code>sf org display --verbose --json</code>
+            - copy <code>accessToken</code> and <code>instanceUrl</code> from the output.
+          </p>
+          <p class="dim">None of these are stored anywhere - sent only with requests, same as OAuth.</p>
+        </details>
+      </div>
+    </div>
   </div>
-  <div class="logs-wrap">
-    <button id="logsBtn" class="logs-btn" type="button" aria-haspopup="true" aria-expanded="false">
+  <div class="dropdown-wrap logs-wrap">
+    <button id="logsBtn" class="dropdown-btn logs-btn" type="button" aria-haspopup="true" aria-expanded="false">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <path fill="currentColor" d="M2 2h12v2H2V2zm0 5h12v2H2V7zm0 5h8v2H2v-2z"/>
       </svg>
       Logs
       <span class="log-count" id="logCount" hidden></span>
     </button>
-    <div class="logs-panel" id="logsPanel" hidden>
+    <div class="dropdown-panel logs-panel" id="logsPanel" hidden>
       <div class="logs-section">
         <h4>Usage this session</h4>
         <div id="logsUsage" class="dim">No model calls yet.</div>

@@ -79,6 +79,31 @@ function busy(button, on, label) {
   }
 }
 
+// A button with a dropdown panel next to it: click to toggle, click outside
+// or Escape to close, and opening one closes any other still-open dropdown -
+// shared by Logs and Manual entry so neither has to duplicate this.
+function wireDropdown(btn, panel) {
+  const close = () => {
+    panel.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+  };
+  btn.onclick = (event) => {
+    event.stopPropagation();
+    const opening = panel.hidden;
+    document.querySelectorAll(".dropdown-panel").forEach((other) => {
+      if (other !== panel) other.hidden = true;
+    });
+    panel.hidden = !opening;
+    btn.setAttribute("aria-expanded", String(opening));
+  };
+  document.addEventListener("click", (event) => {
+    if (!panel.hidden && !panel.contains(event.target) && event.target !== btn) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+}
+
 function showError(where, message) {
   const existing = where.querySelector(".error");
   if (existing) existing.remove();
@@ -625,6 +650,33 @@ function orgCredentials() {
   return org ? { org } : {};
 }
 
+// The manual-entry alternative to OAuth: for a host with no Connected App
+// configured, or anyone who would rather paste a token they already have
+// than click through a login redirect. Feeds the same state.org the OAuth
+// flow does, so orgCredentials() cannot tell the two apart.
+function connectManually() {
+  const instanceUrl = $("manualInstanceUrl").value.trim();
+  const token = $("manualToken").value.trim();
+  showError($("manualPanel"), "");
+  if (!instanceUrl || !token) {
+    showError($("manualPanel"), "Both fields are required.");
+    return;
+  }
+  try {
+    new URL(instanceUrl);
+  } catch {
+    showError($("manualPanel"), "Instance URL doesn't look like a valid URL.");
+    return;
+  }
+  state.org = { accessToken: token, instanceUrl };
+  renderOAuthStatus();
+  // Cleared once it is in memory - the field held it only long enough to be
+  // typed or pasted, same as the promise in the help text below it.
+  $("manualToken").value = "";
+  $("manualPanel").hidden = true;
+  $("manualBtn").setAttribute("aria-expanded", "false");
+}
+
 // --------------------------------------------------------------------------
 // Boot
 // --------------------------------------------------------------------------
@@ -752,27 +804,11 @@ async function boot() {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) refine();
   });
 
-  const logsBtn = $("logsBtn");
-  const logsPanel = $("logsPanel");
-  const closeLogs = () => {
-    logsPanel.hidden = true;
-    logsBtn.setAttribute("aria-expanded", "false");
-  };
-  logsBtn.onclick = (event) => {
-    event.stopPropagation();
-    const opening = logsPanel.hidden;
-    logsPanel.hidden = !opening;
-    logsBtn.setAttribute("aria-expanded", String(opening));
-  };
-  document.addEventListener("click", (event) => {
-    if (!logsPanel.hidden && !logsPanel.contains(event.target) && event.target !== logsBtn) {
-      closeLogs();
-    }
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeLogs();
-  });
+  wireDropdown($("logsBtn"), $("logsPanel"));
   renderLogs();
+
+  wireDropdown($("manualBtn"), $("manualPanel"));
+  $("manualConnectBtn").onclick = connectManually;
 }
 
 boot();
