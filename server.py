@@ -40,10 +40,12 @@ from flowtool.sfdc import (
     RetrieveError,
     flow_builder_url,
     list_flows,
+    retrieve_all_flows,
     retrieve_flow,
     validate_flow,
 )
 from flowtool.xmlgen import generate as generate_xml
+from survey import Survey, text_report
 
 ROOT = Path(__file__).parent
 load_env(ROOT)
@@ -164,6 +166,17 @@ class PendingDesign:
 
 
 DESIGN_JOBS: Dict[str, PendingDesign] = {}
+
+
+@dataclass
+class PendingSurvey:
+    """A whole-org retrieve-and-score running in the background - same
+    reasoning as PendingImport, just scoped to every flow instead of one."""
+
+    task: "asyncio.Task"
+
+
+SURVEY_JOBS: Dict[str, PendingSurvey] = {}
 
 
 def llm_result(task: "asyncio.Task"):
@@ -315,6 +328,15 @@ class OrgRequest(BaseModel):
 
 class DeployRequest(OrgRequest):
     confirm: bool = False
+
+
+class SurveyRequest(BaseModel):
+    """No session_id - a survey scores the whole org, run before any flow
+    has been designed or opened."""
+
+    org: Optional[str] = None
+    instance_url: Optional[str] = None
+    access_token: Optional[str] = None
 
 
 class ImportRequest(BaseModel):
@@ -476,6 +498,49 @@ async def flows(
             for flow in found
         ]
     }
+
+
+async def _run_survey(url: str, token: str) -> str:
+    flows = await retrieve_all_flows(url, token)
+    survey = Survey()
+    for name, xml in flows.items():
+        survey.add(name, xml)
+    return text_report(survey)
+
+
+@app.post("/api/survey/start")
+async def survey_start(body: SurveyRequest) -> Dict[str, Any]:
+    """
+    Retrieve every flow in the org and score how many this build can already
+    represent - same measurement as `python survey.py`, minus anything that
+    would identify the org's own flows or data, since the result is meant to
+    be copied out and shared as a support report.
+    """
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    task = asyncio.create_task(_run_survey(url, token))
+    job_id = uuid.uuid4().hex
+    SURVEY_JOBS[job_id] = PendingSurvey(task=task)
+    return {"job_id": job_id}
+
+
+@app.get("/api/survey/status")
+async def survey_status(job_id: str) -> Dict[str, Any]:
+    pending = SURVEY_JOBS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown survey job.")
+    if not pending.task.done():
+        return {"done": False}
+    del SURVEY_JOBS[job_id]
+    try:
+        text = pending.task.result()
+    except (RetrieveError, TimeoutError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        # Same reasoning as llm_result(): a network failure reaching the org
+        # (DNS, TLS, a dropped connection) is not a type this endpoint
+        # anticipated by name, and should not fall through to a bare 500.
+        raise HTTPException(502, f"Could not reach the org: {exc}") from exc
+    return {"done": True, "report": text}
 
 
 @app.post("/api/import/start")

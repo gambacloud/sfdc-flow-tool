@@ -22,11 +22,9 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from flowtool.config import load_env
 from flowtool.parse import OUT_OF_SCOPE, UnsupportedFlow, parse_flow
@@ -234,6 +232,58 @@ def report(survey: Survey, verbose: bool) -> None:
                 print(f"  {len(codes)}  {name}{tag}: {', '.join(sorted(codes))}")
 
 
+def text_report(survey: Survey) -> str:
+    """
+    The same measurement as report(), condensed to counts and codes only - no
+    flow names, field values, or formulas. Meant to leave the org and be
+    pasted somewhere else (a support ticket, an issue), so nothing from
+    inside the org's own automation belongs in it.
+    """
+    lines: List[str] = ["SFDC Flow Tool - support report",
+                        f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}"]
+    total = survey.total
+    if not total:
+        lines.append("\nNo flows found in this org.")
+        return "\n".join(lines)
+
+    parsed = len(survey.parsed)
+    lines.append(
+        f"\n{total} flows scanned: {parsed} fully supported, "
+        f"{len(survey.refused)} blocked ({parsed * 100 // total}% covered)"
+    )
+    if survey.managed:
+        lines.append(
+            f"{len(survey.managed)} managed or Salesforce-default flow(s) "
+            "excluded from that count."
+        )
+
+    if survey.codes:
+        freed = survey.would_unblock()
+        lines.append("\nWhat blocks them:")
+        for code, count in survey.codes.most_common():
+            tag = "  [decided against, not planned]" if code in OUT_OF_SCOPE else ""
+            lines.append(
+                f"  - {code}: blocks {count} flow(s), "
+                f"would fully unblock {freed[code]}{tag}"
+            )
+        top = freed.most_common(1)
+        if top and top[0][1]:
+            lines.append(
+                f"\nBiggest single win: supporting {top[0][0]} would unblock "
+                f"{top[0][1]} flow(s) on its own."
+            )
+    else:
+        lines.append("\nEvery flow in this org is fully supported.")
+
+    if survey.round_trip_failures:
+        lines.append(
+            f"\n{len(survey.round_trip_failures)} flow(s) parsed but did not "
+            "survive a round trip - flagged for the tool author, no detail here."
+        )
+
+    return "\n".join(lines)
+
+
 def as_json(survey: Survey) -> dict:
     return {
         "total": survey.total,
@@ -312,6 +362,8 @@ async def from_org(org: Optional[str], use_cli: bool) -> Dict[str, str]:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     load_env(Path(__file__).parent)
 
     parser = argparse.ArgumentParser(description="Measure org coverage.")

@@ -17,10 +17,12 @@ dependencies = [
     "ollama",
 ]
 
-# server.py lives at the repo root, not inside the flowtool package, so it
-# needs to be listed explicitly - setuptools only auto-discovers packages.
+# server.py and survey.py live at the repo root, not inside the flowtool
+# package, so they need to be listed explicitly - setuptools only
+# auto-discovers packages. survey.py is needed at runtime, not just from the
+# CLI: server.py imports it for the "Generate support report" endpoint.
 [tool.setuptools]
-py-modules = ["server"]
+py-modules = ["server", "survey"]
 include-package-data = true
 
 [tool.setuptools.packages.find]

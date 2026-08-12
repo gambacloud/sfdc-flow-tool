@@ -207,6 +207,36 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 #openPane select { margin-bottom: 10px; }
 #openPane p { margin: 10px 0 0; }
 
+.link-btn {
+  display: block;
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: underline;
+}
+.link-btn:hover:not(:disabled) { border-color: transparent; opacity: 0.8; }
+
+dialog {
+  width: min(560px, 90vw);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  color: var(--text);
+  background: var(--bg);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog h3 { margin: 0 0 6px; font-size: 15px; }
+dialog p { margin: 0 0 12px; }
+#surveyText {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: pre;
+}
+.survey-actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+
 .explanation {
   margin-top: 12px;
   padding: 14px;

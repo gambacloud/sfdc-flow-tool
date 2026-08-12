@@ -369,6 +369,14 @@ async function design() {
 async function loadFlows() {
   const picker = $("flowPicker");
   picker.innerHTML = "";
+  // Neither an OAuth/manual session nor the sf CLI is available yet - hitting
+  // /api/flows anyway would surface the CLI's "not on PATH" message, which is
+  // meaningless to someone who was never going to use the CLI in the first
+  // place (every Heroku deployment). Wait for a real credential instead.
+  if (!state.org && !state.sfCli) {
+    picker.add(new Option("connect to an org first", ""));
+    return;
+  }
   picker.add(new Option("Loading...", ""));
   try {
     const query = new URLSearchParams(orgCredentials()).toString();
@@ -414,6 +422,38 @@ async function importFlow() {
     logError("Import", err.message);
   } finally {
     busy(button, false);
+  }
+}
+
+async function runSurvey() {
+  showError($("openPane"), "");
+  if (!state.org && !state.sfCli) {
+    showError($("openPane"), "Connect to an org first.");
+    return;
+  }
+
+  const dialog = $("surveyDialog");
+  const body = $("surveyBody");
+  const text = $("surveyText");
+  const copyBtn = $("surveyCopyBtn");
+  body.hidden = false;
+  body.className = "dim";
+  body.textContent = "Scanning every flow in the org - this can take a moment...";
+  text.hidden = true;
+  copyBtn.hidden = true;
+  dialog.showModal();
+
+  try {
+    const { job_id } = await api("api/survey/start", orgCredentials());
+    const data = await poll("api/survey/status", { job_id });
+    body.hidden = true;
+    text.hidden = false;
+    text.value = data.report;
+    copyBtn.hidden = false;
+  } catch (err) {
+    body.className = "error";
+    body.textContent = err.message;
+    logError("Support report", err.message);
   }
 }
 
@@ -701,6 +741,9 @@ function connectManually() {
   $("manualToken").value = "";
   $("manualPanel").hidden = true;
   $("manualBtn").setAttribute("aria-expanded", "false");
+  // The Open tab may already be showing "connect to an org first" from
+  // before this credential existed - now that it does, retry.
+  if ($("flowPicker").dataset.loaded) loadFlows();
 }
 
 // --------------------------------------------------------------------------
@@ -748,6 +791,7 @@ async function boot() {
 
     // With no sf CLI on this host, the picker can only ever offer "sf CLI not
     // installed" - not a choice, just noise next to the OAuth login buttons.
+    state.sfCli = config.sf_cli;
     if (config.sf_cli) {
       const org = $("org");
       if (config.orgs.length) {
@@ -806,6 +850,23 @@ async function boot() {
 
   $("designBtn").onclick = design;
   $("importBtn").onclick = importFlow;
+  $("surveyLink").onclick = runSurvey;
+  $("surveyCloseBtn").onclick = () => $("surveyDialog").close();
+  $("surveyCopyBtn").onclick = async () => {
+    const text = $("surveyText");
+    try {
+      await navigator.clipboard.writeText(text.value);
+    } catch {
+      // Clipboard API needs a secure context or permission that may not be
+      // granted - selecting the text is a fallback anyone can copy manually.
+      text.hidden = false;
+      text.focus();
+      text.select();
+      return;
+    }
+    busy($("surveyCopyBtn"), true, "Copied");
+    setTimeout(() => busy($("surveyCopyBtn"), false), 1200);
+  };
   $("explainBtn").onclick = explainFlow;
   $("refineBtn").onclick = refine;
   $("approveBtn").onclick = approve;

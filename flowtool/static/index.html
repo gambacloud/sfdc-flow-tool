@@ -106,6 +106,7 @@
         Flows using screens, waits, or Apex actions are refused rather than
         drawn approximately.
       </p>
+      <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
     </div>
 
     <div class="pad" id="newPane">
@@ -214,6 +215,20 @@
     </div>
   </section>
 </main>
+
+<dialog id="surveyDialog">
+  <h3>Support report</h3>
+  <p class="dim">
+    Every flow in this org, scored against what SFDC Flow Tool can represent.
+    Counts and gap categories only - no flow names, field values, or formulas.
+  </p>
+  <div id="surveyBody" class="dim">Scanning the org...</div>
+  <textarea id="surveyText" rows="14" readonly hidden></textarea>
+  <div class="row survey-actions">
+    <button id="surveyCopyBtn" class="primary" hidden>Copy</button>
+    <button id="surveyCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
 
 <script src="static/app.js"></script>
 </body>
