@@ -671,6 +671,89 @@ class TestFlowLevel:
         assert conditions[1].right.boolean_value is True
         assert conditions[2].right.string_value == "42"
 
+    def test_a_loop_over_a_first_record_only_get_is_rejected(self):
+        # Confirmed by generating a real flow this way: the org's own checkOnly
+        # deploys it clean, and it would only fail once the flow actually runs.
+        with pytest.raises(ValidationError, match="gets only the first record"):
+            _flow(
+                GetRecords(name="Get", label="Get", object="Account",
+                           first_record_only=True, next="Loop"),
+                Loop(name="Loop", label="Loop", collection_reference="Get"),
+            )
+
+    def test_a_loop_over_a_get_with_an_unstated_answer_is_allowed(self):
+        # first_record_only=None means the flow never said - not something
+        # this IR is confident enough about to refuse.
+        assert _flow(
+            GetRecords(name="Get", label="Get", object="Account",
+                       first_record_only=None, next="Loop"),
+            Loop(name="Loop", label="Loop", collection_reference="Get"),
+        ).elements
+
+    def test_a_loop_over_a_plain_variable_is_allowed(self):
+        assert _flow(
+            Loop(name="Loop", label="Loop", collection_reference="v_Items"),
+            variables=[Variable(name="v_Items", data_type="String",
+                                is_collection=True)],
+        ).elements
+
+    def test_a_loop_over_a_non_collection_variable_is_rejected(self):
+        with pytest.raises(ValidationError, match="not a collection variable"):
+            _flow(
+                Loop(name="Loop", label="Loop", collection_reference="v_Item"),
+                variables=[Variable(name="v_Item", data_type="String")],
+            )
+
+    def test_a_loop_over_another_loops_current_item_is_rejected(self):
+        with pytest.raises(ValidationError, match="current item, not its collection"):
+            _flow(
+                Loop(name="Outer", label="Outer", collection_reference="v_Items",
+                     next="Inner"),
+                Loop(name="Inner", label="Inner", collection_reference="Outer"),
+                variables=[Variable(name="v_Items", data_type="String",
+                                    is_collection=True)],
+            )
+
+    def test_a_collection_filter_over_a_first_record_only_get_is_rejected(self):
+        with pytest.raises(ValidationError, match="gets only the first record"):
+            _flow(
+                GetRecords(name="Get", label="Get", object="Account",
+                           first_record_only=True, next="Filter"),
+                CollectionFilter(
+                    name="Filter", label="Filter", collection_reference="Get",
+                    current_item="item",
+                    conditions=[Condition(left="item.Name", operator="EqualTo",
+                                          right=Value(string_value="x"))],
+                ),
+            )
+
+    def test_a_collection_sort_over_a_first_record_only_get_is_rejected(self):
+        with pytest.raises(ValidationError, match="gets only the first record"):
+            _flow(
+                GetRecords(name="Get", label="Get", object="Account",
+                           first_record_only=True, next="Sort"),
+                CollectionSort(
+                    name="Sort", label="Sort", collection_reference="Get",
+                    sort_options=[CollectionSortOption(sort_field="Name")],
+                ),
+            )
+
+    def test_a_loop_over_another_collection_processors_output_is_allowed(self):
+        # A CollectionFilter/CollectionSort's own output is a collection - this
+        # is the one shape the IR cannot know is wrong, because it isn't.
+        assert _flow(
+            GetRecords(name="Get", label="Get", object="Account",
+                       first_record_only=False, next="Filter"),
+            CollectionFilter(
+                name="Filter", label="Filter", collection_reference="Get",
+                current_item="item",
+                conditions=[Condition(left="item.Name", operator="EqualTo",
+                                      right=Value(string_value="x"))],
+                next="Loop",
+            ),
+            Loop(name="Loop", label="Loop", collection_reference="Filter"),
+        ).elements
+
 
 class TestFaultPaths:
     """

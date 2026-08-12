@@ -2297,6 +2297,53 @@ class Flow(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def collection_references_are_collections(self) -> "Flow":
+        """
+        Loop, CollectionFilter and CollectionSort all read `collection_reference`
+        expecting a collection, but nothing enforces that at the org's own deploy
+        time. Confirmed by generating a real flow this way: a Loop over a
+        GetRecords with `first_record_only=True` deployed clean under checkOnly
+        and would only have failed once it actually ran - Flow Builder's own UI
+        is what normally prevents this (it will not let you pick a single-record
+        Get as a Loop's source), and the raw Metadata API has no equivalent gate.
+
+        Only what this IR can know for certain is flagged: a GetRecords that
+        explicitly said "first record only", a Loop's own name (which is its
+        current item, not its collection), and a Variable explicitly typed as
+        not a collection. A Subflow or Action output, or a name this IR does not
+        recognise at all, is left alone rather than guessed at.
+        """
+        by_name = self.by_name()
+        variables = {v.name: v for v in self.variables}
+
+        def not_a_collection(name: str) -> Optional[str]:
+            root = name.split(".")[0]
+            element = by_name.get(root)
+            if isinstance(element, GetRecords) and element.first_record_only:
+                return f"{root!r} gets only the first record"
+            if isinstance(element, Loop):
+                return f"{root!r} is a Loop's current item, not its collection"
+            variable = variables.get(root)
+            if variable is not None and not variable.is_collection:
+                return f"{root!r} is not a collection variable"
+            return None
+
+        problems: List[str] = []
+        for element in self.elements:
+            if isinstance(element, (Loop, CollectionFilter, CollectionSort)):
+                reason = not_a_collection(element.collection_reference)
+                if reason:
+                    problems.append(f"{element.name}: {reason}")
+
+        if problems:
+            raise ValueError(
+                "these read a collection_reference that is not a collection: "
+                + "; ".join(problems) + ". The org's own deploy validation "
+                "does not catch this - it only fails once the flow runs."
+            )
+        return self
+
+    @model_validator(mode="after")
     def everything_is_connected(self) -> "Flow":
         """
         Salesforce rejects a flow whose Start goes nowhere ("The flow can't run
