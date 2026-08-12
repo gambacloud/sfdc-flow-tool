@@ -193,6 +193,7 @@ async function renderDiagram(source) {
   try {
     const { svg } = await mermaid.render("g" + Date.now(), source);
     host.innerHTML = svg;
+    wireDiagramSync();
   } catch (err) {
     const pre = document.createElement("pre");
     pre.textContent = source + "\n\n// could not render: " + err.message;
@@ -200,10 +201,68 @@ async function renderDiagram(source) {
   }
 }
 
+function renderElementIndex(rows) {
+  const host = $("elementIndex");
+  host.innerHTML = "";
+  (rows || []).forEach((row) => {
+    const node = document.createElement("div");
+    node.className = "row";
+    node.dataset.id = row.name;
+    const head = document.createElement("div");
+    head.className = "row-head";
+    const name = document.createElement("span");
+    name.className = "row-name";
+    name.textContent = row.label;
+    const type = document.createElement("span");
+    type.className = "row-type";
+    type.textContent = row.type;
+    head.append(name, type);
+    const detail = document.createElement("div");
+    detail.className = "row-detail";
+    detail.textContent = row.detail;
+    node.append(head, detail);
+    host.appendChild(node);
+  });
+}
+
+// Mermaid renders each node as <g id="<renderId>-flowchart-<nodeId>-<n>">, and
+// to_mermaid() uses the element's own name as nodeId - so the two sides share
+// an id with no lookup table needed. Names never contain a hyphen (Salesforce
+// API names are letters, numbers and underscores only), so the pattern is
+// unambiguous even though nodeId itself is unbounded text.
+function wireDiagramSync() {
+  const svg = $("diagram").querySelector("svg");
+  const rows = $("elementIndex").querySelectorAll(".row");
+  if (!svg || !rows.length) return;
+
+  const rowById = new Map([...rows].map((row) => [row.dataset.id, row]));
+  const set = (id, on) => {
+    rowById.get(id)?.classList.toggle("linked", on);
+    svg.querySelector(`[data-index-id="${CSS.escape(id)}"]`)?.classList.toggle("linked", on);
+  };
+
+  svg.querySelectorAll(".node").forEach((g) => {
+    const match = g.id.match(/-flowchart-(.+)-\d+$/);
+    const id = match && match[1];
+    if (!id || !rowById.has(id)) return;
+    g.dataset.indexId = id;
+    g.addEventListener("mouseenter", () => set(id, true));
+    g.addEventListener("mouseleave", () => set(id, false));
+    g.addEventListener("click", () =>
+      rowById.get(id)?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+    );
+  });
+  rows.forEach((row) => {
+    const id = row.dataset.id;
+    row.addEventListener("mouseenter", () => set(id, true));
+    row.addEventListener("mouseleave", () => set(id, false));
+  });
+}
+
 function renderTab() {
   const isDiagram = state.tab === "diagram";
   const isExplain = state.tab === "explain";
-  $("diagram").parentElement.hidden = !isDiagram;
+  $("diagramTab").hidden = !isDiagram;
   $("explainPane").hidden = !isExplain;
   $("code").hidden = isDiagram || isExplain;
   if (!isDiagram && !isExplain) $("code").textContent = state.artifacts[state.tab] ?? "";
@@ -285,6 +344,7 @@ function renderFlow(data) {
   $("explanation").className = "explanation dim";
 
   $("result").hidden = true;
+  renderElementIndex(data.element_index);
   renderDiagram(data.mermaid);
   renderTab();
   renderGate();

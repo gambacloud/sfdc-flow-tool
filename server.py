@@ -34,7 +34,7 @@ from flowtool.llm import (
     Provider,
 )
 from flowtool.llm import GeminiProvider, OllamaProvider
-from flowtool.mermaid import to_markdown, to_mermaid
+from flowtool.mermaid import element_index, to_markdown, to_mermaid
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.sfdc import (
     RetrieveError,
@@ -226,6 +226,7 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
         ),
         "mermaid": to_mermaid(flow),
         "markdown": to_markdown(flow),
+        "element_index": element_index(flow),
         "ir": flow.model_dump(exclude_none=True),
         "repairs": session.result.repairs,
         "usage": session.generator.provider.usage.as_dict(),

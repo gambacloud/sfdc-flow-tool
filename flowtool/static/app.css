@@ -290,8 +290,11 @@ dialog p { margin: 0 0 12px; }
 }
 .desc:empty { display: none; }
 
+.diagram-tab { display: flex; gap: 16px; align-items: flex-start; margin: 14px 0 0; }
+
 .diagram-wrap {
-  margin: 14px 0 0;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -299,6 +302,38 @@ dialog p { margin: 0 0 12px; }
   background: var(--bg);
 }
 #diagram svg { max-width: 100%; height: auto; }
+
+/* One glow, stacked twice for a visible ring regardless of node shape - a
+   diamond and a stadium have no shared edge to outline any other way. */
+#diagram svg .node[data-index-id] { cursor: pointer; transition: filter 0.1s; }
+#diagram svg .node.linked {
+  filter: drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 2px var(--accent));
+}
+
+.element-index {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.element-index .row {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid var(--line);
+  cursor: pointer;
+}
+.element-index .row.linked { border-left-color: var(--accent); background: var(--panel); }
+.element-index .row-head { display: flex; justify-content: space-between; gap: 8px; }
+.element-index .row-name { font-size: 13px; font-weight: 600; }
+.element-index .row-type { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.element-index .row-detail {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
 
 .tabs { display: flex; gap: 4px; margin: 16px 0 0; flex-wrap: wrap; }
 .tab { font-size: 13px; padding: 5px 10px; }

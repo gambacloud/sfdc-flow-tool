@@ -9,6 +9,7 @@ backed by the IR, which is what actually compiles to XML.
 
 from __future__ import annotations
 
+import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .ir import (
@@ -690,6 +691,36 @@ def _element_detail(element: Element) -> str:
         return "Rejects the record: " + "; ".join(parts)
 
     return ""
+
+
+# Markdown syntax that reads fine in an exported table but would show up as
+# literal backticks and asterisks in a plain UI panel - the detail text is
+# authored once, for the table, and lightened for the panel here rather than
+# maintained twice.
+def _plain(markdown: str) -> str:
+    text = markdown.replace("<br>", "\n")
+    text = text.replace("`", "")
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    return text
+
+
+def element_index(flow: Flow) -> List[Dict[str, str]]:
+    """
+    One row per element, in flow order: name, label, type, and the same detail
+    the Documentation tab's table shows - the full logic inside the element,
+    not just the one-line diagram caption. Meant for a panel next to the
+    diagram, where the caption alone (Assignment: "set 1 field (+2 more)")
+    is not enough to review what the element actually does.
+    """
+    return [
+        {
+            "name": element.name,
+            "label": element.label,
+            "type": _TYPE_LABEL.get(type(element), type(element).__name__),
+            "detail": _plain(_element_detail(element)) or "",
+        }
+        for element in flow.elements
+    ]
 
 
 def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
