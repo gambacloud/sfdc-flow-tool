@@ -324,6 +324,17 @@ def _write_choice(root: ET.Element, choice: Choice) -> None:
     _sub(node, "name", choice.name)
     _sub(node, "choiceText", choice.choice_text)
     _sub(node, "dataType", choice.data_type)
+    if choice.user_input is not None:
+        ui = _sub(node, "userInput")
+        if choice.user_input.is_required:
+            _sub(ui, "isRequired", "true")
+        if choice.user_input.prompt_text:
+            _sub(ui, "promptText", choice.user_input.prompt_text)
+        if choice.user_input.validation is not None:
+            rule = _sub(ui, "validationRule")
+            _sub(rule, "errorMessage", choice.user_input.validation.error_message)
+            _sub(rule, "formulaExpression",
+                 choice.user_input.validation.formula_expression)
     if choice.value is not None:
         _value_el(node, "value", choice.value)
 

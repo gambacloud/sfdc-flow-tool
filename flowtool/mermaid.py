@@ -788,6 +788,10 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
             shown = f'"{choice.choice_text}"'
             if choice.value is not None:
                 shown += f" (stores {value_text(choice.value)})"
+            if choice.user_input is not None:
+                shown += ", lets the user type their own answer"
+                if choice.user_input.is_required:
+                    shown += " (required)"
             lines.append(f"| `{choice.name}` | Choice | {shown} |")
         for choice_set in flow.dynamic_choice_sets:
             if choice_set.picklist_field:

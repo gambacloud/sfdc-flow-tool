@@ -21,6 +21,7 @@ from .ir import (
     Assignment,
     AssignmentItem,
     Choice,
+    ChoiceUserInput,
     CollectionFilter,
     CollectionSort,
     CollectionSortOption,
@@ -306,7 +307,12 @@ _SUPPORTED_SCREEN_FIELD_TYPES = {
     "ComponentInstance", "ComponentChoice", "RegionContainer", "Region",
 }
 
-_CHOICE_CHILDREN = {"name", "choiceText", "dataType", "value", "processMetadataValues"}
+_CHOICE_CHILDREN = {
+    "name", "choiceText", "dataType", "value", "userInput", "processMetadataValues",
+}
+# Confirmed against a real dev org's checkOnly validation: only isRequired is
+# ever mandatory - promptText and validationRule are both genuinely optional.
+_CHOICE_USER_INPUT_CHILDREN = {"isRequired", "promptText", "validationRule"}
 
 _TEXT_TEMPLATE_CHILDREN = {"name", "text", "isViewedAsPlainText", "description",
                           "processMetadataValues"}
@@ -392,7 +398,6 @@ _CHILD_MEANING = {
     "helpText": "help text",
     "fields": "nested sections or columns",
     "inputsOnNextNavToAssocScrn": "revisit behaviour",
-    "userInput": "a choice that lets the user type their own answer",
 }
 
 
@@ -678,12 +683,31 @@ def _read_action_call(node: ET.Element) -> ActionCall:
     )
 
 
+def _read_choice_user_input(node: ET.Element) -> Optional[ChoiceUserInput]:
+    ui = node.find("m:userInput", NS)
+    if ui is None:
+        return None
+    validation_node = ui.find("m:validationRule", NS)
+    validation = None
+    if validation_node is not None:
+        validation = ValidationRule(
+            error_message=_text(validation_node, "m:errorMessage") or "",
+            formula_expression=_text(validation_node, "m:formulaExpression") or "",
+        )
+    return ChoiceUserInput(
+        is_required=_bool(ui, "m:isRequired"),
+        prompt_text=_text(ui, "m:promptText"),
+        validation=validation,
+    )
+
+
 def _read_choice(node: ET.Element) -> Choice:
     return Choice(
         name=_text(node, "m:name") or "",
         choice_text=_text(node, "m:choiceText") or "",
         data_type=_text(node, "m:dataType") or "String",
         value=_value(node.find("m:value", NS)),
+        user_input=_read_choice_user_input(node),
     )
 
 
@@ -1084,6 +1108,14 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
         for node in root.findall(f"m:{tag}", NS):
             reasons.extend(
                 _unknown_children(node, allowed, _text(node, "m:name") or tag)
+            )
+
+    for node in root.findall("m:choices", NS):
+        ui_node = node.find("m:userInput", NS)
+        if ui_node is not None:
+            where = f"{_text(node, 'm:name') or 'a choice'}'s userInput"
+            reasons.extend(
+                _unknown_children(ui_node, _CHOICE_USER_INPUT_CHILDREN, where)
             )
 
     # And one level below that, for the fields on each screen - following the

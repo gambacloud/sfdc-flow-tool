@@ -898,6 +898,42 @@ _OPTIONAL_DATA_TYPE_FIELD_TYPES = frozenset(
 )
 
 
+class ValidationRule(BaseModel):
+    """
+    A formula the entered value must satisfy, and what to say when it does not.
+
+    `error_message` is required by the org - "Required field is missing:
+    errorMessage" - and rightly: a validation that fails silently is worse than
+    none. The formula is the same free-form string as everywhere else, and the
+    org accepted `BANANA(` without complaint, so a person reading it is the
+    only check there is.
+    """
+
+    error_message: str = Field(
+        description="Shown to the user when the value does not pass."
+    )
+    formula_expression: str = Field(
+        description="A formula that must be true, e.g. '{!Quantity} > 0'."
+    )
+
+
+class ChoiceUserInput(BaseModel):
+    """
+    Turns a fixed choice into an "other, please specify" option: picking it
+    swaps in a free-text box instead of storing the choice's own value.
+
+    Confirmed against a real dev org's checkOnly validation: every field here
+    is genuinely optional, including `is_required` - an empty `<userInput/>`
+    deploys as-is.
+    """
+
+    is_required: bool = False
+    prompt_text: Optional[str] = Field(
+        default=None, description="Shown above the free-text box."
+    )
+    validation: Optional[ValidationRule] = None
+
+
 class Choice(BaseModel):
     """
     One fixed option, defined once and referenced by name from any number of
@@ -913,6 +949,9 @@ class Choice(BaseModel):
         default=None,
         description="What selecting it stores. Defaults to the text shown.",
     )
+    # Confirmed against a real dev org: works alongside `value` too - not
+    # mutually exclusive, though a choice with user_input rarely needs one.
+    user_input: Optional[ChoiceUserInput] = None
 
     @field_validator("name")
     @classmethod
@@ -1137,25 +1176,6 @@ class VisibilityRule(BaseModel):
         _check_logic(self.condition_logic, len(self.conditions),
                      "a visibility rule", "condition_logic", "condition")
         return self
-
-
-class ValidationRule(BaseModel):
-    """
-    A formula the entered value must satisfy, and what to say when it does not.
-
-    `error_message` is required by the org - "Required field is missing:
-    errorMessage" - and rightly: a validation that fails silently is worse than
-    none. The formula is the same free-form string as everywhere else, and the
-    org accepted `BANANA(` without complaint, so a person reading it is the
-    only check there is.
-    """
-
-    error_message: str = Field(
-        description="Shown to the user when the value does not pass."
-    )
-    formula_expression: str = Field(
-        description="A formula that must be true, e.g. '{!Quantity} > 0'."
-    )
 
 
 class ScreenField(BaseModel):

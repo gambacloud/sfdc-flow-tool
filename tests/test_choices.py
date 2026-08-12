@@ -19,12 +19,14 @@ from pydantic import ValidationError
 
 from flowtool.ir import (
     Choice,
+    ChoiceUserInput,
     DynamicChoiceSet,
     Flow,
     RecordFilter,
     Screen,
     ScreenField,
     Start,
+    ValidationRule,
     Value,
     Variable,
 )
@@ -94,6 +96,30 @@ class TestRoundTrip:
             picker(references=("Yes_Please",)),
             choices=[Choice(name="Yes_Please", choice_text="Yes please",
                             value=Value(boolean_value=True), data_type="Boolean")],
+        ))
+
+    def test_a_choice_that_lets_the_user_type_their_own_answer(self):
+        # Confirmed against a real dev org: prompt_text and validation are
+        # both genuinely optional, only is_required survives on its own.
+        assert_survives(flow_with(
+            picker(references=("Other",)),
+            choices=[Choice(
+                name="Other", choice_text="Other", data_type="String",
+                user_input=ChoiceUserInput(
+                    is_required=True, prompt_text="Say more",
+                    validation=ValidationRule(
+                        error_message="Required",
+                        formula_expression="true",
+                    ),
+                ),
+            )],
+        ))
+
+    def test_a_bare_user_input(self):
+        assert_survives(flow_with(
+            picker(references=("Other",)),
+            choices=[Choice(name="Other", choice_text="Other", data_type="String",
+                            user_input=ChoiceUserInput())],
         ))
 
     @pytest.mark.parametrize("data_type", [
@@ -371,18 +397,28 @@ class TestParsing:
         assert [c.name for c in flow.choices] == ["Red"]
         assert flow.elements[0].fields[0].choice_references == ["Red"]
 
-    def test_a_choice_that_lets_the_user_type_their_own_is_refused(self):
-        """
-        userInput turns a choice into a free-text box. Reading it as a plain
-        option would draw a picker that does not match, and drop the box.
-        """
+    def test_a_choice_that_lets_the_user_type_their_own_answer_parses(self):
+        """userInput turns a choice into a free-text box, not just a picker."""
         xml = org_xml(RED.replace(
-            "</choices>", "<userInput><isRequired>true</isRequired></userInput></choices>"
+            "</choices>",
+            "<userInput><isRequired>true</isRequired>"
+            "<promptText>Say more</promptText>"
+            "<validationRule><errorMessage>Required</errorMessage>"
+            "<formulaExpression>true</formulaExpression></validationRule>"
+            "</userInput></choices>"
         ))
-        with pytest.raises(UnsupportedFlow) as caught:
+        flow = parse_flow(xml, api_name="Ask")
+        choice = flow.choices[0]
+        assert choice.user_input.is_required is True
+        assert choice.user_input.prompt_text == "Say more"
+        assert choice.user_input.validation.error_message == "Required"
+
+    def test_an_unknown_child_of_a_choices_userInput_is_refused(self):
+        xml = org_xml(RED.replace(
+            "</choices>", "<userInput><somethingMadeUp>x</somethingMadeUp></userInput></choices>"
+        ))
+        with pytest.raises(UnsupportedFlow, match="somethingMadeUp"):
             parse_flow(xml, api_name="Ask")
-        assert "lets the user type their own answer" in str(caught.value)
-        assert "child:userInput" in caught.value.codes
 
     def test_fields_copied_out_of_a_chosen_record_are_refused(self):
         xml = org_xml(
