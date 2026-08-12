@@ -28,6 +28,8 @@ from .ir import (
     ComponentOutput,
     Condition,
     Constant,
+    CustomError,
+    CustomErrorMessage,
     DataTypeMapping,
     Decision,
     DynamicChoiceSet,
@@ -140,9 +142,9 @@ _IGNORED = {
 
 # Element collections this module can turn into IR.
 _SUPPORTED_ELEMENTS = {
-    "actionCalls", "assignments", "collectionProcessors", "decisions", "loops",
-    "recordCreates", "recordDeletes", "recordLookups", "recordUpdates", "screens",
-    "subflows", "transforms", "waits",
+    "actionCalls", "assignments", "collectionProcessors", "customErrors",
+    "decisions", "loops", "recordCreates", "recordDeletes", "recordLookups",
+    "recordUpdates", "screens", "subflows", "transforms", "waits",
 }
 
 # Resources rather than elements: nothing connects to them, screen fields name
@@ -159,7 +161,6 @@ _KNOWN_UNSUPPORTED = {
     "steps": "steps",
     "orchestratedStages": "orchestration stages",
     "stages": "stages",
-    "customErrors": "custom error elements",
     "exitRules": "exit rules",
     "filters": "top-level filters",
 }
@@ -248,6 +249,13 @@ _ELEMENT_CHILDREN = {
         "apexClass", "objectType", "isCollection", "scale", "schemaUri",
         "storeOutputAutomatically", "transformValues", "elementSubtype",
     },
+    # No faultConnector, no connector either - confirmed against the org's own
+    # live Metadata API schema (describeValueType on FlowCustomError) and a
+    # real deploy: a connector here deploys as an opaque "unexpected error".
+    # `connector` stays in the allowlist via _ELEMENT_COMMON so a flow that
+    # somehow has one is a clean ir_mismatch (CustomError.no_next) rather than
+    # an unrecognised-tag refusal.
+    "customErrors": _ELEMENT_COMMON | {"customErrorMessages"},
     # No faultConnector: a screen cannot fail the way a DML element can.
     "screens": _ELEMENT_COMMON | {
         "fields", "allowBack", "allowFinish", "allowPause", "showFooter", "showHeader",
@@ -310,8 +318,8 @@ _SUPPORTED_SCREEN_FIELD_TYPES = {
 _CHOICE_CHILDREN = {
     "name", "choiceText", "dataType", "value", "userInput", "processMetadataValues",
 }
-# Confirmed against a real dev org's checkOnly validation: only isRequired is
-# ever mandatory - promptText and validationRule are both genuinely optional.
+# Confirmed against a real dev org's checkOnly validation: every field here
+# is genuinely optional, including isRequired - an empty userInput deploys.
 _CHOICE_USER_INPUT_CHILDREN = {"isRequired", "promptText", "validationRule"}
 
 _TEXT_TEMPLATE_CHILDREN = {"name", "text", "isViewedAsPlainText", "description",
@@ -363,6 +371,8 @@ _TRANSFORM_VALUE_ACTION_CHILDREN = {
     "name", "transformType", "value", "outputFieldApiName", "assignToReference",
     "inputParameters", "processMetadataValues",
 }
+
+_CUSTOM_ERROR_MESSAGE_CHILDREN = {"errorMessage", "fieldSelection", "isFieldError"}
 
 _VARIABLE_CHILDREN = {
     "name", "dataType", "isCollection", "isInput", "isOutput", "objectType",
@@ -786,6 +796,18 @@ def _read_transform(node: ET.Element) -> Transform:
     )
 
 
+def _read_custom_error(node: ET.Element) -> CustomError:
+    messages = [
+        CustomErrorMessage(
+            error_message=_text(item, "m:errorMessage") or "",
+            field_selection=_text(item, "m:fieldSelection"),
+            is_field_error=_bool(item, "m:isFieldError"),
+        )
+        for item in node.findall("m:customErrorMessages", NS)
+    ]
+    return CustomError(**_common(node), messages=messages)
+
+
 def _read_scheduled_paths(start_node: Optional[ET.Element]) -> List[ScheduledPath]:
     if start_node is None:
         return []
@@ -996,6 +1018,7 @@ _READERS = {
     "actionCalls": _read_action_call,
     "assignments": _read_assignment,
     "collectionProcessors": _read_collection_processor,
+    "customErrors": _read_custom_error,
     "decisions": _read_decision,
     "loops": _read_loop,
     "recordCreates": _read_record_create,
@@ -1095,6 +1118,13 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
                     _unknown_children(action, _TRANSFORM_VALUE_ACTION_CHILDREN,
                                      action_where)
                 )
+
+    for node in root.findall("m:customErrors", NS):
+        name = _text(node, "m:name") or "a Custom Error"
+        for i, msg in enumerate(node.findall("m:customErrorMessages", NS)):
+            reasons.extend(
+                _unknown_children(msg, _CUSTOM_ERROR_MESSAGE_CHILDREN, f"{name}[{i}]")
+            )
 
     # Resources get the same treatment: a choice read without its userInput would
     # lose the user's own typed answer on the next deploy.

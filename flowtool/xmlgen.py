@@ -18,6 +18,7 @@ from .ir import (
     CollectionFilter,
     CollectionSort,
     Constant,
+    CustomError,
     Decision,
     DynamicChoiceSet,
     Element,
@@ -536,6 +537,19 @@ def _write_transform(root: ET.Element, el: Transform, xy) -> None:
             _sub(item, "transformValueName", tv.name)
 
 
+def _write_custom_error(root: ET.Element, el: CustomError, xy) -> None:
+    node = _sub(root, "customErrors")
+    # No connector: the IR refuses `next` on a Custom Error, the same as Wait.
+    _write_common(node, el, xy)
+    for msg in el.messages:
+        item = _sub(node, "customErrorMessages")
+        _sub(item, "errorMessage", msg.error_message)
+        if msg.field_selection:
+            _sub(item, "fieldSelection", msg.field_selection)
+        if msg.is_field_error:
+            _sub(item, "isFieldError", "true")
+
+
 def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
@@ -591,6 +605,7 @@ _WRITERS = {
     Assignment: ("assignments", _write_assignment),
     CollectionFilter: ("collectionProcessors", _write_collection_filter),
     CollectionSort: ("collectionProcessors", _write_collection_sort),
+    CustomError: ("customErrors", _write_custom_error),
     Decision: ("decisions", _write_decision),
     Loop: ("loops", _write_loop),
     RecordCreate: ("recordCreates", _write_record_create),
@@ -614,6 +629,7 @@ _ROOT_ORDER = [
     "choices",
     "collectionProcessors",
     "constants",
+    "customErrors",
     "decisions",
     "dynamicChoiceSets",
     "formulas",

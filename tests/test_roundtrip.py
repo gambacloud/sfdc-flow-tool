@@ -890,7 +890,7 @@ class TestUnsupported:
 
     @pytest.mark.parametrize("tag,expected", [
         ("recordRollbacks", "rollback elements"),
-        ("customErrors", "custom error elements"),
+        ("apexPluginCalls", "Apex plugin calls"),
     ])
     def test_named_constructs_are_refused(self, tag, expected):
         with pytest.raises(UnsupportedFlow) as caught:
@@ -923,7 +923,7 @@ class TestUnsupported:
         with pytest.raises(UnsupportedFlow) as caught:
             parse_flow(self._xml(
                 "<recordRollbacks><name>A</name></recordRollbacks>"
-                "<customErrors><name>B</name></customErrors>"
+                "<apexPluginCalls><name>B</name></apexPluginCalls>"
             ))
         assert len(caught.value.reasons) == 2
 

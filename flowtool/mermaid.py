@@ -17,6 +17,7 @@ from .ir import (
     CollectionFilter,
     CollectionSort,
     Condition,
+    CustomError,
     Decision,
     Element,
     Flow,
@@ -253,6 +254,10 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
         # Stadium, like Start and End: the flow genuinely stops here and a
         # later event starts it again, so it reads as a terminus, not a step.
         return f'{name}(["{text}"])'
+    if isinstance(element, CustomError):
+        # Stadium too: a thrown error is terminal, the same as End - just for
+        # a reason the flow chose rather than one it ran out of steps.
+        return f'{name}(["{text}"])'
     if isinstance(element, ActionCall):
         # Mermaid's trapezoid ends with a literal backslash, hence the raw string.
         return rf'{name}[/"{text}"\]'
@@ -292,6 +297,12 @@ def _element_caption(element: Element) -> str:
         return f"{element.label}\nSort {element.collection_reference} by {fields}"
     if isinstance(element, Wait):
         return f"{element.label}\n{_wait_caption(element)}"
+    if isinstance(element, CustomError):
+        first = element.messages[0].error_message
+        detail = f'Reject: "{first}"'
+        if len(element.messages) > 1:
+            detail += f" (+{len(element.messages) - 1} more)"
+        return f"{element.label}\n{detail}"
     if isinstance(element, Subflow):
         return f"{element.label}\nCall {element.flow_name}"
     if isinstance(element, Screen):
@@ -442,6 +453,7 @@ _TYPE_LABEL = {
     ActionCall: "Action",
     CollectionFilter: "Collection Filter",
     CollectionSort: "Collection Sort",
+    CustomError: "Custom Error",
 }
 
 _FIELD_LABEL = {
@@ -667,6 +679,15 @@ def _element_detail(element: Element) -> str:
         elif element.store_output_automatically:
             detail += f", results read as `{{!{element.name}.…}}`"
         return detail
+
+    if isinstance(element, CustomError):
+        parts = []
+        for msg in element.messages:
+            part = f'"{msg.error_message}"'
+            if msg.is_field_error:
+                part += f" (on `{msg.field_selection}`)"
+            parts.append(part)
+        return "Rejects the record: " + "; ".join(parts)
 
     return ""
 

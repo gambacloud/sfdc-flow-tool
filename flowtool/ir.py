@@ -1766,12 +1766,80 @@ class Wait(FaultCapable):
         return self
 
 
+class CustomErrorMessage(BaseModel):
+    """
+    One message a Custom Error element shows. A single element can carry
+    several: a general one, and others each pinned to the field on the
+    triggering record they are about.
+    """
+
+    error_message: str = Field(
+        description="Shown to the user. Merge fields look like {!variable_name}."
+    )
+    field_selection: Optional[str] = Field(
+        default=None,
+        description="API name of a field on the triggering record - not a "
+        "screen field, there is no screen here. Pins this message to that "
+        "field, the way a validation rule's error does.",
+    )
+    is_field_error: bool = Field(
+        default=False,
+        description="Pins this message to field_selection instead of showing "
+        "it generally.",
+    )
+
+    @model_validator(mode="after")
+    def field_error_needs_a_field(self) -> "CustomErrorMessage":
+        # Confirmed against a real dev org: is_field_error without
+        # field_selection deploys as an opaque "unexpected error" rather than
+        # a clean rejection, so it is refused here instead.
+        if self.is_field_error and not self.field_selection:
+            raise ValueError(
+                "a field-level error message needs field_selection - which "
+                "field on the triggering record it is about."
+            )
+        return self
+
+
+class CustomError(BaseElement):
+    """
+    Deliberately rejects the record being saved, the way a validation rule
+    does - a thrown failure, not a caught one.
+
+    Confirmed against a real dev org's checkOnly validation: only usable on a
+    record-triggered flow - RecordBeforeSave, RecordAfterSave or
+    RecordBeforeDelete all deploy clean. A screen flow, a plain
+    manually-invoked autolaunched flow, and a Scheduled trigger were all
+    refused with the same message: "A flow can't include Custom Error
+    elements when TriggerType is set to <trigger>." PlatformEvent was not
+    reachable to test (this org has no usable platform event to trigger on),
+    so it is treated as unsupported rather than guessed at.
+
+    It is also always terminal: giving it a connector deploys as an opaque
+    "unexpected error" rather than a clean rejection, the same as a Pause
+    leaving through its own events instead of a plain `next`.
+    """
+
+    type: Literal["CustomError"] = "CustomError"
+    messages: List[CustomErrorMessage] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def no_next(self) -> "CustomError":
+        if self.next:
+            raise ValueError(
+                f"{self.name}: a Custom Error is always terminal - it never "
+                "has a next element."
+            )
+        return self
+
+
 Element = Annotated[
     Union[
         ActionCall,
         Assignment,
         CollectionFilter,
         CollectionSort,
+        CustomError,
         Decision,
         GetRecords,
         RecordCreate,
@@ -2390,6 +2458,30 @@ class Flow(BaseModel):
                 + f". Defined choices and choice sets: {known}. Add a Choice (a "
                 "fixed option) or a DynamicChoiceSet (options built from records "
                 "or a picklist) for each one, or point the field at one that exists."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def custom_errors_need_a_trigger(self) -> "Flow":
+        """
+        The org's own words: "A flow can't include Custom Error elements when
+        TriggerType is set to <trigger>." Confirmed against a real dev org for
+        four of the five trigger types: the three record triggers deploy
+        clean, and both a screen/plain-autolaunched flow (no trigger_type) and
+        a Scheduled trigger were refused with that exact message.
+        PlatformEvent was not reachable to test, so it is refused too rather
+        than guessed at.
+        """
+        allowed = {"RecordBeforeSave", "RecordAfterSave", "RecordBeforeDelete"}
+        if self.start.trigger_type in allowed:
+            return self
+        offenders = [e.name for e in self.elements if isinstance(e, CustomError)]
+        if offenders:
+            trigger = self.start.trigger_type or "None"
+            raise ValueError(
+                "\"A flow can't include Custom Error elements when "
+                f"TriggerType is set to {trigger}.\" ({offenders}). Custom "
+                "Error only works on a record-triggered flow."
             )
         return self
 
