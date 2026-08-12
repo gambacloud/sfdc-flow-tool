@@ -1806,14 +1806,14 @@ class CustomError(BaseElement):
     Deliberately rejects the record being saved, the way a validation rule
     does - a thrown failure, not a caught one.
 
-    Confirmed against a real dev org's checkOnly validation: only usable on a
-    record-triggered flow - RecordBeforeSave, RecordAfterSave or
-    RecordBeforeDelete all deploy clean. A screen flow, a plain
-    manually-invoked autolaunched flow, and a Scheduled trigger were all
-    refused with the same message: "A flow can't include Custom Error
-    elements when TriggerType is set to <trigger>." PlatformEvent was not
-    reachable to test (this org has no usable platform event to trigger on),
-    so it is treated as unsupported rather than guessed at.
+    Confirmed against a real dev org's checkOnly validation, all five trigger
+    types: only usable on a record-triggered flow - RecordBeforeSave,
+    RecordAfterSave or RecordBeforeDelete all deploy clean. A screen flow, a
+    plain manually-invoked autolaunched flow, a Scheduled trigger, and a
+    PlatformEvent trigger (tested by deploying a real platform event object
+    alongside the flow) were all refused with the same message: "A flow
+    can't include Custom Error elements when TriggerType is set to
+    <trigger>."
 
     It is also always terminal: giving it a connector deploys as an opaque
     "unexpected error" rather than a clean rejection, the same as a Pause
@@ -2466,11 +2466,9 @@ class Flow(BaseModel):
         """
         The org's own words: "A flow can't include Custom Error elements when
         TriggerType is set to <trigger>." Confirmed against a real dev org for
-        four of the five trigger types: the three record triggers deploy
-        clean, and both a screen/plain-autolaunched flow (no trigger_type) and
-        a Scheduled trigger were refused with that exact message.
-        PlatformEvent was not reachable to test, so it is refused too rather
-        than guessed at.
+        all five trigger types: the three record triggers deploy clean, and a
+        screen/plain-autolaunched flow (no trigger_type), a Scheduled trigger,
+        and a PlatformEvent trigger were all refused with that exact message.
         """
         allowed = {"RecordBeforeSave", "RecordAfterSave", "RecordBeforeDelete"}
         if self.start.trigger_type in allowed:

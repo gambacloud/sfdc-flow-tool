@@ -2,14 +2,19 @@
 The Custom Error element: deliberately rejects the record being saved.
 
 A thrown failure, not a caught one - the opposite of a fault path. The org says
-where it is allowed in one clean sentence:
+where it is allowed in the same sentence every time, just the trigger name
+changes:
 
     A flow can't include Custom Error elements when TriggerType is set to
-    None.
+    <trigger>.
 
-So a screen flow and a plain, manually-invoked autolaunched flow both refuse
-it; a record-triggered (or scheduled, or platform-event) flow accepts it. It
-is also always terminal - giving it a connector, or a message with
+Confirmed against a real dev org for all five trigger types (PlatformEvent by
+deploying a real platform event object alongside the flow): only a
+record-triggered flow accepts it - RecordBeforeSave, RecordAfterSave,
+RecordBeforeDelete. A screen flow, a plain autolaunched flow, Scheduled, and
+PlatformEvent are all refused with that message.
+
+It is also always terminal - giving it a connector, or a message with
 is_field_error and no field_selection, both deploy as an opaque "An
 unexpected error occurred" rather than a clean rejection, so both are refused
 by the IR instead.
@@ -137,6 +142,14 @@ class TestWhereACustomErrorIsAllowed:
                 next="Reject", trigger_type="Scheduled",
                 schedule=Schedule(start_date="2026-08-15",
                                   start_time="02:00:00.000Z", frequency="Daily"),
+            ))
+
+    def test_not_on_a_platform_event_trigger(self):
+        # Confirmed against a real dev org by deploying a real platform event
+        # object alongside the flow.
+        with pytest.raises(ValidationError, match="TriggerType"):
+            flow(reject(message()), start=Start(
+                next="Reject", object="My_Event__e", trigger_type="PlatformEvent",
             ))
 
 
