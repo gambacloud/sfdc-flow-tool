@@ -295,13 +295,31 @@ dialog p { margin: 0 0 12px; }
 .diagram-wrap {
   flex: 1 1 auto;
   min-width: 0;
+  height: 70vh;
+  position: relative;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  overflow-x: auto;
+  overflow: hidden;
   background: var(--bg);
+  cursor: grab;
+  user-select: none;
 }
-#diagram svg { max-width: 100%; height: auto; }
+.diagram-wrap.dragging { cursor: grabbing; }
+
+.diagram-reset {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+/* Natural size, not fit-to-container - the whole point of panning and
+   zooming is a canvas bigger than its viewport. */
+#diagram { display: inline-block; transform-origin: 0 0; }
+#diagram svg { display: block; }
 
 /* One glow, stacked twice for a visible ring regardless of node shape - a
    diamond and a stadium have no shared edge to outline any other way. */

@@ -184,6 +184,7 @@ function renderLogs() {
 async function renderDiagram(source) {
   const host = $("diagram");
   host.innerHTML = "";
+  resetDiagramView();
   if (!mermaid) {
     const pre = document.createElement("pre");
     pre.textContent = source;
@@ -199,6 +200,108 @@ async function renderDiagram(source) {
     pre.textContent = source + "\n\n// could not render: " + err.message;
     host.appendChild(pre);
   }
+}
+
+// Pan and zoom the diagram itself rather than scrolling its container - a
+// flow with twenty elements is wider than any viewport, and native scroll
+// has no way to zoom out and get oriented first.
+const diagramView = { scale: 1, x: 0, y: 0 };
+const DIAGRAM_ZOOM_MIN = 0.3;
+const DIAGRAM_ZOOM_MAX = 4;
+
+function applyDiagramView() {
+  $("diagram").style.transform =
+    `translate(${diagramView.x}px, ${diagramView.y}px) scale(${diagramView.scale})`;
+}
+
+function resetDiagramView() {
+  diagramView.scale = 1;
+  diagramView.x = 0;
+  diagramView.y = 0;
+  applyDiagramView();
+}
+
+// Zooms around a fixed point (mx, my, in the wrap's own coordinates) rather
+// than the canvas origin, so the thing under the cursor is what stays put -
+// zooming toward the corner instead of toward whatever you are looking at is
+// the usual complaint about naive scroll-to-zoom.
+function zoomDiagramAt(mx, my, factor) {
+  const newScale = Math.min(
+    DIAGRAM_ZOOM_MAX,
+    Math.max(DIAGRAM_ZOOM_MIN, diagramView.scale * factor)
+  );
+  const px = (mx - diagramView.x) / diagramView.scale;
+  const py = (my - diagramView.y) / diagramView.scale;
+  diagramView.x = mx - px * newScale;
+  diagramView.y = my - py * newScale;
+  diagramView.scale = newScale;
+  applyDiagramView();
+}
+
+// Wired once at boot - the wrap element itself never gets replaced, only
+// #diagram's contents on each new render.
+function wireDiagramPanZoom() {
+  const wrap = $("diagram").closest(".diagram-wrap");
+  let dragging = false;
+  let moved = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  wrap.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+      zoomDiagramAt(event.clientX - rect.left, event.clientY - rect.top, factor);
+    },
+    { passive: false }
+  );
+
+  wrap.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragging = true;
+    moved = false;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    wrap.classList.add("dragging");
+  });
+  window.addEventListener("mousemove", (event) => {
+    if (!dragging) return;
+    const dx = event.clientX - lastX;
+    const dy = event.clientY - lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+    diagramView.x += dx;
+    diagramView.y += dy;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    applyDiagramView();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    wrap.classList.remove("dragging");
+  });
+
+  // A single, permanent listener rather than a one-shot added per drag: a
+  // one-shot armed after a drag that ends somewhere with no click target at
+  // all (e.g. released past the window edge) would stay armed and swallow
+  // the next unrelated click - the Reset view button, say. Checking and
+  // clearing the flag right here means it only ever catches the click that
+  // is the direct continuation of that same drag.
+  wrap.addEventListener(
+    "click",
+    (event) => {
+      if (moved) {
+        moved = false;
+        event.stopPropagation();
+      }
+    },
+    { capture: true }
+  );
+
+  $("diagramResetBtn").onclick = resetDiagramView;
 }
 
 function renderElementIndex(rows) {
@@ -907,6 +1010,8 @@ async function boot() {
       }
     };
   });
+
+  wireDiagramPanZoom();
 
   $("designBtn").onclick = design;
   $("importBtn").onclick = importFlow;
