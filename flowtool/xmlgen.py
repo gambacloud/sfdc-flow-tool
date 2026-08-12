@@ -677,9 +677,13 @@ def generate(flow: Flow) -> str:
     _sub(start, "locationX", str(_X_ORIGIN))
     _sub(start, "locationY", "0")
     _connector(start, "connector", flow.start.next)
+    if flow.start.filter_formula:
+        _sub(start, "filterFormula", flow.start.filter_formula)
     if flow.start.filters:
         _sub(start, "filterLogic", flow.start.filter_logic)
         _filters(start, flow.start.filters)
+    if flow.start.flow_run_as_user:
+        _sub(start, "flowRunAsUser", flow.start.flow_run_as_user)
     if flow.start.object:
         _sub(start, "object", flow.start.object)
     if flow.start.only_when_changed_to_meet_criteria:

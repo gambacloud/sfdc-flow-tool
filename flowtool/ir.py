@@ -1933,6 +1933,14 @@ class Start(BaseModel):
     schedule: Optional[Schedule] = None
     filters: List[RecordFilter] = Field(default_factory=list)
     filter_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+    # A formula-based entry condition, standing in for filters/filter_logic
+    # (or alongside them - the org accepts both at once). Confirmed against a
+    # real dev org: works on a RecordAfterSave trigger with `object` set;
+    # setting it without a record object (e.g. on a Scheduled trigger) blows
+    # up with an opaque "An unexpected error occurred" from the org rather
+    # than a clean rejection, so it is restricted to record-triggered starts
+    # here rather than guessed at further.
+    filter_formula: Optional[str] = None
     # "Only when a record is updated to meet the condition requirements".
     # Changes when the flow runs, so it cannot be dropped silently.
     only_when_changed_to_meet_criteria: bool = False
@@ -1941,6 +1949,12 @@ class Start(BaseModel):
         description="Extra branches that run later, or in their own "
         "transaction. Only on a RecordAfterSave trigger.",
     )
+    # Which user context after-save automation runs in. Confirmed against a
+    # real dev org: only meaningful on a RecordAfterSave trigger - setting it
+    # on RecordBeforeSave or Scheduled deploys fine but the org reports back
+    # "the RunAsUser field isn't supported" for that trigger type, i.e. it
+    # would be silently ignored at runtime. Rejected here instead.
+    flow_run_as_user: Optional[Literal["TriggeringUser", "DefaultWorkflowUser"]] = None
 
     @model_validator(mode="after")
     def scheduled_trigger_has_a_schedule(self) -> "Start":
@@ -1984,6 +1998,27 @@ class Start(BaseModel):
     def logic_matches_filters(self) -> "Start":
         _check_logic(self.filter_logic, len(self.filters),
                      "the flow's entry conditions", "filter_logic", "filter")
+        return self
+
+    @model_validator(mode="after")
+    def filter_formula_needs_a_record(self) -> "Start":
+        if self.filter_formula and not self.object:
+            raise ValueError(
+                "a filter formula is evaluated against a triggering record, "
+                "so it only means something on a record-triggered start "
+                "(set object + trigger_type)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def run_as_user_needs_an_after_save_trigger(self) -> "Start":
+        if self.flow_run_as_user and self.trigger_type != "RecordAfterSave":
+            where = self.trigger_type or "a flow with no record trigger"
+            raise ValueError(
+                f"\"When the TriggerType field is set to '{where}', the "
+                "RunAsUser field isn't supported.\" flow_run_as_user only "
+                "applies to a RecordAfterSave trigger."
+            )
         return self
 
     @model_validator(mode="after")

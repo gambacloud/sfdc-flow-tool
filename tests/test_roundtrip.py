@@ -578,6 +578,60 @@ class TestFlowLevel:
                 next="Get",
             )
 
+    def test_a_filter_formula(self):
+        # Verified against a real dev org's checkOnly validation: works
+        # alongside structured filters too, not just in place of them.
+        assert_survives(_flow(
+            GetRecords(name="Get", label="Get", object="Account"),
+            start=Start(
+                object="Opportunity", record_trigger_type="Update",
+                trigger_type="RecordAfterSave",
+                filter_formula='{!$Record.Amount} > 1000',
+                next="Get",
+            ),
+        ))
+
+    def test_a_filter_formula_needs_a_record_trigger(self):
+        # Confirmed against a real dev org: a filterFormula on a
+        # non-record-triggered start (e.g. Scheduled) doesn't get a clean
+        # rejection from the org - it blows up with an opaque "unexpected
+        # error" - so this is refused up front instead.
+        with pytest.raises(ValidationError, match="record-triggered"):
+            Start(
+                trigger_type="Scheduled",
+                schedule=Schedule(start_date="2026-08-15",
+                                  start_time="02:00:00.000Z", frequency="Daily"),
+                filter_formula="1 = 1",
+                next="Get",
+            )
+
+    @pytest.mark.parametrize("flow_run_as_user", ["TriggeringUser", "DefaultWorkflowUser"])
+    def test_flow_run_as_user(self, flow_run_as_user):
+        assert_survives(_flow(
+            GetRecords(name="Get", label="Get", object="Account"),
+            start=Start(
+                object="Opportunity", record_trigger_type="Update",
+                trigger_type="RecordAfterSave",
+                flow_run_as_user=flow_run_as_user,
+                next="Get",
+            ),
+        ))
+
+    @pytest.mark.parametrize("trigger_type", ["RecordBeforeSave", "Scheduled"])
+    def test_flow_run_as_user_needs_an_after_save_trigger(self, trigger_type):
+        # The org's own words: "When the TriggerType field is set to
+        # '<type>', the RunAsUser field isn't supported." - it deploys fine
+        # and is silently ignored, which this IR refuses instead.
+        kwargs = dict(flow_run_as_user="TriggeringUser", next="Get",
+                      trigger_type=trigger_type)
+        if trigger_type == "Scheduled":
+            kwargs["schedule"] = Schedule(start_date="2026-08-15",
+                                          start_time="02:00:00.000Z", frequency="Daily")
+        else:
+            kwargs.update(object="Opportunity", record_trigger_type="Update")
+        with pytest.raises(ValidationError, match="RunAsUser"):
+            Start(**kwargs)
+
     def test_description_and_status(self):
         assert_survives(_flow(
             GetRecords(name="Get", label="Get", object="Account"),
@@ -712,10 +766,10 @@ class TestNestedUnknownsAreRefused:
         assert "E uses" in str(caught.value), "the message should name the element"
 
     @pytest.mark.parametrize("extra,expected", [
-        # scheduledPaths and schedule used to be here. Both are modelled now,
-        # and schedule's own children get the same allowlist treatment - see
-        # test_scheduled_paths.py and TestSchedule below.
-        ("<filterFormula>x</filterFormula>", "formula-based entry condition"),
+        # scheduledPaths, schedule and filterFormula used to be here. All are
+        # modelled now - schedule's own children get the same allowlist
+        # treatment, see test_scheduled_paths.py and TestSchedule below.
+        ("<somethingMadeUp>x</somethingMadeUp>", "<somethingMadeUp>"),
     ])
     def test_unknown_child_of_the_start(self, extra, expected):
         with pytest.raises(UnsupportedFlow, match=expected):

@@ -338,6 +338,10 @@ def _start_caption(flow: Flow) -> str:
         caption += "\n" + _join(
             (filter_text(f) for f in flow.start.filters), flow.start.filter_logic
         )
+    if flow.start.filter_formula:
+        caption += f"\nwhere {flow.start.filter_formula}"
+    if flow.start.flow_run_as_user:
+        caption += f"\nruns as: {flow.start.flow_run_as_user}"
     return f"Start\n{caption}"
 
 
@@ -707,6 +711,10 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
                 (filter_text(f) for f in flow.start.filters), flow.start.filter_logic
             )
             lines.append(f"- **Entry criteria**: {criteria}")
+        if flow.start.filter_formula:
+            lines.append(f"- **Entry criteria (formula)**: `{flow.start.filter_formula}`")
+        if flow.start.flow_run_as_user:
+            lines.append(f"- **Runs as**: {flow.start.flow_run_as_user}")
         for path in flow.start.scheduled_paths:
             name = path.label or path.name
             lines.append(

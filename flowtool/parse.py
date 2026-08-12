@@ -330,7 +330,7 @@ _CHOICE_SET_CHILDREN = {
 
 _START_CHILDREN = {
     "locationX", "locationY", "connector", "object", "recordTriggerType",
-    "triggerType", "filters", "filterLogic",
+    "triggerType", "filters", "filterLogic", "filterFormula", "flowRunAsUser",
     "doesRequireRecordChangedToMeetCriteria", "scheduledPaths", "schedule",
 }
 
@@ -378,7 +378,6 @@ _CHILD_MEANING = {
     "frequencyNumber": "a run-every-N-periods schedule",
     "dayOfMonthToRun": "a day-of-month schedule",
     "daysOfWeekToRun": "a days-of-week schedule",
-    "filterFormula": "a formula-based entry condition",
     "flowTransactionModel": "an explicit transaction model",
     "value": "a default value",
     "scale": "a decimal scale",
@@ -1163,10 +1162,12 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             schedule=_read_schedule(start_node),
             filters=_filters(start_node) if start_node is not None else [],
             filter_logic=_text(start_node, "m:filterLogic") or "and",
+            filter_formula=_text(start_node, "m:filterFormula"),
             only_when_changed_to_meet_criteria=_bool(
                 start_node, "m:doesRequireRecordChangedToMeetCriteria"
             ),
             scheduled_paths=_read_scheduled_paths(start_node),
+            flow_run_as_user=_text(start_node, "m:flowRunAsUser"),
         )
     except ValueError as exc:
         # As with an element: the flow is deployed and running, so a rejection
