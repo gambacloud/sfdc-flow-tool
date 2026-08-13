@@ -682,6 +682,28 @@ def expanded_property_count(schema: Dict[str, Any]) -> int:
     return walk({k: v for k, v in schema.items() if k != "$defs"}, frozenset())
 
 
+def _gemini_keys() -> List[str]:
+    """
+    Every Gemini API key this build knows about, in order: GEMINI_API_KEY (or
+    GOOGLE_API_KEY as the older name for the same thing), then GEMINI_API_KEY2,
+    GEMINI_API_KEY3, ... for as long as they are set, no gaps. Numbered past
+    the first because the free-tier rate limit is per Google Cloud project -
+    a second key only helps if it belongs to a different project.
+    """
+    keys = []
+    primary = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if primary:
+        keys.append(primary)
+    n = 2
+    while True:
+        extra = os.environ.get(f"GEMINI_API_KEY{n}")
+        if not extra:
+            break
+        keys.append(extra)
+        n += 1
+    return keys
+
+
 class GeminiProvider:
     """
     Uses `response_json_schema`, which accepts real JSON Schema, rather than
@@ -708,19 +730,48 @@ class GeminiProvider:
                 "    pip install google-genai"
             ) from exc
 
-        key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not key:
+        keys = [api_key] if api_key else _gemini_keys()
+        if not keys:
             raise LLMError(
                 "No Gemini credentials found. Set one of:\n"
                 "    $env:GEMINI_API_KEY = '...'   (PowerShell)\n"
                 "    $env:GOOGLE_API_KEY = '...'"
             )
-        self._client = genai.Client(api_key=key)
+        self._clients = [genai.Client(api_key=key) for key in keys]
+        self._key_index = 0
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
         self.usage = Usage()
         self._warned_about_budget = False
+
+    @property
+    def _client(self):
+        return self._clients[self._key_index]
+
+    def _generate(self, **kwargs):
+        """
+        Runs generate_content, rotating to the next Gemini key on a rate
+        limit. Free-tier limits are per Google Cloud project, not per key -
+        two keys under the same project share one quota - so this only helps
+        when GEMINI_API_KEY2 (GEMINI_API_KEY3, ...) genuinely belongs to a
+        different project. Anything other than a rate limit is raised
+        straight through; the caller's own except clauses handle those.
+        """
+        from google.genai import errors
+
+        while True:
+            try:
+                return self._client.models.generate_content(**kwargs)
+            except errors.ClientError as exc:
+                rate_limited = exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED"
+                if not rate_limited or self._key_index == len(self._clients) - 1:
+                    raise
+                log.warning(
+                    "Gemini key %d/%d rate-limited, switching to key %d",
+                    self._key_index + 1, len(self._clients), self._key_index + 2,
+                )
+                self._key_index += 1
 
     def _record(self, response) -> None:
         meta = getattr(response, "usage_metadata", None)
@@ -788,7 +839,7 @@ class GeminiProvider:
             ),
         )
         try:
-            response = self._client.models.generate_content(
+            response = self._generate(
                 model=self.model, contents=self._contents(messages), config=config
             )
         except errors.APIError as exc:
@@ -848,7 +899,7 @@ class GeminiProvider:
         )
 
         try:
-            response = self._client.models.generate_content(
+            response = self._generate(
                 model=self.model, contents=contents, config=config
             )
         except errors.ClientError as exc:
