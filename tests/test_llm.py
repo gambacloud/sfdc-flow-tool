@@ -94,7 +94,7 @@ class TestRepairLoop:
         result = FlowGenerator(provider).generate("when a deal is won, get the account")
         assert result.repairs == 0
         assert isinstance(result.flow, Flow)
-        assert result.flow.api_name == "Won_Deal_Flow"
+        assert result.flow.api_name == "GC_Won_Deal_Flow"
 
     def test_dangling_reference_is_repaired(self):
         provider = ScriptedProvider(DANGLING, VALID)

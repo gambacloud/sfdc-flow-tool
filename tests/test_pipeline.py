@@ -57,7 +57,7 @@ class TestDesign:
         generator = FlowGenerator(ScriptedProvider(VALID))
         result = forge.design(generator, "build it", _args())
         assert result is not None
-        assert result.flow.api_name == "Won_Deal_Flow"
+        assert result.flow.api_name == "GC_Won_Deal_Flow"
 
     def test_quit_returns_nothing(self, keyboard):
         keyboard.append("quit")
@@ -259,9 +259,9 @@ class TestArtifacts:
         )
         written = sorted(p.name for p in tmp_path.iterdir())
         assert written == [
-            "Won_Deal_Flow.flow-meta.xml",
-            "Won_Deal_Flow.ir.json",
-            "Won_Deal_Flow.md",
+            "GC_Won_Deal_Flow.flow-meta.xml",
+            "GC_Won_Deal_Flow.ir.json",
+            "GC_Won_Deal_Flow.md",
         ]
-        xml = (tmp_path / "Won_Deal_Flow.flow-meta.xml").read_text(encoding="utf-8")
+        xml = (tmp_path / "GC_Won_Deal_Flow.flow-meta.xml").read_text(encoding="utf-8")
         assert "<processType>AutoLaunchedFlow</processType>" in xml

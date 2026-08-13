@@ -24,6 +24,14 @@ from .ir import Flow
 
 DEFAULT_MAX_REPAIRS = 3
 
+# Stamped onto the api_name of every flow this tool designs from scratch, the
+# way a managed package namespaces its components - so it stays identifiable
+# in a flow list long after the fact. Not applied to a flow opened from the
+# org and refined (see FlowGenerator.adopt/refine): that flow already has an
+# identity, and prefixing it would deploy as a new flow instead of updating
+# the one the user opened.
+GENERATED_NAME_PREFIX = "GC_"
+
 log = logging.getLogger("flowtool")
 
 
@@ -1182,7 +1190,10 @@ class FlowGenerator:
         )
 
     def generate(self, request: str) -> GenerationResult:
-        return self._validated([Message(role="user", content=request)])
+        result = self._validated([Message(role="user", content=request)])
+        if not result.flow.api_name.startswith(GENERATED_NAME_PREFIX):
+            result.flow.api_name = GENERATED_NAME_PREFIX + result.flow.api_name
+        return result
 
     def adopt(self, flow: Flow, origin: str = "an existing flow in the org") -> GenerationResult:
         """

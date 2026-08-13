@@ -113,7 +113,7 @@ class TestDesign:
         assert data["version"] == 1
         assert data["approved"] is False
         assert "flowchart TD" in data["mermaid"]
-        assert data["ir"]["api_name"] == "Won_Deal_Flow"
+        assert data["ir"]["api_name"] == "GC_Won_Deal_Flow"
 
     def test_empty_request_is_rejected(self, client, scripted):
         scripted(VALID)
