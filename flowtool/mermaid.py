@@ -24,6 +24,7 @@ from .ir import (
     Flow,
     GetRecords,
     Loop,
+    OrchestratedStage,
     RecordCreate,
     RecordDelete,
     RecordFilter,
@@ -248,6 +249,10 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
         return f'{name}[/"{text}"/]'
     if isinstance(element, Subflow):
         return f'{name}[["{text}"]]'
+    if isinstance(element, OrchestratedStage):
+        # Same subroutine shape as a Subflow: a stage is its own self-contained
+        # unit of work, just made of steps instead of a called flow.
+        return f'{name}[["{text}"]]'
     if isinstance(element, Screen):
         # Hexagon: the only place the flow stops and waits for a person.
         return f'{name}{{{{"{text}"}}}}'
@@ -306,6 +311,9 @@ def _element_caption(element: Element) -> str:
         return f"{element.label}\n{detail}"
     if isinstance(element, Subflow):
         return f"{element.label}\nCall {element.flow_name}"
+    if isinstance(element, OrchestratedStage):
+        names = ", ".join(s.label or s.name for s in element.stage_steps)
+        return f"{element.label}\n{names}"
     if isinstance(element, Screen):
         inputs = [f.name for f in element.all_fields()
                   if f.field_type not in ("DisplayText", "RegionContainer",
@@ -455,6 +463,7 @@ _TYPE_LABEL = {
     CollectionFilter: "Collection Filter",
     CollectionSort: "Collection Sort",
     CustomError: "Custom Error",
+    OrchestratedStage: "Orchestration Stage",
 }
 
 _FIELD_LABEL = {
@@ -680,6 +689,35 @@ def _element_detail(element: Element) -> str:
         elif element.store_output_automatically:
             detail += f", results read as `{{!{element.name}.…}}`"
         return detail
+
+    if isinstance(element, OrchestratedStage):
+        parts = []
+        for step in element.stage_steps:
+            kind = "Background" if step.step_subtype == "BackgroundStep" else "Interactive"
+            part = f"**{step.label}** ({kind}): runs `{step.action_name}`"
+            if step.assignees:
+                who = ", ".join(
+                    f"{a.assignee_type} {value_text(a.assignee)}" for a in step.assignees
+                )
+                part += f", assigned to {who}"
+            if step.entry_conditions:
+                part += " — enters when " + _join(
+                    (condition_text(c) for c in step.entry_conditions),
+                    step.entry_condition_logic,
+                )
+            if step.exit_conditions:
+                part += " — exits when " + _join(
+                    (condition_text(c) for c in step.exit_conditions),
+                    step.exit_condition_logic,
+                )
+            parts.append(part)
+        if element.exit_conditions:
+            condition = _join(
+                (condition_text(c) for c in element.exit_conditions),
+                element.exit_condition_logic,
+            )
+            parts.append(f"stage exits when {condition}")
+        return "<br>".join(parts)
 
     if isinstance(element, CustomError):
         parts = []

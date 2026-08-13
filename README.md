@@ -56,7 +56,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-~850 tests, none of which need a key, a network, or an org.
+~880 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -209,7 +209,8 @@ always be empty.
 
 ## What it covers
 
-Record-triggered, platform-event-triggered, autolaunched, and screen flows:
+Record-triggered, platform-event-triggered, autolaunched, screen, and
+orchestrator flows:
 
 | | |
 |---|---|
@@ -226,6 +227,7 @@ Record-triggered, platform-event-triggered, autolaunched, and screen flows:
 | **Screen** | Text, inputs, pickers, sections and columns, conditional visibility, validation rules, LWC/Aura components |
 | **Choices** | Fixed options, options built from records/a collection/a picklist, or a free-text "other" answer |
 | **Text templates, constants, formulas** | Reusable text with merge fields; a fixed value; a value recomputed from an expression |
+| **Orchestration Stage** | A chain of Background/Interactive steps — a step runs an autolaunched or screen flow, an Interactive one assigned to a user, group, queue, or resource |
 
 Formula **fields** on an object work anywhere a reference does
 (`$Record.Margin__c`); formula **resources** defined inside a flow work too.
@@ -252,6 +254,14 @@ authors today. A survey still counts them, marked `(out of scope)`, so the
 count is evidence for the decision rather than a recommendation. What people
 build today — an autolaunched flow with `triggerType: PlatformEvent` — **is**
 supported.
+
+**Approval steps, MuleSoft steps, and flow-based entry/exit criteria** in an
+Orchestrator — real, but each its own mechanism the way Custom Error's
+trigger-type restriction is: an Approval or MuleSoft step needs a whole
+separate confirmed shape, and criteria-by-flow requires the referenced flow
+to be `processType: EvaluationFlow` with a Boolean output variable literally
+named `isOrchestrationConditionMet`. Only Background and Interactive steps
+with structured entry/exit conditions are modelled.
 
 **Password fields and object-provided screen fields** are refused rather than
 approximated, the same as everything else this build doesn't model: every

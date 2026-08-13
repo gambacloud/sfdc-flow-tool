@@ -26,6 +26,7 @@ from .ir import (
     Formula,
     GetRecords,
     Loop,
+    OrchestratedStage,
     RecordCreate,
     RecordDelete,
     RecordFilter,
@@ -94,6 +95,15 @@ def _filters(parent: ET.Element, filters: List[RecordFilter]) -> None:
         _sub(node, "operator", f.operator)
         if f.value is not None:
             _value_el(node, "value", f.value)
+
+
+def _conditions_el(parent: ET.Element, conditions, tag: str = "conditions") -> None:
+    for cond in conditions:
+        c = _sub(parent, tag)
+        _sub(c, "leftValueReference", cond.left)
+        _sub(c, "operator", cond.operator)
+        if cond.right is not None:
+            _value_el(c, "rightValue", cond.right)
 
 
 # --------------------------------------------------------------------------
@@ -550,6 +560,53 @@ def _write_custom_error(root: ET.Element, el: CustomError, xy) -> None:
             _sub(item, "isFieldError", "true")
 
 
+# The real actionType a stage step needs, confirmed against a real dev org -
+# every ordinary ActionCall actionType (flow, apex, emailSimple, submit,
+# chatterPost) is flatly refused here. step_subtype is the one fact the IR
+# asks for; this is how it becomes the tag Salesforce actually wants.
+_STAGE_STEP_ACTION_TYPE = {
+    "BackgroundStep": "stepBackground",
+    "InteractiveStep": "stepInteractive",
+}
+
+
+def _write_stage_step(parent: ET.Element, step) -> None:
+    node = _sub(parent, "stageSteps")
+    _sub(node, "name", step.name)
+    _sub(node, "actionName", step.action_name)
+    _sub(node, "actionType", _STAGE_STEP_ACTION_TYPE[step.step_subtype])
+    for a in step.assignees:
+        assignee = _sub(node, "assignees")
+        _value_el(assignee, "assignee", a.assignee)
+        _sub(assignee, "assigneeType", a.assignee_type)
+    _sub(node, "canAssigneeEdit", _bool(step.can_assignee_edit))
+    if step.description:
+        _sub(node, "description", step.description)
+    _sub(node, "entryConditionLogic", step.entry_condition_logic)
+    _conditions_el(node, step.entry_conditions, tag="entryConditions")
+    _sub(node, "exitConditionLogic", step.exit_condition_logic)
+    _conditions_el(node, step.exit_conditions, tag="exitConditions")
+    for parameter in step.input_parameters:
+        ip = _sub(node, "inputParameters")
+        _sub(ip, "name", parameter.name)
+        _value_el(ip, "value", parameter.value)
+    _sub(node, "label", step.label)
+    _sub(node, "requiresAsyncProcessing", _bool(step.requires_async_processing))
+    _sub(node, "runAsUser", _bool(step.run_as_user))
+    _sub(node, "shouldLock", _bool(step.should_lock))
+    _sub(node, "stepSubtype", step.step_subtype)
+
+
+def _write_orchestrated_stage(root: ET.Element, el: OrchestratedStage, xy) -> None:
+    node = _sub(root, "orchestratedStages")
+    _write_common(node, el, xy)
+    _connector(node, "connector", el.next)
+    _sub(node, "exitConditionLogic", el.exit_condition_logic)
+    _conditions_el(node, el.exit_conditions, tag="exitConditions")
+    for step in el.stage_steps:
+        _write_stage_step(node, step)
+
+
 def _write_subflow(root: ET.Element, el: Subflow, xy) -> None:
     node = _sub(root, "subflows")
     _write_common(node, el, xy)
@@ -608,6 +665,7 @@ _WRITERS = {
     CustomError: ("customErrors", _write_custom_error),
     Decision: ("decisions", _write_decision),
     Loop: ("loops", _write_loop),
+    OrchestratedStage: ("orchestratedStages", _write_orchestrated_stage),
     RecordCreate: ("recordCreates", _write_record_create),
     RecordDelete: ("recordDeletes", _write_record_delete),
     GetRecords: ("recordLookups", _write_get_records),
@@ -634,6 +692,7 @@ _ROOT_ORDER = [
     "dynamicChoiceSets",
     "formulas",
     "loops",
+    "orchestratedStages",
     "recordCreates",
     "recordDeletes",
     "recordLookups",

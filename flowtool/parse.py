@@ -40,6 +40,7 @@ from .ir import (
     GetRecords,
     InputAssignment,
     Loop,
+    OrchestratedStage,
     Outcome,
     OutputAssignment,
     RecordCreate,
@@ -51,6 +52,8 @@ from .ir import (
     Screen,
     ScreenField,
     Start,
+    StageStep,
+    StageStepAssignee,
     Subflow,
     SubflowOutputAssignment,
     TextTemplate,
@@ -143,8 +146,9 @@ _IGNORED = {
 # Element collections this module can turn into IR.
 _SUPPORTED_ELEMENTS = {
     "actionCalls", "assignments", "collectionProcessors", "customErrors",
-    "decisions", "loops", "recordCreates", "recordDeletes", "recordLookups",
-    "recordUpdates", "screens", "subflows", "transforms", "waits",
+    "decisions", "loops", "orchestratedStages", "recordCreates",
+    "recordDeletes", "recordLookups", "recordUpdates", "screens", "subflows",
+    "transforms", "waits",
 }
 
 # Resources rather than elements: nothing connects to them, screen fields name
@@ -256,6 +260,12 @@ _ELEMENT_CHILDREN = {
     # somehow has one is a clean ir_mismatch (CustomError.no_next) rather than
     # an unrecognised-tag refusal.
     "customErrors": _ELEMENT_COMMON | {"customErrorMessages"},
+    # No faultConnector - confirmed against a real dev org's checkOnly
+    # validation, built from an actual Orchestrator flow saved in Flow
+    # Builder and retrieved back.
+    "orchestratedStages": _ELEMENT_COMMON | {
+        "exitConditionLogic", "exitConditions", "stageSteps",
+    },
     # No faultConnector: a screen cannot fail the way a DML element can.
     "screens": _ELEMENT_COMMON | {
         "fields", "allowBack", "allowFinish", "allowPause", "showFooter", "showHeader",
@@ -287,6 +297,17 @@ _WAIT_EVENT_CHILDREN = {
     "name", "label", "eventType", "connector", "conditions", "conditionLogic",
     "inputParameters", "outputParameters", "offset", "processMetadataValues",
 }
+
+# A stage step nests inside orchestratedStages the same way a wait event
+# nests inside waits - checked one level down for the same reason.
+_STAGE_STEP_CHILDREN = {
+    "name", "label", "description", "processMetadataValues",
+    "actionName", "actionType", "assignees", "canAssigneeEdit",
+    "entryConditionLogic", "entryConditions", "exitConditionLogic",
+    "exitConditions", "inputParameters", "requiresAsyncProcessing",
+    "runAsUser", "shouldLock", "stepSubtype",
+}
+_STAGE_STEP_ASSIGNEE_CHILDREN = {"assignee", "assigneeType", "processMetadataValues"}
 
 _SCREEN_FIELD_CHILDREN = {
     "name", "dataType", "fieldText", "fieldType", "isRequired", "choiceReferences",
@@ -550,16 +571,20 @@ def _read_assignment(node: ET.Element) -> Assignment:
     return Assignment(**_common(node), items=items)
 
 
-def _conditions(node: ET.Element) -> List[Condition]:
-    """Shared by a decision outcome and a wait event: the same tag, same shape."""
+def _conditions_by_tag(node: ET.Element, tag: str) -> List[Condition]:
     return [
         Condition(
             left=_text(condition, "m:leftValueReference") or "",
             operator=_text(condition, "m:operator") or "EqualTo",
             right=_value(condition.find("m:rightValue", NS)),
         )
-        for condition in node.findall("m:conditions", NS)
+        for condition in node.findall(f"m:{tag}", NS)
     ]
+
+
+def _conditions(node: ET.Element) -> List[Condition]:
+    """Shared by a decision outcome and a wait event: the same tag, same shape."""
+    return _conditions_by_tag(node, "conditions")
 
 
 def _read_decision(node: ET.Element) -> Decision:
@@ -796,6 +821,52 @@ def _read_transform(node: ET.Element) -> Transform:
     )
 
 
+def _read_stage_step(node: ET.Element) -> StageStep:
+    parameters = []
+    for item in node.findall("m:inputParameters", NS):
+        value = _value(item.find("m:value", NS))
+        if value is None:
+            continue
+        parameters.append(InputAssignment(name=_text(item, "m:name") or "", value=value))
+    assignees = []
+    for item in node.findall("m:assignees", NS):
+        value = _value(item.find("m:assignee", NS))
+        if value is None:
+            continue
+        assignees.append(StageStepAssignee(
+            assignee=value,
+            assignee_type=_text(item, "m:assigneeType") or "User",
+        ))
+    return StageStep(
+        name=_text(node, "m:name") or "",
+        label=_text(node, "m:label") or _text(node, "m:name") or "",
+        description=_text(node, "m:description"),
+        step_subtype=_text(node, "m:stepSubtype") or "BackgroundStep",
+        action_name=_text(node, "m:actionName") or "",
+        assignees=assignees,
+        entry_conditions=_conditions_by_tag(node, "entryConditions"),
+        entry_condition_logic=_text(node, "m:entryConditionLogic") or "and",
+        exit_conditions=_conditions_by_tag(node, "exitConditions"),
+        exit_condition_logic=_text(node, "m:exitConditionLogic") or "and",
+        input_parameters=parameters,
+        requires_async_processing=_bool(node, "m:requiresAsyncProcessing"),
+        run_as_user=_bool(node, "m:runAsUser"),
+        should_lock=_bool(node, "m:shouldLock"),
+        can_assignee_edit=_bool(node, "m:canAssigneeEdit"),
+    )
+
+
+def _read_orchestrated_stage(node: ET.Element) -> OrchestratedStage:
+    return OrchestratedStage(
+        **_common(node),
+        stage_steps=[
+            _read_stage_step(item) for item in node.findall("m:stageSteps", NS)
+        ],
+        exit_conditions=_conditions_by_tag(node, "exitConditions"),
+        exit_condition_logic=_text(node, "m:exitConditionLogic") or "and",
+    )
+
+
 def _read_custom_error(node: ET.Element) -> CustomError:
     messages = [
         CustomErrorMessage(
@@ -1021,6 +1092,7 @@ _READERS = {
     "customErrors": _read_custom_error,
     "decisions": _read_decision,
     "loops": _read_loop,
+    "orchestratedStages": _read_orchestrated_stage,
     "recordCreates": _read_record_create,
     "recordDeletes": _read_record_delete,
     "recordLookups": _read_get_records,
@@ -1051,11 +1123,11 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
     reasons: List[Gap] = []
 
     process_type = _text(root, "m:processType") or "AutoLaunchedFlow"
-    if process_type not in ("AutoLaunchedFlow", "Flow"):
+    if process_type not in ("AutoLaunchedFlow", "Flow", "Orchestrator"):
         reasons.append(Gap(
             f"process_type:{process_type}",
-            f"process type {process_type} (only screen, record-triggered and "
-            "autolaunched flows are supported)",
+            f"process type {process_type} (only screen, record-triggered, "
+            "autolaunched and orchestrator flows are supported)",
         ))
 
     seen_unsupported = set()
@@ -1103,6 +1175,17 @@ def parse_flow(xml: str, api_name: str = "") -> Flow:
             where = (f"{_text(node, 'm:name') or 'a Pause'}."
                      f"{_text(item, 'm:name') or '(unnamed event)'}")
             reasons.extend(_unknown_children(item, _WAIT_EVENT_CHILDREN, where))
+
+    for node in root.findall("m:orchestratedStages", NS):
+        for item in node.findall("m:stageSteps", NS):
+            where = (f"{_text(node, 'm:name') or 'a stage'}."
+                     f"{_text(item, 'm:name') or '(unnamed step)'}")
+            reasons.extend(_unknown_children(item, _STAGE_STEP_CHILDREN, where))
+            for assignee in item.findall("m:assignees", NS):
+                reasons.extend(
+                    _unknown_children(assignee, _STAGE_STEP_ASSIGNEE_CHILDREN,
+                                      f"{where}'s assignee")
+                )
 
     # transformValues nests two levels deep, same reasoning as a wait event:
     # an attribute read as absent on the way down is a value silently wrong on

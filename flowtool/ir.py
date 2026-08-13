@@ -1833,6 +1833,124 @@ class CustomError(BaseElement):
         return self
 
 
+class StageStepAssignee(BaseModel):
+    """Who works an Interactive Step. Confirmed against a real dev org."""
+
+    assignee: Value = Field(
+        description="Usually an element_reference, e.g. '$User.Id' or a Group/Queue Id."
+    )
+    assignee_type: Literal["User", "Group", "Queue", "Resource"] = "User"
+
+
+class StageStep(BaseModel):
+    """
+    One unit of work inside an OrchestratedStage.
+
+    `step_subtype` picks what the step runs: a BackgroundStep runs an
+    autolaunched flow with nobody watching; an InteractiveStep runs a screen
+    flow that `assignees` work through in the Orchestration work guide.
+    `action_name` names that flow either way.
+
+    Confirmed against a real dev org's checkOnly validation, and it took real
+    deploys to find: the actionType a regular ActionCall would use for this
+    (`flow`, `apex`, `emailSimple`, `submit`, `chatterPost` were all tried)
+    is flatly refused here - "You can't use the <X> action type in flows
+    with the Flow Orchestration process type", for every one of them. The
+    real discriminator is a pair of orchestration-only literals,
+    `stepBackground`/`stepInteractive`, not modelled as a separate field here
+    because they follow step_subtype one-to-one - xmlgen derives the
+    actionType tag from step_subtype instead of asking for the same fact
+    twice.
+
+    Approval steps, MuleSoft steps, and evaluating entry/exit criteria with a
+    dedicated EvaluationFlow (confirmed real, but a whole mechanism of its
+    own - the referenced flow must be process_type 'EvaluationFlow' with a
+    Boolean output variable literally named `isOrchestrationConditionMet`)
+    are left unsupported rather than guessed at.
+    """
+
+    name: str
+    label: str
+    description: Optional[str] = None
+    step_subtype: Literal["BackgroundStep", "InteractiveStep"]
+    action_name: str = Field(
+        description="API name of the autolaunched flow (BackgroundStep) or "
+        "screen flow (InteractiveStep) this step runs."
+    )
+    assignees: List[StageStepAssignee] = Field(default_factory=list)
+    entry_conditions: List[Condition] = Field(default_factory=list)
+    entry_condition_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+    exit_conditions: List[Condition] = Field(default_factory=list)
+    exit_condition_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+    input_parameters: List[InputAssignment] = Field(default_factory=list)
+    requires_async_processing: bool = False
+    run_as_user: bool = False
+    should_lock: bool = False
+    can_assignee_edit: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, v: str) -> str:
+        return _check_api_name(v, "stage step name")
+
+    @model_validator(mode="after")
+    def interactive_steps_need_someone_to_do_them(self) -> "StageStep":
+        if self.step_subtype == "InteractiveStep" and not self.assignees:
+            raise ValueError(
+                f"{self.name}: an Interactive Step is worked by a person, so "
+                "it needs at least one assignee."
+            )
+        if self.step_subtype == "BackgroundStep" and self.assignees:
+            raise ValueError(
+                f"{self.name}: a Background Step runs with nobody watching, "
+                "so assignees do not mean anything here - drop them, or make "
+                "this an InteractiveStep."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def logic_matches_conditions(self) -> "StageStep":
+        _check_logic(self.entry_condition_logic, len(self.entry_conditions),
+                     f"stage step {self.name!r} entry", "entry_condition_logic",
+                     "condition")
+        _check_logic(self.exit_condition_logic, len(self.exit_conditions),
+                     f"stage step {self.name!r} exit", "exit_condition_logic",
+                     "condition")
+        return self
+
+
+class OrchestratedStage(BaseElement):
+    """
+    One stage of a Flow Orchestration - connects to the next stage the same
+    way any other element connects to what comes after it, but instead of
+    doing work itself, runs a sequence of StageSteps.
+
+    Confirmed against a real dev org's checkOnly validation, built from an
+    actual Orchestrator flow saved in Flow Builder and retrieved back: a
+    Background Step calling a plain autolaunched flow, and an Interactive
+    Step calling a screen flow with a User assignee, both deployed clean.
+    """
+
+    type: Literal["OrchestratedStage"] = "OrchestratedStage"
+    stage_steps: List[StageStep] = Field(min_length=1)
+    exit_conditions: List[Condition] = Field(default_factory=list)
+    exit_condition_logic: str = Field(default="and", description=_FILTER_LOGIC_HELP)
+
+    @model_validator(mode="after")
+    def logic_matches_conditions(self) -> "OrchestratedStage":
+        _check_logic(self.exit_condition_logic, len(self.exit_conditions),
+                     f"stage {self.name!r} exit", "exit_condition_logic", "condition")
+        return self
+
+    @model_validator(mode="after")
+    def step_names_are_unique(self) -> "OrchestratedStage":
+        names = [s.name for s in self.stage_steps]
+        repeated = sorted({n for n in names if names.count(n) > 1})
+        if repeated:
+            raise ValueError(f"stage {self.name!r}: duplicate step names: {repeated}")
+        return self
+
+
 Element = Annotated[
     Union[
         ActionCall,
@@ -1842,6 +1960,7 @@ Element = Annotated[
         CustomError,
         Decision,
         GetRecords,
+        OrchestratedStage,
         RecordCreate,
         RecordUpdate,
         RecordDelete,
@@ -2138,7 +2257,8 @@ class Flow(BaseModel):
     api_version: str = "62.0"
     # "Flow" is Salesforce's name for a screen flow — the one a user runs and
     # watches. "AutoLaunchedFlow" covers both record-triggered and autolaunched.
-    process_type: Literal["AutoLaunchedFlow", "Flow"] = "AutoLaunchedFlow"
+    # "Orchestrator" is its own canvas of stages, not a bag of regular elements.
+    process_type: Literal["AutoLaunchedFlow", "Flow", "Orchestrator"] = "AutoLaunchedFlow"
     # Draft and Active are the two this tool ever writes. Obsolete and
     # InvalidDraft are what Salesforce marks superseded and broken versions
     # with; a flow retrieved from an org can be either, and refusing them would
@@ -2527,6 +2647,35 @@ class Flow(BaseModel):
                 "\"A flow can't include Custom Error elements when "
                 f"TriggerType is set to {trigger}.\" ({offenders}). Custom "
                 "Error only works on a record-triggered flow."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def stages_are_the_only_thing_in_an_orchestrator(self) -> "Flow":
+        """
+        Flow Builder's Orchestrator canvas holds stages and nothing else - no
+        Decision, no Assignment, none of the regular elements. There is no
+        confirmed XML shape for mixing them, so the two are kept mutually
+        exclusive here the same way Flow Builder keeps them apart.
+        """
+        stages = [e.name for e in self.elements if isinstance(e, OrchestratedStage)]
+        if self.process_type == "Orchestrator":
+            others = [e.name for e in self.elements if not isinstance(e, OrchestratedStage)]
+            if others:
+                raise ValueError(
+                    "an Orchestrator flow's canvas holds stages and nothing "
+                    f"else - {others} are a different kind of element."
+                )
+            if not stages:
+                raise ValueError(
+                    "process_type 'Orchestrator' with no stages - add at "
+                    "least one OrchestratedStage, or this flow has nothing "
+                    "to run."
+                )
+        elif stages:
+            raise ValueError(
+                f"{stages} are Orchestrated Stages, which only mean "
+                "something when process_type is 'Orchestrator'."
             )
         return self
 
