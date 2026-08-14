@@ -449,9 +449,11 @@ def build_multi_type_package(types: Dict[str, List[str]], api_version: str) -> s
     )
 
 
-# Everything metadata-kb-worker.js knows how to turn into Markdown - objects,
-# formulas (carried on CustomObject), flows, Apex, LWC/Aura, profiles. The
-# actual member names retrieved are filled in per-org by
+# Objects, formulas (carried on CustomObject), flows, Apex, LWC/Aura -
+# metadata-kb-worker.js also knows how to turn Profiles into Markdown, but
+# left out here: field-level security repeats once per field per profile, so
+# it was 35% of a real org's knowledge base on its own, more than any other
+# single type. The actual member names retrieved are filled in per-org by
 # _unmanaged_org_summary_types below, not "*" - see there for why.
 ORG_SUMMARY_TYPES: Dict[str, List[str]] = {
     "CustomObject": ["*"],
@@ -460,7 +462,6 @@ ORG_SUMMARY_TYPES: Dict[str, List[str]] = {
     "Flow": ["*"],
     "LightningComponentBundle": ["*"],
     "AuraDefinitionBundle": ["*"],
-    "Profile": ["*"],
     "CustomMetadata": ["*"],
 }
 
@@ -515,8 +516,8 @@ async def retrieve_org_summary_zip(
         if not manifest:
             raise RetrieveError(
                 "No unmanaged metadata of the types this build reads (objects, "
-                "flows, Apex, LWC/Aura, profiles, custom metadata) was found in "
-                "this org - only components from installed packages."
+                "flows, Apex, LWC/Aura, custom metadata) was found in this org "
+                "- only components from installed packages."
             )
         job_id = await client.start_retrieve_types(manifest)
         return await client.wait_for_retrieve(job_id, timeout_seconds=600.0)

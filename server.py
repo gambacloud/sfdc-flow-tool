@@ -592,10 +592,11 @@ async def survey_status(job_id: str) -> Dict[str, Any]:
 async def org_summary_start(body: SurveyRequest) -> Dict[str, Any]:
     """
     Retrieve a broad slice of the org's metadata (objects, flows, Apex,
-    LWC/Aura, profiles, custom metadata) as a zip. The browser turns it into
-    a Markdown knowledge base itself, with the same worker /metadata-kb uses
-    on a file the user found and uploaded by hand - this just hands it a zip
-    the server pulled directly instead.
+    LWC/Aura, custom metadata - Profiles excluded, field-level security alone
+    made up over a third of a real org's knowledge base) as a zip. The
+    browser turns it into a Markdown knowledge base itself, with the same
+    worker /metadata-kb uses on a file the user found and uploaded by hand -
+    this just hands it a zip the server pulled directly instead.
     """
     url, token = credentials(body.org, body.instance_url, body.access_token)
     task = asyncio.create_task(retrieve_org_summary_zip(url, token))

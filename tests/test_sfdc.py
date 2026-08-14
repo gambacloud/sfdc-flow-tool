@@ -24,12 +24,14 @@ class TestBuildMultiTypePackage:
 
     def test_org_summary_types_covers_what_metadata_kb_worker_parses(self):
         # Objects, formulas (carried on CustomObject), flows, Apex, LWC/Aura,
-        # profiles, custom metadata - metadata-kb.html's own stated scope.
+        # custom metadata - metadata-kb.html's stated scope minus Profiles,
+        # measured at 35% of a real org's knowledge base on its own.
         assert set(ORG_SUMMARY_TYPES) == {
             "CustomObject", "ApexClass", "ApexTrigger", "Flow",
-            "LightningComponentBundle", "AuraDefinitionBundle", "Profile",
+            "LightningComponentBundle", "AuraDefinitionBundle",
             "CustomMetadata",
         }
+        assert "Profile" not in ORG_SUMMARY_TYPES
         assert all(members == ["*"] for members in ORG_SUMMARY_TYPES.values())
 
 

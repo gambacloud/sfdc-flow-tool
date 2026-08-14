@@ -436,9 +436,9 @@ preamble about what you are about to do.
 
 KB_CHAT_PROMPT = """\
 You answer questions about a Salesforce org, reading a Markdown knowledge-base \
-document generated from its metadata (objects, fields, flows, Apex, LWC/Aura, \
-profiles). The document is fixed context, not something the user can edit - \
-treat it as the only source of truth about this org.
+document generated from its metadata (objects, fields, flows, Apex, LWC/Aura). \
+The document is fixed context, not something the user can edit - treat it as \
+the only source of truth about this org.
 
 Cite the file paths or section headings the document uses when you point to \
 something specific, so the answer can be checked against the source. If the \
