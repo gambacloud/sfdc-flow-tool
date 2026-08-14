@@ -191,6 +191,21 @@ class MetadataClient:
             raise RetrieveError("retrieve() returned no job id")
         return node.text
 
+    async def start_retrieve_types(self, types: Dict[str, List[str]]) -> str:
+        """Same as start_retrieve, for a manifest spanning more than one type."""
+        body = (
+            "<met:retrieve><met:retrieveRequest>"
+            f"<met:apiVersion>{self.api_version}</met:apiVersion>"
+            "<met:singlePackage>true</met:singlePackage>"
+            f"{build_multi_type_package(types, self.api_version)}"
+            "</met:retrieveRequest></met:retrieve>"
+        )
+        root = await self._post(body)
+        node = root.find(".//met:retrieveResponse/met:result/met:id", SOAP_NS)
+        if node is None or not node.text:
+            raise RetrieveError("retrieve() returned no job id")
+        return node.text
+
     async def wait_for_retrieve(
         self, job_id: str, poll_seconds: float = 1.5, timeout_seconds: float = 120.0
     ) -> bytes:
@@ -395,6 +410,47 @@ def build_retrieve_package(flow_api_name: str, api_version: str) -> str:
         f"<met:name>Flow</met:name></met:types>"
         f"<met:version>{api_version}</met:version></met:unpackaged>"
     )
+
+
+def build_multi_type_package(types: Dict[str, List[str]], api_version: str) -> str:
+    """The same manifest shape as build_retrieve_package, for several types at once."""
+    blocks = "".join(
+        f"<met:types>{''.join(f'<met:members>{m}</met:members>' for m in members)}"
+        f"<met:name>{type_name}</met:name></met:types>"
+        for type_name, members in types.items()
+    )
+    return (
+        f"<met:unpackaged>{blocks}<met:version>{api_version}</met:version>"
+        "</met:unpackaged>"
+    )
+
+
+# Everything metadata-kb-worker.js knows how to turn into Markdown - objects,
+# formulas (carried on CustomObject), flows, Apex, LWC/Aura, profiles. `*`
+# retrieves every component of the type the org has.
+ORG_SUMMARY_TYPES: Dict[str, List[str]] = {
+    "CustomObject": ["*"],
+    "ApexClass": ["*"],
+    "ApexTrigger": ["*"],
+    "Flow": ["*"],
+    "LightningComponentBundle": ["*"],
+    "AuraDefinitionBundle": ["*"],
+    "Profile": ["*"],
+    "CustomMetadata": ["*"],
+}
+
+
+async def retrieve_org_summary_zip(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> bytes:
+    """
+    Every metadata type metadata-kb-worker.js parses, in one retrieve. Unlike
+    retrieve_all_flows, the zip is handed back whole rather than unpacked -
+    metadata-kb-worker.js takes the raw zip bytes, not pre-split files.
+    """
+    async with MetadataClient(instance_url, session_id, api_version) as client:
+        job_id = await client.start_retrieve_types(ORG_SUMMARY_TYPES)
+        return await client.wait_for_retrieve(job_id, timeout_seconds=600.0)
 
 
 async def retrieve_flow(

@@ -107,6 +107,7 @@
         drawn approximately.
       </p>
       <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
+      <button id="orgSummaryLink" class="link-btn" type="button">Generate org summary</button>
     </div>
 
     <div class="pad" id="newPane">
@@ -231,6 +232,41 @@
   <div class="row survey-actions">
     <button id="surveyCopyBtn" class="primary" hidden>Copy</button>
     <button id="surveyCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="orgSummaryDialog">
+  <h3>Org summary</h3>
+  <p class="dim">
+    Pulls a broad slice of this org's metadata (objects, flows, Apex,
+    LWC/Aura, profiles) into a knowledge base, then lets you ask the
+    configured model questions against it. The knowledge base itself can't be
+    edited here - it's exactly what was retrieved.
+  </p>
+
+  <div id="orgSummaryBody" class="dim">Retrieving metadata...</div>
+
+  <div id="orgSummaryConsent" hidden>
+    <textarea id="orgSummaryText" rows="10" readonly></textarea>
+    <p id="orgSummarySize" class="dim"></p>
+    <div class="row survey-actions">
+      <button id="orgSummaryApproveBtn" class="primary" type="button">Use this as context</button>
+    </div>
+  </div>
+
+  <div id="orgSummaryChat" hidden>
+    <div class="row">
+      <input id="orgSummaryQuestion" placeholder="Ask something about this org">
+      <button id="orgSummaryAskBtn">Ask</button>
+    </div>
+    <div id="orgSummaryAnswer" class="explanation dim">
+      Ask about anything that would show up in the knowledge base above -
+      objects, flows, Apex, components, profiles.
+    </div>
+  </div>
+
+  <div class="row survey-actions">
+    <button id="orgSummaryCloseBtn" type="button">Close</button>
   </div>
 </dialog>
 

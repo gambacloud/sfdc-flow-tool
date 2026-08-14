@@ -19,6 +19,7 @@ const state = {
   org: null, // { accessToken, instanceUrl } once logged into Salesforce directly
   usage: null, // cumulative token usage for this session, refreshed on every model call
   errors: [], // every error message shown to the user this session, newest first
+  orgSummaryMarkdown: null, // the approved org-summary knowledge base, never rendered editable
 };
 
 let mermaid = null;
@@ -620,6 +621,129 @@ async function runSurvey() {
   }
 }
 
+// Above this many estimated tokens, every question against the knowledge
+// base is slow and pricey - still allowed, just flagged rather than
+// discovered the hard way. ~4 chars/token, the same rough rule the rest of
+// this file uses nowhere else because nothing else sends a whole document as
+// context on every call.
+const ORG_SUMMARY_WARN_TOKENS = 120000;
+
+async function runOrgSummary() {
+  showError($("openPane"), "");
+  if (!state.org && !state.sfCli) {
+    showError($("openPane"), "Connect to an org first.");
+    return;
+  }
+
+  const dialog = $("orgSummaryDialog");
+  const body = $("orgSummaryBody");
+  const consent = $("orgSummaryConsent");
+  const chat = $("orgSummaryChat");
+  const text = $("orgSummaryText");
+  body.hidden = false;
+  body.className = "dim";
+  body.textContent = "Retrieving metadata - this can take a moment on a large org...";
+  consent.hidden = true;
+  chat.hidden = true;
+  state.orgSummaryMarkdown = null;
+  dialog.showModal();
+
+  let pendingMarkdown = null;
+
+  try {
+    const { job_id } = await api("api/org-summary/start", orgCredentials());
+    const data = await poll("api/org-summary/status", { job_id });
+    body.textContent = "Parsing metadata...";
+
+    const zipBytes = Uint8Array.from(atob(data.zip_base64), (c) => c.charCodeAt(0));
+    const worker = new Worker("/static/metadata-kb-worker.js");
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === "progress") {
+        const pct = msg.total > 0 ? Math.round((msg.done / msg.total) * 100) : 0;
+        body.textContent = `Parsing ${msg.label}... (${pct}%)`;
+      } else if (msg.type === "done") {
+        pendingMarkdown = msg.markdown;
+        body.hidden = true;
+        text.value = pendingMarkdown;
+        const tokens = Math.ceil(pendingMarkdown.length / 4);
+        const size = $("orgSummarySize");
+        if (tokens > ORG_SUMMARY_WARN_TOKENS) {
+          size.className = "error";
+          size.textContent =
+            `This is a lot of metadata (~${tokens.toLocaleString()} tokens estimated) - ` +
+            "answers may be slow or expensive, and a very large org could exceed the " +
+            "model's context window.";
+        } else {
+          size.className = "dim";
+          size.textContent = `~${tokens.toLocaleString()} tokens estimated per question.`;
+        }
+        consent.hidden = false;
+        worker.terminate();
+      } else if (msg.type === "error") {
+        body.className = "error";
+        body.textContent = msg.message || "Something went wrong while parsing the metadata.";
+        logError("Org summary", body.textContent);
+        worker.terminate();
+      }
+    };
+    worker.onerror = (err) => {
+      body.className = "error";
+      body.textContent = "Worker error: " + (err.message || "failed to parse the metadata.");
+      logError("Org summary", body.textContent);
+    };
+    worker.postMessage({ fileName: "org.zip", buffer: zipBytes.buffer }, [zipBytes.buffer]);
+  } catch (err) {
+    body.hidden = false;
+    body.className = "error";
+    body.textContent = err.message;
+    logError("Org summary", err.message);
+  }
+
+  $("orgSummaryApproveBtn").onclick = () => {
+    if (!pendingMarkdown) return;
+    state.orgSummaryMarkdown = pendingMarkdown;
+    consent.hidden = true;
+    chat.hidden = false;
+  };
+}
+
+async function askOrgSummary() {
+  const button = $("orgSummaryAskBtn");
+  const target = $("orgSummaryAnswer");
+  const question = $("orgSummaryQuestion").value.trim();
+  if (!question) return;
+  busy(button, true, "Asking...");
+  target.textContent = "Reading the knowledge base...";
+  target.className = "explanation dim";
+  try {
+    const { job_id } = await api("api/kb-chat/start", {
+      markdown: state.orgSummaryMarkdown,
+      question,
+      provider: $("provider").value || null,
+      effort: $("effort").value,
+      api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
+    });
+    const data = await poll("api/kb-chat/status", { job_id });
+    target.textContent = data.answer;
+    target.className = "explanation filled";
+    const usage = usageText(data.usage);
+    if (usage) {
+      const note = document.createElement("div");
+      note.className = "dim";
+      note.textContent = usage;
+      target.appendChild(note);
+    }
+  } catch (err) {
+    target.textContent = err.message;
+    target.className = "explanation dim";
+    logError("Org summary chat", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
 async function explainFlow() {
   const button = $("explainBtn");
   const target = $("explanation");
@@ -1016,6 +1140,9 @@ async function boot() {
   $("designBtn").onclick = design;
   $("importBtn").onclick = importFlow;
   $("surveyLink").onclick = runSurvey;
+  $("orgSummaryLink").onclick = runOrgSummary;
+  $("orgSummaryCloseBtn").onclick = () => $("orgSummaryDialog").close();
+  $("orgSummaryAskBtn").onclick = askOrgSummary;
   $("surveyCloseBtn").onclick = () => $("surveyDialog").close();
   $("surveyCopyBtn").onclick = async () => {
     const text = $("surveyText");

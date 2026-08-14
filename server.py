@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import logging
 import os
 import uuid
@@ -30,7 +31,9 @@ from flowtool.llm import (
     AnthropicProvider,
     FlowGenerator,
     GenerationResult,
+    KB_CHAT_PROMPT,
     LLMError,
+    Message,
     Provider,
 )
 from flowtool.llm import GeminiProvider, OllamaProvider
@@ -42,6 +45,7 @@ from flowtool.sfdc import (
     list_flows,
     retrieve_all_flows,
     retrieve_flow,
+    retrieve_org_summary_zip,
     validate_flow,
 )
 from flowtool.xmlgen import generate as generate_xml
@@ -177,6 +181,31 @@ class PendingSurvey:
 
 
 SURVEY_JOBS: Dict[str, PendingSurvey] = {}
+
+
+@dataclass
+class PendingOrgSummaryZip:
+    """A broad metadata retrieve running in the background - same reasoning
+    as PendingSurvey, just a wider net of types for the org-summary
+    knowledge base instead of flows alone."""
+
+    task: "asyncio.Task"
+
+
+ORG_SUMMARY_JOBS: Dict[str, PendingOrgSummaryZip] = {}
+
+
+@dataclass
+class PendingKbAnswer:
+    """An org-summary question running in the background. Holds the provider
+    too, not just the task - usage is read off it once the task completes,
+    the same way a Session holds onto its generator for the same reason."""
+
+    task: "asyncio.Task"
+    provider: Provider
+
+
+KB_JOBS: Dict[str, PendingKbAnswer] = {}
 
 
 def llm_result(task: "asyncio.Task"):
@@ -355,6 +384,21 @@ class ImportRequest(BaseModel):
 class ExplainRequest(BaseModel):
     session_id: str
     question: Optional[str] = None
+
+
+class KbChatRequest(BaseModel):
+    """
+    No session_id: the org-summary knowledge base isn't tied to a flow, and
+    isn't kept server-side between questions either - it travels with each
+    one, the same stateless shape as FlowGenerator.explain().
+    """
+
+    markdown: str
+    question: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: Literal["medium", "high"] = "medium"
+    api_key: Optional[str] = None
 
 
 class ModelsRequest(BaseModel):
@@ -542,6 +586,74 @@ async def survey_status(job_id: str) -> Dict[str, Any]:
         # anticipated by name, and should not fall through to a bare 500.
         raise HTTPException(502, f"Could not reach the org: {exc}") from exc
     return {"done": True, "report": text}
+
+
+@app.post("/api/org-summary/start")
+async def org_summary_start(body: SurveyRequest) -> Dict[str, Any]:
+    """
+    Retrieve a broad slice of the org's metadata (objects, flows, Apex,
+    LWC/Aura, profiles, custom metadata) as a zip. The browser turns it into
+    a Markdown knowledge base itself, with the same worker /metadata-kb uses
+    on a file the user found and uploaded by hand - this just hands it a zip
+    the server pulled directly instead.
+    """
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    task = asyncio.create_task(retrieve_org_summary_zip(url, token))
+    job_id = uuid.uuid4().hex
+    ORG_SUMMARY_JOBS[job_id] = PendingOrgSummaryZip(task=task)
+    return {"job_id": job_id}
+
+
+@app.get("/api/org-summary/status")
+async def org_summary_status(job_id: str) -> Dict[str, Any]:
+    pending = ORG_SUMMARY_JOBS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown org summary job.")
+    if not pending.task.done():
+        return {"done": False}
+    del ORG_SUMMARY_JOBS[job_id]
+    try:
+        zip_bytes = pending.task.result()
+    except (RetrieveError, TimeoutError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        # Same reasoning as survey_status(): a network failure reaching the
+        # org is not a type this endpoint anticipated by name.
+        raise HTTPException(502, f"Could not reach the org: {exc}") from exc
+    return {"done": True, "zip_base64": base64.b64encode(zip_bytes).decode("ascii")}
+
+
+@app.post("/api/kb-chat/start")
+async def kb_chat_start(body: KbChatRequest) -> Dict[str, Any]:
+    if not body.question.strip():
+        raise HTTPException(400, "Ask something.")
+    try:
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    task = asyncio.create_task(asyncio.to_thread(
+        provider.complete_text,
+        KB_CHAT_PROMPT,
+        [Message(
+            role="user",
+            content=f"{body.question}\n\nOrg knowledge base:\n{body.markdown}",
+        )],
+    ))
+    job_id = uuid.uuid4().hex
+    KB_JOBS[job_id] = PendingKbAnswer(task=task, provider=provider)
+    return {"job_id": job_id}
+
+
+@app.get("/api/kb-chat/status")
+async def kb_chat_status(job_id: str) -> Dict[str, Any]:
+    pending = KB_JOBS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown kb-chat job.")
+    if not pending.task.done():
+        return {"done": False}
+    del KB_JOBS[job_id]
+    answer = llm_result(pending.task)
+    return {"done": True, "answer": answer, "usage": pending.provider.usage.as_dict()}
 
 
 @app.post("/api/import/start")

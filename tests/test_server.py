@@ -5,12 +5,14 @@ A gate that lives only in the browser is not a gate: anyone can call the
 endpoint directly. These assert the server refuses on its own.
 """
 
+import base64
+
 import pytest
 from fastapi.testclient import TestClient
 
 import server
-from flowtool.llm import FlowGenerator
-from flowtool.sfdc import ComponentProblem, DeployResult
+from flowtool.llm import FlowGenerator, Usage
+from flowtool.sfdc import ComponentProblem, DeployResult, RetrieveError
 from tests.test_llm import VALID, ScriptedProvider
 
 ACTIVE = dict(VALID, status="Active", api_version="60.0")
@@ -387,6 +389,66 @@ class TestExplain:
         explain(client, session_id)
         assert '"api_name"' in seen["content"], "expected the IR"
         assert "<Flow" not in seen["content"], "the XML is bigger and adds nothing"
+
+
+class FakeTextProvider:
+    """Just enough of a Provider to answer a kb-chat question."""
+
+    def __init__(self, answer="an answer"):
+        self.answer = answer
+        self.usage = Usage()
+        self.seen = None
+
+    def complete_text(self, system, messages):
+        self.seen = (system, messages)
+        self.usage.add(input_tokens=10, output_tokens=5)
+        return self.answer
+
+
+class TestOrgSummary:
+    def test_retrieves_a_zip_and_hands_back_base64(self, client, monkeypatch):
+        async def fake(instance_url, session_id, api_version="62.0"):
+            return b"PK\x03\x04fake-zip-bytes"
+
+        monkeypatch.setattr(server, "retrieve_org_summary_zip", fake)
+        started = client.post("/api/org-summary/start", json={})
+        assert started.status_code == 200, started.text
+        data = poll(client, "/api/org-summary/status", job_id=started.json()["job_id"]).json()
+        assert data["done"] is True
+        assert base64.b64decode(data["zip_base64"]) == b"PK\x03\x04fake-zip-bytes"
+
+    def test_a_retrieve_failure_is_a_clean_400_not_a_500(self, client, monkeypatch):
+        async def fake(instance_url, session_id, api_version="62.0"):
+            raise RetrieveError("no access to Metadata API")
+
+        monkeypatch.setattr(server, "retrieve_org_summary_zip", fake)
+        started = client.post("/api/org-summary/start", json={})
+        response = poll(client, "/api/org-summary/status", job_id=started.json()["job_id"])
+        assert response.status_code == 400
+        assert "no access" in response.text
+
+
+class TestKbChat:
+    def test_answers_a_question_against_the_supplied_markdown(self, client, monkeypatch):
+        provider = FakeTextProvider("The org has 3 objects.")
+        monkeypatch.setattr(server, "build_provider", lambda *_a, **_k: provider)
+        started = client.post("/api/kb-chat/start", json={
+            "markdown": "# KB\n\nSome org metadata.",
+            "question": "How many objects?",
+        })
+        assert started.status_code == 200, started.text
+        data = poll(client, "/api/kb-chat/status", job_id=started.json()["job_id"]).json()
+        assert data["answer"] == "The org has 3 objects."
+        assert data["usage"]["input_tokens"] == 10
+
+        system, messages = provider.seen
+        assert "knowledge-base" in system.lower()
+        assert "How many objects?" in messages[-1].content
+        assert "Some org metadata." in messages[-1].content
+
+    def test_an_empty_question_is_refused(self, client):
+        response = client.post("/api/kb-chat/start", json={"markdown": "x", "question": "   "})
+        assert response.status_code == 400
 
 
 class TestDeploy:
