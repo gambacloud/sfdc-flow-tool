@@ -20,6 +20,8 @@ const state = {
   usage: null, // cumulative token usage for this session, refreshed on every model call
   errors: [], // every error message shown to the user this session, newest first
   orgSummaryMarkdown: null, // the approved org-summary knowledge base, never rendered editable
+  orgSummaryPending: null, // generated but not yet approved
+  orgSummaryStatus: null, // null | "working" | "ready" - guards against starting a second retrieve
 };
 
 let mermaid = null;
@@ -628,31 +630,82 @@ async function runSurvey() {
 // context on every call.
 const ORG_SUMMARY_WARN_TOKENS = 120000;
 
+// null: never started. "working": a retrieve/parse is running in the
+// background - it keeps running even if the dialog is closed, so reopening
+// must not start a second one. "ready": generated, either still waiting on
+// approval (state.orgSummaryPending) or already approved
+// (state.orgSummaryMarkdown).
+function setOrgSummaryStatus(status) {
+  state.orgSummaryStatus = status;
+  const indicator = $("orgSummaryStatusIndicator");
+  if (!indicator) return;
+  if (status === "working") {
+    indicator.textContent = "computing in background...";
+  } else if (status === "ready") {
+    indicator.textContent = state.orgSummaryMarkdown ? "ready" : "ready - review to use";
+  } else {
+    indicator.textContent = "";
+  }
+}
+
 async function runOrgSummary() {
+  const dialog = $("orgSummaryDialog");
+  const body = $("orgSummaryBody");
+  const consent = $("orgSummaryConsent");
+  const chat = $("orgSummaryChat");
+  const text = $("orgSummaryText");
+
+  if (state.orgSummaryStatus === "working" || state.orgSummaryStatus === "ready") {
+    // Already running or already generated - reopen rather than fetch and
+    // parse the same org's metadata a second time. If it is still working,
+    // the background code already updates these same elements regardless of
+    // whether the dialog is open.
+    if (state.orgSummaryMarkdown) {
+      body.hidden = true;
+      consent.hidden = true;
+      chat.hidden = false;
+    } else if (state.orgSummaryPending) {
+      body.hidden = true;
+      consent.hidden = false;
+      chat.hidden = true;
+    }
+    dialog.showModal();
+    return;
+  }
+
   showError($("openPane"), "");
   if (!state.org && !state.sfCli) {
     showError($("openPane"), "Connect to an org first.");
     return;
   }
 
-  const dialog = $("orgSummaryDialog");
-  const body = $("orgSummaryBody");
-  const consent = $("orgSummaryConsent");
-  const chat = $("orgSummaryChat");
-  const text = $("orgSummaryText");
+  setOrgSummaryStatus("working");
   body.hidden = false;
   body.className = "dim";
   body.textContent = "Retrieving metadata - this can take a moment on a large org...";
   consent.hidden = true;
   chat.hidden = true;
   state.orgSummaryMarkdown = null;
+  state.orgSummaryPending = null;
   dialog.showModal();
-
-  let pendingMarkdown = null;
 
   try {
     const { job_id } = await api("api/org-summary/start", orgCredentials());
-    const data = await poll("api/org-summary/status", { job_id });
+
+    // A silent poll() gave no sign of life for however long a broad retrieve
+    // takes on a real org - the dialog just sat on the same sentence for
+    // however long that took, indistinguishable from being stuck. This ticks
+    // an elapsed-time counter instead, so it is visibly still working.
+    const started = Date.now();
+    let data;
+    for (;;) {
+      const elapsed = Math.round((Date.now() - started) / 1000);
+      body.textContent =
+        `Retrieving metadata - this can take a moment on a large org... (${elapsed}s)`;
+      data = await api(`api/org-summary/status?job_id=${job_id}`);
+      if (data.done) break;
+      await sleep(1500);
+    }
     body.textContent = "Parsing metadata...";
 
     const zipBytes = Uint8Array.from(atob(data.zip_base64), (c) => c.charCodeAt(0));
@@ -663,10 +716,11 @@ async function runOrgSummary() {
         const pct = msg.total > 0 ? Math.round((msg.done / msg.total) * 100) : 0;
         body.textContent = `Parsing ${msg.label}... (${pct}%)`;
       } else if (msg.type === "done") {
-        pendingMarkdown = msg.markdown;
+        state.orgSummaryPending = msg.markdown;
+        setOrgSummaryStatus("ready");
         body.hidden = true;
-        text.value = pendingMarkdown;
-        const tokens = Math.ceil(pendingMarkdown.length / 4);
+        text.value = msg.markdown;
+        const tokens = Math.ceil(msg.markdown.length / 4);
         const size = $("orgSummarySize");
         if (tokens > ORG_SUMMARY_WARN_TOKENS) {
           size.className = "error";
@@ -684,6 +738,7 @@ async function runOrgSummary() {
         body.className = "error";
         body.textContent = msg.message || "Something went wrong while parsing the metadata.";
         logError("Org summary", body.textContent);
+        setOrgSummaryStatus(null);
         worker.terminate();
       }
     };
@@ -691,6 +746,7 @@ async function runOrgSummary() {
       body.className = "error";
       body.textContent = "Worker error: " + (err.message || "failed to parse the metadata.");
       logError("Org summary", body.textContent);
+      setOrgSummaryStatus(null);
     };
     worker.postMessage({ fileName: "org.zip", buffer: zipBytes.buffer }, [zipBytes.buffer]);
   } catch (err) {
@@ -698,14 +754,8 @@ async function runOrgSummary() {
     body.className = "error";
     body.textContent = err.message;
     logError("Org summary", err.message);
+    setOrgSummaryStatus(null);
   }
-
-  $("orgSummaryApproveBtn").onclick = () => {
-    if (!pendingMarkdown) return;
-    state.orgSummaryMarkdown = pendingMarkdown;
-    consent.hidden = true;
-    chat.hidden = false;
-  };
 }
 
 async function askOrgSummary() {
@@ -1143,6 +1193,13 @@ async function boot() {
   $("orgSummaryLink").onclick = runOrgSummary;
   $("orgSummaryCloseBtn").onclick = () => $("orgSummaryDialog").close();
   $("orgSummaryAskBtn").onclick = askOrgSummary;
+  $("orgSummaryApproveBtn").onclick = () => {
+    if (!state.orgSummaryPending) return;
+    state.orgSummaryMarkdown = state.orgSummaryPending;
+    setOrgSummaryStatus("ready");
+    $("orgSummaryConsent").hidden = true;
+    $("orgSummaryChat").hidden = false;
+  };
   $("surveyCloseBtn").onclick = () => $("surveyDialog").close();
   $("surveyCopyBtn").onclick = async () => {
     const text = $("surveyText");
