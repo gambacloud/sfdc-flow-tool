@@ -163,7 +163,6 @@ _KNOWN_UNSUPPORTED = {
     "apexPluginCalls": "Apex plugin calls",
     "recordRollbacks": "rollback elements",
     "steps": "steps",
-    "orchestratedStages": "orchestration stages",
     "stages": "stages",
     "exitRules": "exit rules",
     "filters": "top-level filters",

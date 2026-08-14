@@ -1862,11 +1862,21 @@ class StageStep(BaseModel):
     actionType tag from step_subtype instead of asking for the same fact
     twice.
 
-    Approval steps, MuleSoft steps, and evaluating entry/exit criteria with a
-    dedicated EvaluationFlow (confirmed real, but a whole mechanism of its
-    own - the referenced flow must be process_type 'EvaluationFlow' with a
-    Boolean output variable literally named `isOrchestrationConditionMet`)
-    are left unsupported rather than guessed at.
+    Approval steps are deliberately not one of the two step_subtype choices,
+    not merely unimplemented: `stepApproval` (the same kind of literal that
+    makes Background/Interactive work) was confirmed refused against a real
+    dev org - "You can't use the Step Approval action type in flows with the
+    Flow Orchestration process type" - with a fully valid, real
+    ApprovalProcess as the target (built and iterated on until it deployed
+    clean on its own) and against both API 62.0 and the org's newest (67.0).
+    Not a missing target, not a version gate - the platform refuses it.
+
+    MuleSoft steps, and evaluating entry/exit criteria with a dedicated
+    EvaluationFlow (confirmed real, but a whole mechanism of its own - the
+    referenced flow must be process_type 'EvaluationFlow' with a Boolean
+    output variable literally named `isOrchestrationConditionMet`), are left
+    unsupported rather than guessed at - unlike Approval, neither has been
+    tried against a real org yet.
     """
 
     name: str
