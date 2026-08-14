@@ -31,6 +31,7 @@ from .ir import (
     RecordUpdate,
     Screen,
     Subflow,
+    Transform,
     Value,
     Wait,
     referenced_conditions,
@@ -268,9 +269,34 @@ def _node(name: str, label: str, element: Optional[Element]) -> str:
         # Mermaid's trapezoid ends with a literal backslash, hence the raw string.
         return rf'{name}[/"{text}"\]'
     if isinstance(element, (RecordCreate, RecordUpdate, RecordDelete, GetRecords,
-                            CollectionFilter, CollectionSort)):
+                            CollectionFilter, CollectionSort, Transform)):
         return f'{name}[("{text}")]'
     return f'{name}["{text}"]'
+
+
+def _transform_is_generic(element: Transform) -> bool:
+    """
+    True when any action is one of the five shapes this build has never
+    confirmed against a real org (Count, Sum, GetItemByIndex, InnerJoin,
+    InvocableAction) - checkOnly accepts them with no input_parameters at
+    all, so it cannot be used to learn what they actually need. Only Map is
+    understood; the rest round-trip exactly but their shape is a guess.
+    """
+    return any(
+        action.transform_type != "Map"
+        for tv in element.transform_values
+        for action in tv.actions
+    )
+
+
+def _transform_action_text(action) -> str:
+    if action.transform_type == "Map":
+        target = action.output_field_api_name or "(value)"
+        return f"{target} = {value_text(action.value)}" if action.value else target
+    params = ", ".join(
+        f"{p.name} = {value_text(p.value)}" for p in action.input_parameters
+    )
+    return f"{action.transform_type}({params})"
 
 
 def _element_caption(element: Element) -> str:
@@ -314,6 +340,12 @@ def _element_caption(element: Element) -> str:
     if isinstance(element, OrchestratedStage):
         names = ", ".join(s.label or s.name for s in element.stage_steps)
         return f"{element.label}\n{names}"
+    if isinstance(element, Transform):
+        target = element.object_type or element.apex_class or "a value"
+        detail = f"Build {target}"
+        if _transform_is_generic(element):
+            detail += " (shape not fully confirmed)"
+        return f"{element.label}\n{detail}"
     if isinstance(element, Screen):
         inputs = [f.name for f in element.all_fields()
                   if f.field_type not in ("DisplayText", "RegionContainer",
@@ -464,6 +496,7 @@ _TYPE_LABEL = {
     CollectionSort: "Collection Sort",
     CustomError: "Custom Error",
     OrchestratedStage: "Orchestration Stage",
+    Transform: "Transform",
 }
 
 _FIELD_LABEL = {
@@ -727,6 +760,25 @@ def _element_detail(element: Element) -> str:
                 part += f" (on `{msg.field_selection}`)"
             parts.append(part)
         return "Rejects the record: " + "; ".join(parts)
+
+    if isinstance(element, Transform):
+        target = element.object_type or element.apex_class or "a value"
+        actions = [
+            _transform_action_text(action)
+            for tv in element.transform_values
+            for action in tv.actions
+        ]
+        detail = f"Builds `{target}`"
+        if actions:
+            detail += ": " + "; ".join(actions)
+        if _transform_is_generic(element):
+            detail += (
+                ". Note: Count/Sum/GetItemByIndex/InnerJoin/InvocableAction "
+                "round-trip exactly but their real shape has never been "
+                "confirmed against a live org - treat this as a raw readout, "
+                "not a validated one."
+            )
+        return detail
 
     return ""
 

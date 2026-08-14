@@ -6,6 +6,7 @@ import pytest
 
 from flowtool.ir import (
     FieldValue,
+    InputAssignment,
     RecordCreate,
     Condition,
     Decision,
@@ -14,6 +15,9 @@ from flowtool.ir import (
     Outcome,
     RecordFilter,
     Start,
+    Transform,
+    TransformValue,
+    TransformValueAction,
     Value,
 )
 from flowtool.mermaid import condition_text, filter_text, to_markdown, to_mermaid
@@ -80,6 +84,47 @@ class TestDiagram:
                       right=Value(boolean_value=False))
         )
         assert "is not null" in to_markdown(flow)
+
+
+def _flow_with_transform_action(action: TransformValueAction) -> Flow:
+    return Flow(
+        api_name="F", label="F", start=Start(next="T"),
+        elements=[
+            Transform(
+                name="T", label="Build", object_type="Account",
+                transform_values=[TransformValue(actions=[action])],
+            ),
+        ],
+    )
+
+
+class TestTransform:
+    """
+    Map is understood; the other five action types round-trip through
+    input_parameters with no confirmed shape - the diagram has to say so,
+    rather than presenting a guess as settled fact.
+    """
+
+    def test_a_map_action_carries_no_disclaimer(self):
+        flow = _flow_with_transform_action(
+            TransformValueAction(transform_type="Map", output_field_api_name="Name",
+                                  value=Value(string_value="Acme"))
+        )
+        assert "not fully confirmed" not in to_mermaid(flow)
+        assert "never been confirmed" not in to_markdown(flow)
+
+    def test_an_unmodelled_action_type_carries_a_disclaimer(self):
+        flow = _flow_with_transform_action(
+            TransformValueAction(
+                transform_type="Sum",
+                input_parameters=[
+                    InputAssignment(name="sourceCollectionReference",
+                                     value=Value(element_reference="col")),
+                ],
+            )
+        )
+        assert "shape not fully confirmed" in to_mermaid(flow)
+        assert "never been confirmed against a live org" in to_markdown(flow)
 
 
 class TestFaultPaths:
