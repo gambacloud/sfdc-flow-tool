@@ -206,6 +206,30 @@ class MetadataClient:
             raise RetrieveError("retrieve() returned no job id")
         return node.text
 
+    async def list_metadata(self, type_name: str) -> List[Dict[str, Optional[str]]]:
+        """
+        Every component of one type the org will admit to, each with its
+        namespace and manageableState - the only way to tell a component
+        that lives in the org's own metadata from one that came in through a
+        managed package before asking to retrieve it. A bare `*` retrieve
+        does not distinguish the two; this does.
+        """
+        body = (
+            "<met:listMetadata>"
+            f"<met:queries><met:type>{type_name}</met:type></met:queries>"
+            f"<met:asOfVersion>{self.api_version}</met:asOfVersion>"
+            "</met:listMetadata>"
+        )
+        root = await self._post(body)
+        return [
+            {
+                "full_name": result.findtext("met:fullName", None, SOAP_NS),
+                "namespace_prefix": result.findtext("met:namespacePrefix", None, SOAP_NS),
+                "manageable_state": result.findtext("met:manageableState", None, SOAP_NS),
+            }
+            for result in root.findall(".//met:listMetadataResponse/met:result", SOAP_NS)
+        ]
+
     async def wait_for_retrieve(
         self, job_id: str, poll_seconds: float = 1.5, timeout_seconds: float = 120.0
     ) -> bytes:
@@ -426,8 +450,9 @@ def build_multi_type_package(types: Dict[str, List[str]], api_version: str) -> s
 
 
 # Everything metadata-kb-worker.js knows how to turn into Markdown - objects,
-# formulas (carried on CustomObject), flows, Apex, LWC/Aura, profiles. `*`
-# retrieves every component of the type the org has.
+# formulas (carried on CustomObject), flows, Apex, LWC/Aura, profiles. The
+# actual member names retrieved are filled in per-org by
+# _unmanaged_org_summary_types below, not "*" - see there for why.
 ORG_SUMMARY_TYPES: Dict[str, List[str]] = {
     "CustomObject": ["*"],
     "ApexClass": ["*"],
@@ -440,16 +465,60 @@ ORG_SUMMARY_TYPES: Dict[str, List[str]] = {
 }
 
 
+def _is_unmanaged(entry: Dict[str, Optional[str]]) -> bool:
+    """
+    A component belongs to the org itself, not a package, when it carries no
+    namespace and its manageableState is not "installed" - the value a
+    subscriber org's own listMetadata sets on anything that arrived through
+    a managed package. An unlocked package still under active development on
+    the source org ("beta"/"deprecatedEditable"/"installedEditable") is
+    excluded too, rather than guessed about.
+    """
+    if entry.get("namespace_prefix"):
+        return False
+    return (entry.get("manageable_state") or "unmanaged") == "unmanaged"
+
+
+async def _unmanaged_org_summary_types(client: "MetadataClient") -> Dict[str, List[str]]:
+    """
+    ORG_SUMMARY_TYPES's own member lists are all "*", which retrieves
+    everything of that type the API will hand over - including components
+    that arrived through an installed managed package (a sample app, an
+    AppExchange package), which is usually most of the bulk and none of it
+    something this tool's user actually built or can act on. listMetadata
+    gives each component's namespace and manageableState before anything is
+    retrieved, so those can be left out of the manifest instead of filtered
+    out of a knowledge base after paying to generate and read it.
+    """
+    results = await asyncio.gather(
+        *(client.list_metadata(type_name) for type_name in ORG_SUMMARY_TYPES)
+    )
+    manifest: Dict[str, List[str]] = {}
+    for type_name, entries in zip(ORG_SUMMARY_TYPES, results):
+        names = [e["full_name"] for e in entries if e.get("full_name") and _is_unmanaged(e)]
+        if names:
+            manifest[type_name] = names
+    return manifest
+
+
 async def retrieve_org_summary_zip(
     instance_url: str, session_id: str, api_version: str = "62.0"
 ) -> bytes:
     """
-    Every metadata type metadata-kb-worker.js parses, in one retrieve. Unlike
+    Every metadata type metadata-kb-worker.js parses, in one retrieve,
+    excluding anything from an installed managed package. Unlike
     retrieve_all_flows, the zip is handed back whole rather than unpacked -
     metadata-kb-worker.js takes the raw zip bytes, not pre-split files.
     """
     async with MetadataClient(instance_url, session_id, api_version) as client:
-        job_id = await client.start_retrieve_types(ORG_SUMMARY_TYPES)
+        manifest = await _unmanaged_org_summary_types(client)
+        if not manifest:
+            raise RetrieveError(
+                "No unmanaged metadata of the types this build reads (objects, "
+                "flows, Apex, LWC/Aura, profiles, custom metadata) was found in "
+                "this org - only components from installed packages."
+            )
+        job_id = await client.start_retrieve_types(manifest)
         return await client.wait_for_retrieve(job_id, timeout_seconds=600.0)
 
 

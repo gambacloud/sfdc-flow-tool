@@ -669,6 +669,7 @@ async function runOrgSummary() {
       consent.hidden = false;
       chat.hidden = true;
     }
+    $("orgSummaryDownloadBtn").hidden = !state.orgSummaryPending;
     dialog.showModal();
     return;
   }
@@ -685,6 +686,7 @@ async function runOrgSummary() {
   body.textContent = "Retrieving metadata - this can take a moment on a large org...";
   consent.hidden = true;
   chat.hidden = true;
+  $("orgSummaryDownloadBtn").hidden = true;
   state.orgSummaryMarkdown = null;
   state.orgSummaryPending = null;
   dialog.showModal();
@@ -720,6 +722,7 @@ async function runOrgSummary() {
         setOrgSummaryStatus("ready");
         body.hidden = true;
         text.value = msg.markdown;
+        $("orgSummaryDownloadBtn").hidden = false;
         const tokens = Math.ceil(msg.markdown.length / 4);
         const size = $("orgSummarySize");
         if (tokens > ORG_SUMMARY_WARN_TOKENS) {
@@ -1193,6 +1196,17 @@ async function boot() {
   $("orgSummaryLink").onclick = runOrgSummary;
   $("orgSummaryCloseBtn").onclick = () => $("orgSummaryDialog").close();
   $("orgSummaryAskBtn").onclick = askOrgSummary;
+  $("orgSummaryDownloadBtn").onclick = () => {
+    const markdown = state.orgSummaryPending || state.orgSummaryMarkdown;
+    if (!markdown) return;
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "org-summary.md";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   $("orgSummaryApproveBtn").onclick = () => {
     if (!state.orgSummaryPending) return;
     state.orgSummaryMarkdown = state.orgSummaryPending;
