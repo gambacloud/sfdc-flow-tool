@@ -239,12 +239,18 @@
 <dialog id="orgSummaryDialog">
   <h3>Org summary</h3>
   <p class="dim">
-    Pulls a broad slice of this org's metadata (objects, flows, Apex,
-    LWC/Aura) into a knowledge base, then lets you ask the configured model
-    questions against it. The knowledge base itself can't be edited here -
-    it's exactly what was retrieved. Profiles are left out: field-level
-    security alone made up over a third of a real org's knowledge base.
+    Pulls a slice of this org's metadata into a knowledge base, then lets you
+    ask the configured model questions against it. The knowledge base itself
+    can't be edited here - it's exactly what was retrieved.
   </p>
+
+  <div id="orgSummarySelect" hidden>
+    <p class="dim">What to include:</p>
+    <div id="orgSummaryGroups"></div>
+    <div class="row survey-actions">
+      <button id="orgSummaryGenerateBtn" class="primary" type="button">Generate</button>
+    </div>
+  </div>
 
   <div id="orgSummaryBody" class="dim">Retrieving metadata...</div>
 

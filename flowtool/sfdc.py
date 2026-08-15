@@ -13,7 +13,7 @@ import io
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -449,21 +449,33 @@ def build_multi_type_package(types: Dict[str, List[str]], api_version: str) -> s
     )
 
 
-# Objects, formulas (carried on CustomObject), flows, Apex, LWC/Aura -
-# metadata-kb-worker.js also knows how to turn Profiles into Markdown, but
-# left out here: field-level security repeats once per field per profile, so
-# it was 35% of a real org's knowledge base on its own, more than any other
-# single type. The actual member names retrieved are filled in per-org by
-# _unmanaged_org_summary_types below, not "*" - see there for why.
-ORG_SUMMARY_TYPES: Dict[str, List[str]] = {
-    "CustomObject": ["*"],
-    "ApexClass": ["*"],
-    "ApexTrigger": ["*"],
-    "Flow": ["*"],
-    "LightningComponentBundle": ["*"],
-    "AuraDefinitionBundle": ["*"],
-    "CustomMetadata": ["*"],
+# The checkbox list the UI offers, in order - grouped by what a user
+# actually thinks in (not one checkbox per raw Metadata API type, which
+# would be a wall of nearly-identical options for Apex and for components).
+# `default` is what a fresh retrieve uses when the browser sends no explicit
+# choice. Profile is real and available, but not on by default - field-level
+# security alone made up 35% of a real org's knowledge base, more than any
+# other single group.
+ORG_SUMMARY_TYPE_GROUPS: List[Dict[str, Any]] = [
+    {"group": "objects", "label": "Custom Objects", "types": ["CustomObject"], "default": True},
+    {"group": "apex", "label": "Apex (classes & triggers)",
+     "types": ["ApexClass", "ApexTrigger"], "default": True},
+    {"group": "flows", "label": "Flows", "types": ["Flow"], "default": True},
+    {"group": "components", "label": "Lightning components (LWC & Aura)",
+     "types": ["LightningComponentBundle", "AuraDefinitionBundle"], "default": True},
+    {"group": "profiles",
+     "label": "Profiles (large - field-level security repeats per field, per profile)",
+     "types": ["Profile"], "default": False},
+    {"group": "custom_metadata", "label": "Custom Metadata records",
+     "types": ["CustomMetadata"], "default": True},
+]
+
+_ORG_SUMMARY_GROUP_TYPES: Dict[str, List[str]] = {
+    g["group"]: g["types"] for g in ORG_SUMMARY_TYPE_GROUPS
 }
+_DEFAULT_ORG_SUMMARY_GROUPS: List[str] = [
+    g["group"] for g in ORG_SUMMARY_TYPE_GROUPS if g["default"]
+]
 
 
 def _is_unmanaged(entry: Dict[str, Optional[str]]) -> bool:
@@ -480,10 +492,11 @@ def _is_unmanaged(entry: Dict[str, Optional[str]]) -> bool:
     return (entry.get("manageable_state") or "unmanaged") == "unmanaged"
 
 
-async def _unmanaged_org_summary_types(client: "MetadataClient") -> Dict[str, List[str]]:
+async def _unmanaged_org_summary_types(
+    client: "MetadataClient", types: List[str]
+) -> Dict[str, List[str]]:
     """
-    ORG_SUMMARY_TYPES's own member lists are all "*", which retrieves
-    everything of that type the API will hand over - including components
+    Each requested type's own "everything" retrieve would include components
     that arrived through an installed managed package (a sample app, an
     AppExchange package), which is usually most of the bulk and none of it
     something this tool's user actually built or can act on. listMetadata
@@ -491,11 +504,9 @@ async def _unmanaged_org_summary_types(client: "MetadataClient") -> Dict[str, Li
     retrieved, so those can be left out of the manifest instead of filtered
     out of a knowledge base after paying to generate and read it.
     """
-    results = await asyncio.gather(
-        *(client.list_metadata(type_name) for type_name in ORG_SUMMARY_TYPES)
-    )
+    results = await asyncio.gather(*(client.list_metadata(t) for t in types))
     manifest: Dict[str, List[str]] = {}
-    for type_name, entries in zip(ORG_SUMMARY_TYPES, results):
+    for type_name, entries in zip(types, results):
         names = [e["full_name"] for e in entries if e.get("full_name") and _is_unmanaged(e)]
         if names:
             manifest[type_name] = names
@@ -503,21 +514,29 @@ async def _unmanaged_org_summary_types(client: "MetadataClient") -> Dict[str, Li
 
 
 async def retrieve_org_summary_zip(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "62.0",
+    groups: Optional[List[str]] = None,
 ) -> bytes:
     """
-    Every metadata type metadata-kb-worker.js parses, in one retrieve,
-    excluding anything from an installed managed package. Unlike
-    retrieve_all_flows, the zip is handed back whole rather than unpacked -
-    metadata-kb-worker.js takes the raw zip bytes, not pre-split files.
+    The requested checkbox groups (ORG_SUMMARY_TYPE_GROUPS's own defaults if
+    the browser sent none), in one retrieve, excluding anything from an
+    installed managed package. Unlike retrieve_all_flows, the zip is handed
+    back whole rather than unpacked - metadata-kb-worker.js takes the raw zip
+    bytes, not pre-split files.
     """
+    chosen = groups if groups is not None else _DEFAULT_ORG_SUMMARY_GROUPS
+    unknown = sorted(set(chosen) - set(_ORG_SUMMARY_GROUP_TYPES))
+    if unknown:
+        raise RetrieveError(f"Unknown metadata group(s): {unknown}")
+    types = [t for group in chosen for t in _ORG_SUMMARY_GROUP_TYPES[group]]
+
     async with MetadataClient(instance_url, session_id, api_version) as client:
-        manifest = await _unmanaged_org_summary_types(client)
+        manifest = await _unmanaged_org_summary_types(client, types)
         if not manifest:
             raise RetrieveError(
-                "No unmanaged metadata of the types this build reads (objects, "
-                "flows, Apex, LWC/Aura, custom metadata) was found in this org "
-                "- only components from installed packages."
+                "No unmanaged metadata of the selected groups was found in "
+                "this org - only components from installed packages, or "
+                "nothing was selected."
             )
         job_id = await client.start_retrieve_types(manifest)
         return await client.wait_for_retrieve(job_id, timeout_seconds=600.0)

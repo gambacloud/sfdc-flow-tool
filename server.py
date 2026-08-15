@@ -40,6 +40,7 @@ from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.mermaid import element_index, to_markdown, to_mermaid
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.sfdc import (
+    ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
     flow_builder_url,
     list_flows,
@@ -369,6 +370,14 @@ class SurveyRequest(BaseModel):
     access_token: Optional[str] = None
 
 
+class OrgSummaryRequest(SurveyRequest):
+    # Which checkbox groups from ORG_SUMMARY_TYPE_GROUPS to retrieve. None
+    # means whatever that list's own defaults are - the browser always sends
+    # this explicitly once the dialog's checkboxes have rendered, so None in
+    # practice only covers a request that beat the config fetch there.
+    groups: Optional[List[str]] = None
+
+
 class ImportRequest(BaseModel):
     api_name: str
     org: Optional[str] = None
@@ -440,6 +449,12 @@ def config() -> Dict[str, Any]:
         # a Heroku deployment that already sets one for that app needs nothing
         # new here. Empty means the login buttons stay hidden.
         "clientId": os.environ.get("SF_CLIENT_ID", ""),
+        # The org-summary checkbox list: group key, label, and whether it
+        # starts checked. The browser never hard-codes this itself.
+        "org_summary_type_groups": [
+            {"group": g["group"], "label": g["label"], "default": g["default"]}
+            for g in ORG_SUMMARY_TYPE_GROUPS
+        ],
     }
 
 
@@ -589,17 +604,16 @@ async def survey_status(job_id: str) -> Dict[str, Any]:
 
 
 @app.post("/api/org-summary/start")
-async def org_summary_start(body: SurveyRequest) -> Dict[str, Any]:
+async def org_summary_start(body: OrgSummaryRequest) -> Dict[str, Any]:
     """
-    Retrieve a broad slice of the org's metadata (objects, flows, Apex,
-    LWC/Aura, custom metadata - Profiles excluded, field-level security alone
-    made up over a third of a real org's knowledge base) as a zip. The
-    browser turns it into a Markdown knowledge base itself, with the same
-    worker /metadata-kb uses on a file the user found and uploaded by hand -
-    this just hands it a zip the server pulled directly instead.
+    Retrieve the checkbox groups the browser asked for (ORG_SUMMARY_TYPE_GROUPS's
+    own defaults if it asked for none) as a zip. The browser turns it into a
+    Markdown knowledge base itself, with the same worker /metadata-kb uses on
+    a file the user found and uploaded by hand - this just hands it a zip the
+    server pulled directly instead.
     """
     url, token = credentials(body.org, body.instance_url, body.access_token)
-    task = asyncio.create_task(retrieve_org_summary_zip(url, token))
+    task = asyncio.create_task(retrieve_org_summary_zip(url, token, groups=body.groups))
     job_id = uuid.uuid4().hex
     ORG_SUMMARY_JOBS[job_id] = PendingOrgSummaryZip(task=task)
     return {"job_id": job_id}

@@ -4,7 +4,11 @@ retrieve/deploy calls themselves are exercised for real by verify.py and
 spike.py against a live org, not here.
 """
 
-from flowtool.sfdc import ORG_SUMMARY_TYPES, _is_unmanaged, build_multi_type_package
+from flowtool.sfdc import (
+    ORG_SUMMARY_TYPE_GROUPS,
+    _is_unmanaged,
+    build_multi_type_package,
+)
 
 
 class TestBuildMultiTypePackage:
@@ -22,17 +26,25 @@ class TestBuildMultiTypePackage:
         xml = build_multi_type_package({"Flow": ["A", "B"]}, "62.0")
         assert "<met:members>A</met:members><met:members>B</met:members>" in xml
 
-    def test_org_summary_types_covers_what_metadata_kb_worker_parses(self):
-        # Objects, formulas (carried on CustomObject), flows, Apex, LWC/Aura,
-        # custom metadata - metadata-kb.html's stated scope minus Profiles,
-        # measured at 35% of a real org's knowledge base on its own.
-        assert set(ORG_SUMMARY_TYPES) == {
+
+class TestOrgSummaryTypeGroups:
+    def test_every_group_this_build_reads_is_covered(self):
+        all_types = {t for g in ORG_SUMMARY_TYPE_GROUPS for t in g["types"]}
+        assert all_types == {
             "CustomObject", "ApexClass", "ApexTrigger", "Flow",
-            "LightningComponentBundle", "AuraDefinitionBundle",
+            "LightningComponentBundle", "AuraDefinitionBundle", "Profile",
             "CustomMetadata",
         }
-        assert "Profile" not in ORG_SUMMARY_TYPES
-        assert all(members == ["*"] for members in ORG_SUMMARY_TYPES.values())
+
+    def test_profiles_is_the_only_group_off_by_default(self):
+        # 35% of a real org's knowledge base on its own - field-level
+        # security repeats per field, per profile.
+        off_by_default = {g["group"] for g in ORG_SUMMARY_TYPE_GROUPS if not g["default"]}
+        assert off_by_default == {"profiles"}
+
+    def test_group_keys_are_unique(self):
+        keys = [g["group"] for g in ORG_SUMMARY_TYPE_GROUPS]
+        assert len(keys) == len(set(keys))
 
 
 class TestIsUnmanaged:

@@ -407,7 +407,7 @@ class FakeTextProvider:
 
 class TestOrgSummary:
     def test_retrieves_a_zip_and_hands_back_base64(self, client, monkeypatch):
-        async def fake(instance_url, session_id, api_version="62.0"):
+        async def fake(instance_url, session_id, api_version="62.0", groups=None):
             return b"PK\x03\x04fake-zip-bytes"
 
         monkeypatch.setattr(server, "retrieve_org_summary_zip", fake)
@@ -418,7 +418,7 @@ class TestOrgSummary:
         assert base64.b64decode(data["zip_base64"]) == b"PK\x03\x04fake-zip-bytes"
 
     def test_a_retrieve_failure_is_a_clean_400_not_a_500(self, client, monkeypatch):
-        async def fake(instance_url, session_id, api_version="62.0"):
+        async def fake(instance_url, session_id, api_version="62.0", groups=None):
             raise RetrieveError("no access to Metadata API")
 
         monkeypatch.setattr(server, "retrieve_org_summary_zip", fake)
@@ -426,6 +426,25 @@ class TestOrgSummary:
         response = poll(client, "/api/org-summary/status", job_id=started.json()["job_id"])
         assert response.status_code == 400
         assert "no access" in response.text
+
+    def test_the_browsers_chosen_groups_reach_the_retrieve(self, client, monkeypatch):
+        seen = {}
+
+        async def fake(instance_url, session_id, api_version="62.0", groups=None):
+            seen["groups"] = groups
+            return b"PK\x03\x04fake-zip-bytes"
+
+        monkeypatch.setattr(server, "retrieve_org_summary_zip", fake)
+        started = client.post("/api/org-summary/start", json={"groups": ["objects", "flows"]})
+        poll(client, "/api/org-summary/status", job_id=started.json()["job_id"])
+        assert seen["groups"] == ["objects", "flows"]
+
+    def test_config_exposes_the_checkbox_groups(self, client):
+        groups = client.get("/api/config").json()["org_summary_type_groups"]
+        keys = {g["group"] for g in groups}
+        assert "profiles" in keys
+        profiles = next(g for g in groups if g["group"] == "profiles")
+        assert profiles["default"] is False
 
 
 class TestKbChat:

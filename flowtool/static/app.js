@@ -630,11 +630,11 @@ async function runSurvey() {
 // context on every call.
 const ORG_SUMMARY_WARN_TOKENS = 120000;
 
-// null: never started. "working": a retrieve/parse is running in the
-// background - it keeps running even if the dialog is closed, so reopening
-// must not start a second one. "ready": generated, either still waiting on
-// approval (state.orgSummaryPending) or already approved
-// (state.orgSummaryMarkdown).
+// null: never started. "selecting": the checkbox step, nothing sent to the
+// org yet. "working": a retrieve/parse is running in the background - it
+// keeps running even if the dialog is closed, so reopening must not start a
+// second one. "ready": generated, either still waiting on approval
+// (state.orgSummaryPending) or already approved (state.orgSummaryMarkdown).
 function setOrgSummaryStatus(status) {
   state.orgSummaryStatus = status;
   const indicator = $("orgSummaryStatusIndicator");
@@ -648,25 +648,53 @@ function setOrgSummaryStatus(status) {
   }
 }
 
+// Built once at boot from /api/config's own org_summary_type_groups, so the
+// group list and which ones default to checked live in one place
+// (flowtool/sfdc.py) instead of being duplicated here.
+function renderOrgSummaryGroups(groups) {
+  const container = $("orgSummaryGroups");
+  if (!container || !groups) return;
+  container.innerHTML = "";
+  groups.forEach((g) => {
+    const label = document.createElement("label");
+    label.className = "check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = g.group;
+    input.checked = g.default;
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(" " + g.label));
+    container.appendChild(label);
+  });
+}
+
+function checkedOrgSummaryGroups() {
+  return Array.from($("orgSummaryGroups").querySelectorAll("input:checked")).map(
+    (input) => input.value
+  );
+}
+
 async function runOrgSummary() {
   const dialog = $("orgSummaryDialog");
+  const select = $("orgSummarySelect");
   const body = $("orgSummaryBody");
   const consent = $("orgSummaryConsent");
   const chat = $("orgSummaryChat");
-  const text = $("orgSummaryText");
 
-  if (state.orgSummaryStatus === "working" || state.orgSummaryStatus === "ready") {
-    // Already running or already generated - reopen rather than fetch and
-    // parse the same org's metadata a second time. If it is still working,
-    // the background code already updates these same elements regardless of
-    // whether the dialog is open.
+  if (state.orgSummaryStatus) {
+    // Already selecting, running, or generated - reopen rather than start
+    // over. If it is still working, the background code already updates
+    // these same elements regardless of whether the dialog is open.
+    select.hidden = state.orgSummaryStatus !== "selecting";
+    body.hidden = state.orgSummaryStatus !== "working";
     if (state.orgSummaryMarkdown) {
-      body.hidden = true;
       consent.hidden = true;
       chat.hidden = false;
     } else if (state.orgSummaryPending) {
-      body.hidden = true;
       consent.hidden = false;
+      chat.hidden = true;
+    } else {
+      consent.hidden = true;
       chat.hidden = true;
     }
     $("orgSummaryDownloadBtn").hidden = !state.orgSummaryPending;
@@ -680,19 +708,37 @@ async function runOrgSummary() {
     return;
   }
 
-  setOrgSummaryStatus("working");
-  body.hidden = false;
-  body.className = "dim";
-  body.textContent = "Retrieving metadata - this can take a moment on a large org...";
+  setOrgSummaryStatus("selecting");
+  select.hidden = false;
+  body.hidden = true;
   consent.hidden = true;
   chat.hidden = true;
   $("orgSummaryDownloadBtn").hidden = true;
   state.orgSummaryMarkdown = null;
   state.orgSummaryPending = null;
   dialog.showModal();
+}
+
+async function startOrgSummaryRetrieve() {
+  const groups = checkedOrgSummaryGroups();
+  if (!groups.length) return;
+
+  const select = $("orgSummarySelect");
+  const body = $("orgSummaryBody");
+  const consent = $("orgSummaryConsent");
+  const chat = $("orgSummaryChat");
+  const text = $("orgSummaryText");
+
+  setOrgSummaryStatus("working");
+  select.hidden = true;
+  body.hidden = false;
+  body.className = "dim";
+  body.textContent = "Retrieving metadata - this can take a moment on a large org...";
+  consent.hidden = true;
+  chat.hidden = true;
 
   try {
-    const { job_id } = await api("api/org-summary/start", orgCredentials());
+    const { job_id } = await api("api/org-summary/start", { ...orgCredentials(), groups });
 
     // A silent poll() gave no sign of life for however long a broad retrieve
     // takes on a real org - the dialog just sat on the same sentence for
@@ -1131,6 +1177,8 @@ async function boot() {
 
     // With no sf CLI on this host, the picker can only ever offer "sf CLI not
     // installed" - not a choice, just noise next to the OAuth login buttons.
+    renderOrgSummaryGroups(config.org_summary_type_groups);
+
     state.sfCli = config.sf_cli;
     if (config.sf_cli) {
       const org = $("org");
@@ -1194,6 +1242,7 @@ async function boot() {
   $("importBtn").onclick = importFlow;
   $("surveyLink").onclick = runSurvey;
   $("orgSummaryLink").onclick = runOrgSummary;
+  $("orgSummaryGenerateBtn").onclick = startOrgSummaryRetrieve;
   $("orgSummaryCloseBtn").onclick = () => $("orgSummaryDialog").close();
   $("orgSummaryAskBtn").onclick = askOrgSummary;
   $("orgSummaryDownloadBtn").onclick = () => {
