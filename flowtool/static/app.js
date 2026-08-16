@@ -26,14 +26,15 @@ const state = {
 
 let mermaid = null;
 
-// Mermaid comes from a CDN. If it is unavailable - offline, blocked, whatever -
-// the diagram falls back to its source, which is still readable.
+// Vendored under static/vendor (see index.html) rather than pulled from a
+// CDN at runtime - a compromised CDN would otherwise get to run script in
+// this page's origin, with access to state.org.accessToken. If it is
+// unavailable - the file went missing, whatever - the diagram falls back to
+// its source, which is still readable.
 async function loadMermaid() {
   try {
-    const mod = await import(
-      "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
-    );
-    mermaid = mod.default;
+    mermaid = window.mermaid;
+    if (!mermaid) return;
     const dark = matchMedia("(prefers-color-scheme: dark)").matches;
     mermaid.initialize({
       startOnLoad: false,
@@ -545,8 +546,7 @@ async function loadFlows() {
   }
   picker.add(new Option("Loading...", ""));
   try {
-    const query = new URLSearchParams(orgCredentials()).toString();
-    const data = await api(`api/flows${query ? "?" + query : ""}`);
+    const data = await api("api/flows", orgCredentials());
     picker.innerHTML = "";
     if (!data.flows.length) {
       picker.add(new Option("no flows in this org", ""));

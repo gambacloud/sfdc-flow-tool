@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -60,6 +60,35 @@ load_env(ROOT)
 STATIC = ROOT / "flowtool" / "static"
 
 app = FastAPI(title="SFDC Flow Tool")
+
+# Mermaid is vendored under /static/vendor rather than pulled from a CDN, so
+# script-src needs nothing beyond 'self' - a future inline <script> added by
+# accident will fail to run instead of quietly working. style-src allows
+# inline: mermaid sets style="..." attributes directly on the SVG nodes it
+# renders, and there is no static hash/nonce for content generated per
+# diagram. Inline style is a much smaller foothold than inline script (no
+# code execution), so this is a reasonable place to loosen the policy.
+CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'none'; "
+    "form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = CSP
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
 
 PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider, "ollama": OllamaProvider}
 
@@ -357,6 +386,16 @@ class OrgRequest(BaseModel):
     access_token: Optional[str] = None
 
 
+class FlowsRequest(BaseModel):
+    """No session_id - the flow picker is asked for before any session
+    exists. POST rather than GET so access_token travels in the body, not a
+    URL that ends up in access logs."""
+
+    org: Optional[str] = None
+    instance_url: Optional[str] = None
+    access_token: Optional[str] = None
+
+
 class DeployRequest(OrgRequest):
     confirm: bool = False
 
@@ -535,13 +574,9 @@ async def design_status(job_id: str) -> Dict[str, Any]:
     return {"done": True, **view(session_id, session)}
 
 
-@app.get("/api/flows")
-async def flows(
-    org: Optional[str] = None,
-    instance_url: Optional[str] = None,
-    access_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    url, token = credentials(org, instance_url, access_token)
+@app.post("/api/flows")
+async def flows(body: FlowsRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
     try:
         found = await list_flows(url, token)
     except RetrieveError as exc:
