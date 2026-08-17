@@ -37,7 +37,7 @@ from flowtool.llm import (
     Provider,
 )
 from flowtool.llm import GeminiProvider, OllamaProvider
-from flowtool.mermaid import element_index, to_markdown, to_mermaid
+from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
@@ -285,6 +285,7 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
         ),
         "mermaid": to_mermaid(flow),
         "markdown": to_markdown(flow),
+        "test_guide": to_test_guide(flow),
         "element_index": element_index(flow),
         "ir": flow.model_dump(exclude_none=True),
         "repairs": session.result.repairs,
@@ -988,6 +989,7 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     bodies = {
         "xml": (generate_xml(flow), "application/xml"),
         "markdown": (to_markdown(flow), "text/markdown"),
+        "test": (to_test_guide(flow), "text/markdown"),
         "ir": (flow.model_dump_json(exclude_none=True, indent=2), "application/json"),
     }
     if artifact not in bodies:

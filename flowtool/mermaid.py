@@ -977,3 +977,232 @@ def to_markdown(flow: Flow, include_diagram: bool = True) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Test guide
+# --------------------------------------------------------------------------
+
+# SOQL has no direct equivalent for a "starts/ends/contains" match other than
+# LIKE with wildcards, and IsChanged/WasSet compare against the record's prior
+# value - something no single SELECT can express, since it depends on what the
+# save that triggers the flow actually changes. Those two are called out as
+# "runtime-only" instead of silently dropped from the WHERE clause.
+_SOQL_OPERATOR = {
+    "EqualTo": "=",
+    "NotEqualTo": "!=",
+    "GreaterThan": ">",
+    "GreaterThanOrEqualTo": ">=",
+    "LessThan": "<",
+    "LessThanOrEqualTo": "<=",
+}
+
+_RUNTIME_ONLY_OPERATORS = {"IsChanged", "WasSet"}
+
+
+def _soql_literal(value: Value) -> Optional[str]:
+    if value.string_value is not None:
+        return "'" + value.string_value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    if value.number_value is not None:
+        number = value.number_value
+        return str(int(number)) if float(number).is_integer() else str(number)
+    if value.boolean_value is not None:
+        return "TRUE" if value.boolean_value else "FALSE"
+    if value.date_value is not None:
+        return value.date_value
+    if value.date_time_value is not None:
+        return value.date_time_value
+    # element_reference: only known once the flow is already running, so there
+    # is nothing to put in a query written ahead of time.
+    return None
+
+
+def _soql_condition(record_filter: RecordFilter) -> Optional[str]:
+    field = record_filter.field
+    operator = record_filter.operator
+    if operator in _RUNTIME_ONLY_OPERATORS:
+        return None
+    if operator == "IsNull":
+        negated = record_filter.value is not None and record_filter.value.boolean_value is False
+        return f"{field} {'!=' if negated else '='} null"
+    if record_filter.value is None:
+        return None
+    literal = _soql_literal(record_filter.value)
+    if literal is None:
+        return None
+    if operator == "StartsWith":
+        return f"{field} LIKE '{record_filter.value.string_value}%'"
+    if operator == "EndsWith":
+        return f"{field} LIKE '%{record_filter.value.string_value}'"
+    if operator == "Contains":
+        return f"{field} LIKE '%{record_filter.value.string_value}%'"
+    soql_op = _SOQL_OPERATOR.get(operator)
+    if soql_op is None:
+        return None
+    return f"{field} {soql_op} {literal}"
+
+
+def _entry_criteria_query(object_name: str, filters: List[RecordFilter], filter_logic: str) -> Tuple[Optional[str], List[str]]:
+    """
+    A best-effort SELECT that finds an existing record matching the flow's
+    entry criteria, plus the conditions that could not be translated (a
+    variable-valued filter, or one that only means something mid-save).
+
+    Only 'and'/'or' logic is combined into the query itself - a custom
+    expression like "1 OR (2 AND 3)" is a shape the filters must satisfy
+    together, not something AND-joining every clause would reproduce, so it is
+    left for the caller to check by hand against the numbered conditions.
+    """
+    clauses: List[str] = []
+    skipped: List[str] = []
+    for record_filter in filters:
+        clause = _soql_condition(record_filter)
+        if clause is None:
+            skipped.append(filter_text(record_filter))
+        else:
+            clauses.append(clause)
+
+    if not clauses:
+        query = f"SELECT Id FROM {object_name} LIMIT 5"
+    else:
+        joiner = " AND " if filter_logic.lower() not in ("and", "or") else f" {filter_logic.upper()} "
+        query = f"SELECT Id FROM {object_name} WHERE " + joiner.join(clauses) + " LIMIT 5"
+    return query, skipped
+
+
+def to_test_guide(flow: Flow) -> str:
+    """
+    How to actually exercise this flow, derived from its own trigger - not
+    generic advice. A record-triggered flow gets a SOQL query for a record
+    that already satisfies its entry criteria (or the closest one SOQL can
+    express); a screen or subflow gets the inputs Debug will ask for instead,
+    since there is no record to look up.
+    """
+    lines: List[str] = [f"# Testing {flow.label}", ""]
+    start = flow.start
+
+    if flow.process_type == "Flow":
+        lines += [
+            "This is a **screen flow** - a person runs it, it does not fire on its own.",
+            "",
+            "1. Open the flow in Flow Builder.",
+            "2. Click **Debug** (top right).",
+            "3. Step through the screens yourself, or fill in starting values below "
+            "if the flow takes input variables.",
+        ]
+        inputs = [v for v in flow.variables if v.is_input]
+        if inputs:
+            lines += ["", "## Input variables Debug will ask for", "",
+                      "| Name | Type | Notes |", "|---|---|---|"]
+            for v in inputs:
+                data_type = v.data_type + (f" ({v.object_type})" if v.object_type else "")
+                lines.append(f"| `{v.name}` | {data_type} | {v.description or ''} |")
+        lines.append("")
+        return "\n".join(lines)
+
+    if start.trigger_type == "PlatformEvent":
+        lines += [
+            f"This flow fires on the **{start.object}** platform event - there is no "
+            "record to query beforehand, only events already published.",
+            "",
+            "1. Open the flow in Flow Builder and click **Debug** - this runs the flow "
+            "once without needing a real event.",
+            "2. To see it fire for real, publish a test event from Setup > "
+            f"Process Automation > Platform Events, or with "
+            f"`sf data publish resume` / Workbench against `{start.object}`.",
+            "",
+        ]
+        return "\n".join(lines)
+
+    if start.object:
+        lines += [
+            f"Fires on **{start.object}** / {start.record_trigger_type} "
+            f"({start.trigger_type}).",
+            "",
+        ]
+        query, skipped = _entry_criteria_query(
+            start.object, start.filters, start.filter_logic
+        )
+        if start.filters:
+            criteria = _join((filter_text(f) for f in start.filters), start.filter_logic)
+            lines.append(f"**Entry criteria**: {criteria}")
+            lines.append("")
+        if start.filter_formula:
+            lines += [f"**Entry criteria (formula)**: `{start.filter_formula}` - not "
+                      "expressible as SOQL; check candidate records against it by hand.", ""]
+
+        lines += ["## Find a record that already matches", "", "```sql", query, "```", ""]
+        if skipped:
+            lines += [
+                "Not reflected in the query above (compares against the record's "
+                "prior value, or depends on something only known while the flow "
+                "runs):",
+                "",
+            ]
+            lines += [f"- {s}" for s in skipped]
+            lines.append("")
+
+        lines += ["## Run it", ""]
+        if start.record_trigger_type in ("Update", "CreateAndUpdate"):
+            lines += [
+                "1. Open the flow in Flow Builder and click **Debug**.",
+                "2. Choose an existing record (an Id from the query above) and pick "
+                "**\"Update the record with new field values\"** so Debug simulates "
+                "the save.",
+                "3. To see it run for real instead of in Debug, edit that record - or "
+                "a new one that satisfies the entry criteria - and save it.",
+            ]
+        else:
+            lines += [
+                "1. Open the flow in Flow Builder and click **Debug**.",
+                "2. Choose **\"Enter values for the record variable\"** and set fields "
+                "so the entry criteria are met, or Debug with a record that already "
+                "matches from the query above.",
+                "3. To see it run for real instead of in Debug, create a matching "
+                f"{start.object} record.",
+            ]
+        if start.trigger_type == "RecordBeforeSave":
+            lines.append(
+                "\nThis runs **before save** - it can only change the triggering "
+                "record's own fields, so Debug and a real save should show the same "
+                "outcome."
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+    if start.schedule:
+        lines += [
+            f"**Scheduled**: {_schedule_text(start.schedule)}.",
+            "",
+            "It has no triggering record and no entry criteria of its own - "
+            "whatever it does (querying, looping) is defined by its own elements, "
+            "not by the start.",
+            "",
+            "## Run it",
+            "",
+            "1. Open the flow in Flow Builder and click **Debug** - this runs it "
+            "immediately, without waiting for the schedule.",
+            "2. To confirm the real schedule fires, check Setup > Scheduled Jobs "
+            f"after {start.schedule.start_date} {start.schedule.start_time}.",
+            "",
+        ]
+        return "\n".join(lines)
+
+    lines += [
+        "This flow is **autolaunched with no trigger of its own** - it is meant to "
+        "be called from another flow, from Apex (`Flow.Interview`), or from a "
+        "Process Builder/Flow that still references it.",
+        "",
+        "1. Open the flow in Flow Builder and click **Debug**.",
+        "2. Provide starting values for its input variables below - Debug is the "
+        "only way to run it in isolation, since nothing here triggers it directly.",
+    ]
+    inputs = [v for v in flow.variables if v.is_input]
+    if inputs:
+        lines += ["", "## Input variables Debug will ask for", "",
+                  "| Name | Type | Notes |", "|---|---|---|"]
+        for v in inputs:
+            data_type = v.data_type + (f" ({v.object_type})" if v.object_type else "")
+            lines.append(f"| `{v.name}` | {data_type} | {v.description or ''} |")
+    lines.append("")
+    return "\n".join(lines)

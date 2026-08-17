@@ -411,6 +411,7 @@ function renderFlow(data) {
   state.approved = data.approved;
   state.status = data.status;
   state.artifacts.markdown = data.markdown;
+  state.artifacts.test = data.test_guide;
   state.artifacts.ir = JSON.stringify(data.ir, null, 2);
 
   $("empty").hidden = true;
