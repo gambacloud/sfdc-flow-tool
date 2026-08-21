@@ -73,9 +73,13 @@ def _object_shape(group: str, name: str, obj: CustomObject, note: str = "") -> S
 
 
 def _field_shape(group: str, name: str, fld: CustomField, note: str = "") -> Shape:
+    # .field-meta.xml, not the bare .field xmlgen_object.py's own naming might
+    # suggest by analogy with Flow/.flow - see server.py's _bundle_files_and_types
+    # for why: confirmed live against a real org, the bare name deploys a
+    # package.xml Salesforce cannot resolve back to the zip entry.
     return Shape(
         group=group, name=name, note=note,
-        files={f"objects/{fld.object_api_name}/fields/{fld.api_name}.field":
+        files={f"objects/{fld.object_api_name}/fields/{fld.api_name}.field-meta.xml":
                generate_field(fld)},
         types={"CustomField": [f"{fld.object_api_name}.{fld.api_name}"]},
     )

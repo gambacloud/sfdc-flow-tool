@@ -440,6 +440,11 @@ pre#code {
 }
 .plan-step-table td { padding: 3px 0; font-family: var(--mono); }
 .plan-step-deps, .plan-step-repairs { margin-top: 8px; font-size: 12px; }
+.plan-step-revise {
+  display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.plan-step-revise input { flex: 1; }
 
 .error { color: var(--danger); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
 .spin { color: var(--dim); font-size: 13px; margin-top: 10px; }

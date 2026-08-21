@@ -280,3 +280,64 @@ class TestPlanRepair:
 
         response = client.post("/api/plan/repair/start", json={"session_id": sid})
         assert response.status_code == 400
+
+
+class TestPlanStepRevise:
+    def test_empty_instruction_is_rejected(self, client, scripted):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+        response = client.post(
+            "/api/plan/step/revise/start",
+            json={"session_id": session["session_id"], "step_name": "Won Deal Flow",
+                  "instruction": "  "},
+        )
+        assert response.status_code == 400
+
+    def test_unknown_step_name_is_rejected(self, client, scripted):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+        response = client.post(
+            "/api/plan/step/revise/start",
+            json={"session_id": session["session_id"], "step_name": "Ghost",
+                  "instruction": "change it"},
+        )
+        assert response.status_code == 404
+
+    def test_revise_regenerates_only_the_named_step(self, client, scripted):
+        # Bundle plan + its three generations, then one more Field payload
+        # for the revision itself.
+        scripted(BUNDLE_PLAN, VALID_OBJECT, VALID_FIELD, VALID_APEX, VALID_FIELD)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        started = client.post(
+            "/api/plan/step/revise/start",
+            json={"session_id": sid, "step_name": "Field",
+                  "instruction": "make it a Currency field instead"},
+        )
+        assert started.status_code == 200, started.text
+        revised = poll(client, "/api/plan/step/revise/status", session_id=sid)
+        assert revised.status_code == 200, revised.text
+        data = revised.json()
+
+        assert data["version"] == session["version"] + 1
+        assert data["approved"] is False  # revising revokes approval
+        by_name = {s["name"]: s for s in data["steps"]}
+        assert by_name["Object"]["repairs"] == 0, "untouched step should not be re-run"
+        assert by_name["Apex"]["repairs"] == 0, "untouched step should not be re-run"
+
+    def test_revise_can_run_before_any_validate(self, client, scripted):
+        # No approve/validate at all - proves this is the proactive path,
+        # not gated behind having already failed a deploy like repair is.
+        scripted(ONE_STEP_PLAN, VALID_FLOW, VALID_FLOW)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        started = client.post(
+            "/api/plan/step/revise/start",
+            json={"session_id": sid, "step_name": "Won Deal Flow",
+                  "instruction": "also mark the account hot"},
+        )
+        assert started.status_code == 200, started.text
+        revised = poll(client, "/api/plan/step/revise/status", session_id=sid)
+        assert revised.status_code == 200, revised.text

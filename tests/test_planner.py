@@ -11,7 +11,9 @@ from pydantic import ValidationError
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
-from flowtool.planner import Plan, PlanStep, PlannerGenerator, execute_plan, repair_step
+from flowtool.planner import (
+    Plan, PlanStep, PlannerGenerator, execute_plan, refine_step, repair_step,
+)
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider
@@ -198,6 +200,38 @@ class TestRepairStep:
 
         provider.payloads.append(VALID_OBJECT)
         repair_step(provider, first, ["some failure"])
+
+        second_call = provider.calls[-1]
+        assert second_call[0].content == "an Invoice object", "lost the original brief"
+
+
+class TestRefineStep:
+    def test_field_step_is_refined_with_a_proactive_instruction(self):
+        # The "before validating" sibling to TestRepairStep - same
+        # conversation continuation, but the instruction is a person's
+        # request, not a Salesforce failure.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="field", name="Field", brief="an Amount field"),
+        ])
+        provider = ScriptedProvider(VALID_FIELD)
+        first = execute_plan(provider, plan)[0]
+
+        provider.payloads.append(VALID_FIELD)
+        refined = refine_step(provider, first, "make it a Currency field instead")
+        assert isinstance(refined.value, CustomField)
+
+        instruction = provider.calls[-1][-1].content
+        assert instruction == "make it a Currency field instead"
+
+    def test_refine_continues_the_original_conversation(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="object", name="Object", brief="an Invoice object"),
+        ])
+        provider = ScriptedProvider(VALID_OBJECT)
+        first = execute_plan(provider, plan)[0]
+
+        provider.payloads.append(VALID_OBJECT)
+        refine_step(provider, first, "rename the plural label")
 
         second_call = provider.calls[-1]
         assert second_call[0].content == "an Invoice object", "lost the original brief"

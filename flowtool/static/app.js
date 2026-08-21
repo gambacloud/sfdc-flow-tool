@@ -666,6 +666,23 @@ function renderPlanStep(step) {
     body.appendChild(note);
   }
 
+  // Proactive, per-step change - unlike "Ask the model to fix these" on the
+  // result panel below, which only exists once Salesforce has rejected
+  // something. This runs before anything has been validated at all.
+  const reviseRow = document.createElement("div");
+  reviseRow.className = "plan-step-revise";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Ask for a change to this step";
+  const reviseBtn = document.createElement("button");
+  reviseBtn.textContent = "Revise";
+  reviseBtn.onclick = () => planStepRevise(step.name, input, reviseBtn);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") reviseBtn.click();
+  });
+  reviseRow.append(input, reviseBtn);
+  body.appendChild(reviseRow);
+
   card.appendChild(body);
   return card;
 }
@@ -1303,6 +1320,26 @@ async function planRepair(button) {
   } catch (err) {
     showError($("planGate").parentElement, err.message);
     logError("Repair plan", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function planStepRevise(stepName, input, button) {
+  const instruction = input.value.trim();
+  if (!instruction) return;
+  showError($("planGate").parentElement, "");
+  busy(button, true, "Revising...");
+  try {
+    await api("api/plan/step/revise/start", {
+      session_id: state.planSessionId, step_name: stepName, instruction,
+    });
+    const data = await poll("api/plan/step/revise/status", { session_id: state.planSessionId });
+    state.planValidatedVersion = null;
+    renderPlan(data);
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Revise step", err.message);
   } finally {
     busy(button, false);
   }

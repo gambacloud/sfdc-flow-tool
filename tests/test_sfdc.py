@@ -36,7 +36,7 @@ class TestBuildDeployPackage:
         zip_bytes = build_deploy_package(
             files={
                 "objects/Invoice__c.object": "<CustomObject/>",
-                "objects/Invoice__c/fields/Amount__c.field": "<CustomField/>",
+                "objects/Invoice__c/fields/Amount__c.field-meta.xml": "<CustomField/>",
                 "classes/Helper.cls": "public class Helper {}",
                 "classes/Helper.cls-meta.xml": "<ApexClass/>",
             },
@@ -54,7 +54,7 @@ class TestBuildDeployPackage:
         assert names == {
             "package.xml",
             "objects/Invoice__c.object",
-            "objects/Invoice__c/fields/Amount__c.field",
+            "objects/Invoice__c/fields/Amount__c.field-meta.xml",
             "classes/Helper.cls",
             "classes/Helper.cls-meta.xml",
         }

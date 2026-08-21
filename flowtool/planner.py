@@ -229,16 +229,15 @@ def execute_plan(
     return [by_name[step.name] for step in plan.steps]
 
 
-def repair_step(
-    provider: Provider, previous: StepResult, failures: List[str],
-    max_repairs: int = DEFAULT_MAX_REPAIRS,
+def _rerun_step(
+    provider: Provider, previous: StepResult, apply, max_repairs: int = DEFAULT_MAX_REPAIRS,
 ) -> StepResult:
     """
-    Re-run one step's generator with Salesforce's own deploy failures fed
-    back in, continuing the conversation that produced it rather than
-    starting fresh - the same repair_from_salesforce every generator already
-    supports (FlowGenerator's own, or the one CustomObjectGenerator/
-    CustomFieldGenerator/ApexClassGenerator inherit from IRGenerator).
+    Shared machinery behind repair_step and refine_step: unwrap a StepResult
+    back into whatever shape its generator's own methods expect
+    (GenerationResult for Flow, IRGenerationResult for everything else),
+    call `apply(generator, prior)` to actually continue the conversation,
+    then re-wrap the answer as a StepResult.
     """
     generator_cls = _GENERATOR_BY_TYPE[previous.step.artifact_type]
     generator = generator_cls(provider, max_repairs=max_repairs)
@@ -252,8 +251,44 @@ def repair_step(
             value=previous.value, messages=previous.messages, repairs=previous.repairs
         )
 
-    raw = generator.repair_from_salesforce(prior, failures)
+    raw = apply(generator, prior)
     value = raw.flow if isinstance(raw, GenerationResult) else raw.value
     return StepResult(
         step=previous.step, value=value, repairs=raw.repairs, messages=raw.messages
+    )
+
+
+def repair_step(
+    provider: Provider, previous: StepResult, failures: List[str],
+    max_repairs: int = DEFAULT_MAX_REPAIRS,
+) -> StepResult:
+    """
+    Re-run one step's generator with Salesforce's own deploy failures fed
+    back in - reactive, after the org has rejected it. Continues the
+    conversation that produced the step rather than starting fresh, via the
+    repair_from_salesforce every generator already supports (FlowGenerator's
+    own, or the one CustomObjectGenerator/CustomFieldGenerator/
+    ApexClassGenerator inherit from IRGenerator).
+    """
+    return _rerun_step(
+        provider, previous,
+        lambda generator, prior: generator.repair_from_salesforce(prior, failures),
+        max_repairs,
+    )
+
+
+def refine_step(
+    provider: Provider, previous: StepResult, instruction: str,
+    max_repairs: int = DEFAULT_MAX_REPAIRS,
+) -> StepResult:
+    """
+    Re-run one step's generator with a change the person asked for - the
+    proactive sibling to repair_step: "make this different" rather than
+    "Salesforce rejected this." Same underlying refine() every generator
+    supports, same conversation continuation.
+    """
+    return _rerun_step(
+        provider, previous,
+        lambda generator, prior: generator.refine(prior, instruction),
+        max_repairs,
     )

@@ -41,7 +41,9 @@ from flowtool.llm import (
 from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
-from flowtool.planner import Plan, PlannerGenerator, StepResult, execute_plan, repair_step
+from flowtool.planner import (
+    Plan, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
+)
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
@@ -1043,6 +1045,12 @@ class PlanExecuteRequest(BaseModel):
     plan_id: str
 
 
+class PlanStepReviseRequest(BaseModel):
+    session_id: str
+    step_name: str
+    instruction: str
+
+
 @dataclass
 class PendingPlan:
     """A planning call running in the background - same shape as PendingDesign,
@@ -1192,7 +1200,15 @@ def _bundle_files_and_types(
             files[f"objects/{value.api_name}.object"] = generate_object(value)
             types.setdefault("CustomObject", []).append(value.api_name)
         elif isinstance(value, CustomField):
-            files[f"objects/{value.object_api_name}/fields/{value.api_name}.field"] = \
+            # Unlike Flow (.flow) and CustomObject (.object) - older types
+            # whose bare-extension convention predates -meta.xml and is kept
+            # for backward compatibility - a standalone CustomField member
+            # needs the modern .field-meta.xml suffix. Confirmed live: the
+            # bare .field name deployed a package.xml that named the field
+            # correctly but Salesforce could not find the file at that path
+            # in the zip ("named in package.xml, but was not found in
+            # zipped directory") for every field, new object or existing.
+            files[f"objects/{value.object_api_name}/fields/{value.api_name}.field-meta.xml"] = \
                 generate_field(value)
             types.setdefault("CustomField", []).append(
                 f"{value.object_api_name}.{value.api_name}"
@@ -1452,6 +1468,55 @@ async def plan_repair_status(session_id: str) -> Dict[str, Any]:
     # Bumping the version (not touching approved_version) is what makes
     # session.approved false again - the same mechanism Session.record()
     # relies on for the single-Flow path, not a separate reset here.
+    session.version += 1
+    session.apply_policy()
+    return {"done": True, **plan_view(session_id, session)}
+
+
+def _revise_plan_step(
+    provider: Provider, steps: List[StepResult], step_name: str, instruction: str
+) -> List[StepResult]:
+    """Re-run the one named step with a proactive change request - the
+    "before validating" counterpart to _repair_plan's "after it's rejected"."""
+    return [
+        refine_step(provider, step, instruction) if step.step.name == step_name else step
+        for step in steps
+    ]
+
+
+@app.post("/api/plan/step/revise/start")
+async def plan_step_revise_start(body: PlanStepReviseRequest) -> Dict[str, Any]:
+    """Ask the model to change one step, before anything has been validated."""
+    session = get_plan_session(body.session_id)
+    if not body.instruction.strip():
+        raise HTTPException(400, "Say what should change.")
+    if not any(s.step.name == body.step_name for s in session.steps):
+        raise HTTPException(404, f"No such step: {body.step_name!r}")
+    if session.pending_llm is not None and not session.pending_llm.task.done():
+        raise HTTPException(409, "Another request is already running for this plan.")
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            _revise_plan_step, session.provider, session.steps, body.step_name, body.instruction,
+        )
+    )
+    session.pending_llm = PendingLLM(
+        task=task, note=f"Revised {body.step_name}: {body.instruction}"
+    )
+    return {"started": True}
+
+
+@app.get("/api/plan/step/revise/status")
+async def plan_step_revise_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    pending = session.pending_llm
+    if pending is None:
+        raise HTTPException(
+            400, "No revision in progress - call /api/plan/step/revise/start first."
+        )
+    if not pending.task.done():
+        return waiting(session.provider)
+    session.pending_llm = None
+    session.steps = llm_result(pending.task)
     session.version += 1
     session.apply_policy()
     return {"done": True, **plan_view(session_id, session)}
