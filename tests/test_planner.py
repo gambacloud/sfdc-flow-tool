@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
-from flowtool.planner import Plan, PlanStep, PlannerGenerator, execute_plan
+from flowtool.planner import Plan, PlanStep, PlannerGenerator, execute_plan, repair_step
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider
@@ -149,3 +149,55 @@ class TestExecutePlan:
         by_name = {r.step.name: r for r in results}
         assert isinstance(by_name["Object"].value, CustomObject)
         assert isinstance(by_name["Field"].value, CustomField)
+
+
+class TestRepairStep:
+    def test_flow_step_is_repaired_from_salesforce_errors(self):
+        plan = Plan(steps=[PlanStep(artifact_type="flow", name="Flow", brief="build it")])
+        provider = ScriptedProvider(VALID_FLOW)
+        first = execute_plan(provider, plan)[0]
+
+        provider.payloads.append(VALID_FLOW)
+        repaired = repair_step(
+            provider, first,
+            ["[Error] Mark_Hot (Update Records) - You can't use the sObjectInputReference field"],
+        )
+        assert isinstance(repaired.value, Flow)
+
+        instruction = provider.calls[-1][-1].content
+        assert "Salesforce rejected" in instruction
+        assert "sObjectInputReference" in instruction
+
+    def test_field_step_is_repaired_via_the_inherited_base_method(self):
+        # CustomFieldGenerator has no repair_from_salesforce of its own - this
+        # pins down that the one it inherits from IRGenerator actually works
+        # end to end, not just that it exists.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="field", name="Field", brief="an Amount field"),
+        ])
+        provider = ScriptedProvider(VALID_FIELD)
+        first = execute_plan(provider, plan)[0]
+
+        provider.payloads.append(VALID_FIELD)
+        repaired = repair_step(
+            provider, first, ["Field does not exist: Amount__c on Invoice__c"],
+        )
+        assert isinstance(repaired.value, CustomField)
+        assert repaired.value.api_name == "Amount__c"
+
+        instruction = provider.calls[-1][-1].content
+        assert "Salesforce rejected" in instruction
+        assert "Amount__c" in instruction
+
+    def test_repair_continues_the_original_conversation(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="object", name="Object", brief="an Invoice object"),
+        ])
+        provider = ScriptedProvider(VALID_OBJECT)
+        first = execute_plan(provider, plan)[0]
+
+        provider.payloads.append(VALID_OBJECT)
+        repair_step(provider, first, ["some failure"])
+
+        second_call = provider.calls[-1]
+        assert second_call[0].content == "an Invoice object", "lost the original brief"

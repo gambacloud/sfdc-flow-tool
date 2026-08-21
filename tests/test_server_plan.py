@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
-from flowtool.sfdc import DeployResult
+from flowtool.sfdc import ComponentProblem, DeployResult
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import ScriptedProvider, VALID as VALID_FLOW
@@ -217,3 +217,66 @@ class TestPlanSessionView:
 
     def test_unknown_session_is_404(self, client):
         assert client.get("/api/plan/session/nope").status_code == 404
+
+
+class TestPlanRepair:
+    def test_repair_without_a_failure_is_rejected(self, client, scripted):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+        response = client.post("/api/plan/repair/start", json={"session_id": session["session_id"]})
+        assert response.status_code == 400
+
+    def test_repair_regenerates_only_the_step_a_failure_names(self, client, scripted, monkeypatch):
+        # Queue the bundle plan, its three step generations, then the fixed
+        # field payload the repair round should ask for.
+        scripted(BUNDLE_PLAN, VALID_OBJECT, VALID_FIELD, VALID_APEX, VALID_FIELD)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            return DeployResult(
+                "1", "Failed", False,
+                failures=[ComponentProblem(
+                    "Amount__c", "Field does not exist: Amount__c on Invoice__c", "Error",
+                )],
+            )
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/validate/start", json={"session_id": sid})
+        validated = poll(client, "/api/plan/validate/status", session_id=sid)
+        assert validated.json()["success"] is False
+
+        started = client.post("/api/plan/repair/start", json={"session_id": sid})
+        assert started.status_code == 200, started.text
+        repaired = poll(client, "/api/plan/repair/status", session_id=sid)
+        assert repaired.status_code == 200, repaired.text
+        data = repaired.json()
+
+        # A new version, not yet approved - the same "repair revokes
+        # approval" discipline test_server.py pins for the single-Flow path.
+        assert data["version"] == session["version"] + 1
+        assert data["approved"] is False
+
+        by_name = {s["name"]: s for s in data["steps"]}
+        assert by_name["Object"]["repairs"] == 0, "untouched step should not be re-run"
+        assert by_name["Apex"]["repairs"] == 0, "untouched step should not be re-run"
+        # Only the Field generator's queued payload was consumed for the
+        # repair - if Object or Apex had also been re-run, this would be off.
+
+    def test_repairing_stale_failures_after_a_successful_validate_is_rejected(
+        self, client, scripted, monkeypatch
+    ):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+        sid = session["session_id"]
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/validate/start", json={"session_id": sid})
+        poll(client, "/api/plan/validate/status", session_id=sid)
+
+        response = client.post("/api/plan/repair/start", json={"session_id": sid})
+        assert response.status_code == 400

@@ -734,6 +734,11 @@ function renderPlanResult(result) {
       list.appendChild(item);
     });
     box.appendChild(list);
+
+    const fix = document.createElement("button");
+    fix.textContent = "Ask the model to fix these";
+    fix.onclick = () => planRepair(fix);
+    box.appendChild(fix);
   }
 }
 
@@ -1266,6 +1271,21 @@ async function planValidate() {
   } catch (err) {
     showError($("planGate").parentElement, err.message);
     logError("Validate plan", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function planRepair(button) {
+  busy(button, true, "Repairing...");
+  try {
+    await api("api/plan/repair/start", { session_id: state.planSessionId });
+    const data = await poll("api/plan/repair/status", { session_id: state.planSessionId });
+    state.planValidatedVersion = null;
+    renderPlan(data);
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Repair plan", err.message);
   } finally {
     busy(button, false);
   }

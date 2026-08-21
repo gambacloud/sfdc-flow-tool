@@ -1443,6 +1443,43 @@ class IRGenerator(Generic[T]):
             f"Last errors:\n{last_error}"
         )
 
+    def refine(
+        self, previous: IRGenerationResult[T], instruction: str
+    ) -> IRGenerationResult[T]:
+        """
+        Apply a change to a previously generated instance. The conversation
+        continues from where it left off, so the model edits what it already
+        produced rather than starting over from the description alone.
+
+        FlowGenerator defines its own version of this (see below) because it
+        deals in the legacy GenerationResult (`.flow`), not this class's
+        IRGenerationResult (`.value`) - that override shadows this one for
+        Flow, so this is what CustomObjectGenerator, CustomFieldGenerator and
+        ApexClassGenerator get for free without repeating it.
+        """
+        conversation = list(previous.messages)
+        conversation.append(
+            Message(
+                role="assistant",
+                content=previous.value.model_dump_json(exclude_none=True, indent=1),
+            )
+        )
+        conversation.append(Message(role="user", content=instruction))
+        return self._validated(conversation)
+
+    def repair_from_salesforce(
+        self, previous: IRGenerationResult[T], failures: List[str]
+    ) -> IRGenerationResult[T]:
+        """Feed real deploy failures back in - the loop that turns an org's
+        rejection into a corrected result rather than a dead end."""
+        problems = "\n".join(f"- {failure}" for failure in failures)
+        return self.refine(
+            previous,
+            "Salesforce rejected this with these errors:\n\n"
+            f"{problems}\n\n"
+            "Correct it so the deploy passes. Change only what these errors require.",
+        )
+
 
 @dataclass
 class GenerationResult:

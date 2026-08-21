@@ -41,7 +41,7 @@ from flowtool.llm import (
 from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
-from flowtool.planner import Plan, PlannerGenerator, StepResult, execute_plan
+from flowtool.planner import Plan, PlannerGenerator, StepResult, execute_plan, repair_step
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
@@ -1094,6 +1094,14 @@ class PlanSession:
     version: int = 1
     approved_version: int = 0
     pending_deploy: Optional[PendingDeploy] = None
+    pending_llm: Optional[PendingLLM] = None
+    # What the org said last time validate failed. `last_failures` is the
+    # human-readable form the UI shows; `last_component_failures` keeps each
+    # failure's own component name (ComponentProblem.full_name) alongside it,
+    # so a repair can route each failure to the step it actually names
+    # instead of re-generating the whole plan - see _repair_plan.
+    last_failures: List[str] = field(default_factory=list)
+    last_component_failures: List[Any] = field(default_factory=list)
 
     @property
     def approved(self) -> bool:
@@ -1330,11 +1338,14 @@ async def plan_validate_status(session_id: str) -> Dict[str, Any]:
         return {"done": False}
     session.pending_deploy = None
     result = pending.task.result()
+    failures = _failures(result)
+    session.last_failures = failures
+    session.last_component_failures = list(result.failures)
     return {
         "done": True,
         "success": result.success,
         "status": result.status,
-        "failures": _failures(result),
+        "failures": failures,
         "checked_version": session.version,
     }
 
@@ -1367,6 +1378,83 @@ async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
         "failures": _failures(result),
         "instance_url": pending.instance_url,
     }
+
+
+def _repair_plan(
+    provider: Provider, steps: List[StepResult], failures: List[str],
+    component_failures: List[Any],
+) -> List[StepResult]:
+    """
+    Route each failure to the step it actually names, and re-run only that
+    step through repair_step - a step no failure names comes back unchanged,
+    so a plan with one bad Apex class doesn't also spend a generation call
+    re-rolling the Object and Field steps that already deployed cleanly.
+
+    Routing is by ComponentProblem.full_name, not a text search over the
+    rendered failure string: an object's api_name can appear as a plain
+    substring of an unrelated field's own failure text (e.g. "Invoice__c" is
+    a substring of "Field does not exist: Amount__c on Invoice__c"), which a
+    naive `api_name in failure_text` match would wrongly also route to the
+    Object step. full_name is Salesforce's own answer to "which component is
+    this error about" - an Apex compile error's full_name is the class, even
+    when the underlying cause is a field another step creates; a
+    CustomField-specific failure's full_name may be dotted
+    ("Object__c.Field__c"), so a step's api_name is matched as either the
+    whole full_name or the part after the last dot.
+
+    When there is no structured full_name to go on (an org-level
+    error_message with no per-component detail), every step is retried with
+    the same undifferentiated failure text - there is nothing to route by.
+    """
+    updated: List[StepResult] = []
+    for step in steps:
+        if component_failures:
+            matched = [
+                str(problem) for problem in component_failures
+                if problem.full_name == step.value.api_name
+                or problem.full_name.endswith(f".{step.value.api_name}")
+            ]
+        else:
+            matched = failures
+        updated.append(repair_step(provider, step, matched) if matched else step)
+    return updated
+
+
+@app.post("/api/plan/repair/start")
+async def plan_repair_start(body: OrgRequest) -> Dict[str, Any]:
+    """Feed the last validation/deploy failures back to whichever step(s) they name."""
+    session = get_plan_session(body.session_id)
+    failures = session.last_failures
+    if not failures:
+        raise HTTPException(400, "Nothing to repair - run a validation first.")
+    if session.pending_llm is not None and not session.pending_llm.task.done():
+        raise HTTPException(409, "Another request is already running for this plan.")
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            _repair_plan, session.provider, session.steps, failures,
+            session.last_component_failures,
+        )
+    )
+    session.pending_llm = PendingLLM(task=task, note="Repaired from Salesforce errors")
+    return {"started": True}
+
+
+@app.get("/api/plan/repair/status")
+async def plan_repair_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    pending = session.pending_llm
+    if pending is None:
+        raise HTTPException(400, "No repair in progress - call /api/plan/repair/start first.")
+    if not pending.task.done():
+        return waiting(session.provider)
+    session.pending_llm = None
+    session.steps = llm_result(pending.task)
+    # Bumping the version (not touching approved_version) is what makes
+    # session.approved false again - the same mechanism Session.record()
+    # relies on for the single-Flow path, not a separate reset here.
+    session.version += 1
+    session.apply_policy()
+    return {"done": True, **plan_view(session_id, session)}
 
 
 @app.get("/api/plan/session/{session_id}")

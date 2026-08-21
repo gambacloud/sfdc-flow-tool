@@ -196,6 +196,11 @@ class StepResult:
     step: PlanStep
     value: StepValue
     repairs: int
+    # The conversation that produced `value` - kept so a later repair round
+    # (feeding Salesforce's own deploy failures back in) can continue it with
+    # generator.refine()/.repair_from_salesforce() instead of starting over
+    # with no memory of what was already tried.
+    messages: List[Message]
 
 
 def execute_plan(
@@ -217,6 +222,38 @@ def execute_plan(
         generator = generator_cls(provider, max_repairs=max_repairs)
         raw = generator.generate(step.brief)
         value = raw.flow if isinstance(raw, GenerationResult) else raw.value
-        by_name[step.name] = StepResult(step=step, value=value, repairs=raw.repairs)
+        by_name[step.name] = StepResult(
+            step=step, value=value, repairs=raw.repairs, messages=raw.messages
+        )
 
     return [by_name[step.name] for step in plan.steps]
+
+
+def repair_step(
+    provider: Provider, previous: StepResult, failures: List[str],
+    max_repairs: int = DEFAULT_MAX_REPAIRS,
+) -> StepResult:
+    """
+    Re-run one step's generator with Salesforce's own deploy failures fed
+    back in, continuing the conversation that produced it rather than
+    starting fresh - the same repair_from_salesforce every generator already
+    supports (FlowGenerator's own, or the one CustomObjectGenerator/
+    CustomFieldGenerator/ApexClassGenerator inherit from IRGenerator).
+    """
+    generator_cls = _GENERATOR_BY_TYPE[previous.step.artifact_type]
+    generator = generator_cls(provider, max_repairs=max_repairs)
+
+    if previous.step.artifact_type == "flow":
+        prior = GenerationResult(
+            flow=previous.value, messages=previous.messages, repairs=previous.repairs
+        )
+    else:
+        prior = IRGenerationResult(
+            value=previous.value, messages=previous.messages, repairs=previous.repairs
+        )
+
+    raw = generator.repair_from_salesforce(prior, failures)
+    value = raw.flow if isinstance(raw, GenerationResult) else raw.value
+    return StepResult(
+        step=previous.step, value=value, repairs=raw.repairs, messages=raw.messages
+    )
