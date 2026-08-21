@@ -256,11 +256,21 @@ class TestGeminiServerErrorRetry:
             )
 
         monkeypatch.setattr(provider._client.models, "generate_content", rate_limited)
-        # Only one key configured, so key rotation has nowhere to go and the
-        # original error surfaces - not retried as if it were a 503.
+        # Only one key configured, so there's nothing to switch to - but a
+        # 429 is still waited out (see TestGeminiRateLimit), just not via key
+        # rotation. Every retry keeps hitting the same mock, so this still
+        # ends in the same error - it just takes the retry budget to get there.
+        calls = {"n": 0}
+
+        def counting(**kwargs):
+            calls["n"] += 1
+            return rate_limited(**kwargs)
+
+        monkeypatch.setattr(provider._client.models, "generate_content", counting)
         with pytest.raises(errors.ClientError):
             provider._generate()
         assert provider.retry_status is None
+        assert calls["n"] > 1, "should have retried before giving up"
 
     def test_retry_status_reports_a_rate_limit_switch(self, monkeypatch):
         provider = GeminiProvider(api_key="fake-key-for-test")
@@ -281,6 +291,128 @@ class TestGeminiServerErrorRetry:
         monkeypatch.setattr(provider._clients[1].models, "generate_content", rate_limited_once)
         assert provider._generate() == "ok"
         assert provider.retry_status is None  # cleared on the eventual success
+
+
+class TestGeminiRateLimit:
+    """
+    A 429 with no untried key left is not a dead end: Google's own message
+    names a retry delay ("Please retry in 31.5s"), and free-tier quotas reset
+    on their own - so this waits it out instead of failing outright, the
+    real-world case that motivated it (a single free-tier key, 5 requests a
+    minute, hit mid-plan).
+    """
+
+    def _provider(self, monkeypatch, n_keys=1):
+        provider = GeminiProvider(api_key="fake-key-for-test")
+        for _ in range(n_keys - 1):
+            # A genuinely distinct client per slot, not the same object
+            # appended twice - each test patches generate_content per client
+            # to prove *that* key was actually attempted, which a shared
+            # object can't distinguish.
+            provider._clients.append(GeminiProvider(api_key="fake-key-for-test")._clients[0])
+        monkeypatch.setattr("time.sleep", lambda seconds: None)
+        return provider
+
+    def _quota_error(self, message="Please retry in 31.559251234s."):
+        from google.genai import errors
+        return errors.ClientError(
+            429, {"error": {"message": message, "status": "RESOURCE_EXHAUSTED"}}
+        )
+
+    def test_parses_the_suggested_delay_from_the_message(self):
+        from flowtool.llm import _parse_retry_delay
+        assert _parse_retry_delay("Please retry in 31.559251234s.") == 32  # rounded up
+
+    def test_falls_back_to_a_default_when_unparseable(self):
+        from flowtool.llm import _GEMINI_RATE_LIMIT_FALLBACK_WAIT, _parse_retry_delay
+        assert _parse_retry_delay("quota exceeded, no delay given") == \
+            _GEMINI_RATE_LIMIT_FALLBACK_WAIT
+        assert _parse_retry_delay(None) == _GEMINI_RATE_LIMIT_FALLBACK_WAIT
+
+    def test_waits_out_the_limit_on_a_single_key_and_succeeds(self, monkeypatch):
+        provider = self._provider(monkeypatch, n_keys=1)
+        calls = {"n": 0}
+
+        def flaky(**kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise self._quota_error()
+            return "ok"
+
+        monkeypatch.setattr(provider._client.models, "generate_content", flaky)
+        assert provider._generate() == "ok"
+        assert calls["n"] == 3
+        assert provider.retry_status is None
+
+    def test_reports_wait_time_while_every_key_is_exhausted(self, monkeypatch):
+        provider = self._provider(monkeypatch, n_keys=1)
+        seen = []
+
+        def flaky(**kwargs):
+            seen.append(provider.retry_status)
+            if len(seen) < 2:
+                raise self._quota_error("Please retry in 5s.")
+            return "ok"
+
+        monkeypatch.setattr(provider._client.models, "generate_content", flaky)
+        provider._generate()
+        assert seen[0] is None
+        assert seen[1]["reason"] == "rate_limited"
+        assert seen[1]["wait"] == 5
+
+    def test_gives_up_after_the_rate_limit_retry_budget(self, monkeypatch):
+        provider = self._provider(monkeypatch, n_keys=1)
+
+        def always_limited(**kwargs):
+            raise self._quota_error()
+
+        monkeypatch.setattr(provider._client.models, "generate_content", always_limited)
+        from google.genai import errors
+        with pytest.raises(errors.ClientError):
+            provider._generate()
+        assert provider.retry_status is None
+
+    def test_all_keys_are_tried_before_waiting(self, monkeypatch):
+        # Three keys, all rate-limited: every one should be tried (key
+        # rotation) before falling back to waiting out the delay - waiting
+        # should not pre-empt a key that was never actually attempted.
+        provider = self._provider(monkeypatch, n_keys=3)
+        provider._key_index = 0  # pin the random start for a deterministic assertion
+        attempted = set()
+
+        for i, client in enumerate(provider._clients):
+            def make(i=i):
+                def fn(**kwargs):
+                    attempted.add(i)
+                    raise self._quota_error("Please retry in 1s.")
+                return fn
+            monkeypatch.setattr(client.models, "generate_content", make())
+
+        from google.genai import errors
+        with pytest.raises(errors.ClientError):
+            provider._generate()
+        assert attempted == {0, 1, 2}
+
+    def test_starting_key_index_is_randomised_across_configured_keys(self, monkeypatch):
+        # Not a statistical test - proves __init__ actually consults
+        # random.randrange with the real key count (3), rather than always
+        # starting at index 0 regardless of how many keys are configured.
+        # That's what lets several separate requests, each a fresh provider
+        # (see build_provider in server.py), spread across every key from
+        # the start instead of hammering key 1 alone until it trips.
+        import flowtool.llm as llm_module
+
+        monkeypatch.setattr(llm_module, "_gemini_keys", lambda: ["k1", "k2", "k3"])
+        seen_n = {}
+
+        def fake_randrange(n):
+            seen_n["n"] = n
+            return 2
+
+        monkeypatch.setattr("random.randrange", fake_randrange)
+        provider = GeminiProvider()
+        assert seen_n["n"] == 3
+        assert provider._key_index == 2
 
 
 RAW = Flow.model_json_schema()

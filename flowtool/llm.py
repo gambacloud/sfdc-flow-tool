@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -683,6 +685,29 @@ _GEMINI_THINKING = {
 # substitute for the user retrying by hand if the model is down for a while.
 _GEMINI_SERVER_ERROR_BACKOFF = (2, 5, 10)
 
+# How many times to wait out a 429 once every configured key has hit it -
+# rotating keys only helps for as long as there is an untried one; after
+# that, the only thing left to do with a free-tier quota (as low as 5
+# requests/minute) is wait for it to reset, which is exactly what Google's
+# own "retry in Ns" tells us to do.
+_GEMINI_RATE_LIMIT_RETRIES = 2
+
+# Google's message reads "...Please retry in 31.559251234s." - this is the
+# fallback wait when that can't be parsed out of it (an API change, an
+# unexpected message shape), not the common case.
+_GEMINI_RATE_LIMIT_FALLBACK_WAIT = 20.0
+
+_RETRY_DELAY_RE = re.compile(r"retry in\s+([\d.]+)\s*s", re.IGNORECASE)
+
+
+def _parse_retry_delay(message: Optional[str]) -> float:
+    match = _RETRY_DELAY_RE.search(message or "")
+    if not match:
+        return _GEMINI_RATE_LIMIT_FALLBACK_WAIT
+    # Google's own number is precise to the microsecond; round up so a retry
+    # fired right at the edge doesn't land a moment early and repeat the wait.
+    return math.ceil(float(match.group(1)))
+
 # Gemini caps how large a response_json_schema may be, and it counts the schema
 # with every $ref inlined - so a definition referenced from six places costs six
 # times. Over the cap the whole request is rejected with a flat
@@ -831,7 +856,14 @@ class GeminiProvider:
                 "    $env:GOOGLE_API_KEY = '...'"
             )
         self._clients = [genai.Client(api_key=key) for key in keys]
-        self._key_index = 0
+        # Starting from a random key, not always the first, so that many
+        # separate requests (a fresh provider each - see build_provider in
+        # server.py) spread their load across every configured key from the
+        # start, instead of key 1 alone absorbing every request until it
+        # trips a rate limit and only then spilling over to key 2. Rotation
+        # on a hit (see _generate) still always moves forward from wherever
+        # this started.
+        self._key_index = random.randrange(len(self._clients))
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
@@ -850,17 +882,22 @@ class GeminiProvider:
 
     def _generate(self, **kwargs):
         """
-        Runs generate_content, rotating to the next Gemini key on a rate
-        limit and retrying with backoff on a server error. Free-tier limits
-        are per Google Cloud project, not per key - two keys under the same
-        project share one quota - so key rotation only helps when
+        Runs generate_content, rotating to the next untried Gemini key on a
+        rate limit and retrying with backoff on a server error. Free-tier
+        limits are per Google Cloud project, not per key - two keys under the
+        same project share one quota - so key rotation only helps when
         GEMINI_API_KEY2 (GEMINI_API_KEY3, ...) genuinely belongs to a
-        different project. Anything else is raised straight through; the
-        caller's own except clauses handle those.
+        different project. Once every key has hit the limit (including the
+        common case of just one key configured), the only thing left to do
+        is wait out the delay Google's own error names and try again - see
+        _GEMINI_RATE_LIMIT_RETRIES. Anything else is raised straight through;
+        the caller's own except clauses handle those.
         """
         from google.genai import errors
 
         server_error_attempt = 0
+        keys_tried = 0
+        rate_limit_attempt = 0
         while True:
             try:
                 result = self._client.models.generate_content(**kwargs)
@@ -868,19 +905,49 @@ class GeminiProvider:
                 return result
             except errors.ClientError as exc:
                 rate_limited = exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED"
-                if not rate_limited or self._key_index == len(self._clients) - 1:
+                if not rate_limited:
                     self.retry_status = None
                     raise
+
+                keys_tried += 1
+                if keys_tried < len(self._clients):
+                    # An untried key remains - wrap around from wherever the
+                    # random starting index landed, rather than assuming key
+                    # 1 is next just because it's index 0.
+                    self._key_index = (self._key_index + 1) % len(self._clients)
+                    log.warning(
+                        "Gemini key rate-limited (%d/%d tried), switching key",
+                        keys_tried, len(self._clients),
+                    )
+                    self.retry_status = {
+                        "reason": "rate_limited",
+                        "message": f"Rate limited ({keys_tried}/{len(self._clients)} keys "
+                                   "tried) - switching key and retrying.",
+                    }
+                    continue
+
+                # Every key has now hit the limit. Wait out the delay Google
+                # itself gave us (parsed from the message; a documented
+                # RetryInfo field would be more precise, but the message is
+                # what has actually been observed and is stable to parse).
+                if rate_limit_attempt >= _GEMINI_RATE_LIMIT_RETRIES:
+                    self.retry_status = None
+                    raise
+                wait = _parse_retry_delay(exc.message)
+                rate_limit_attempt += 1
+                keys_tried = 0
                 log.warning(
-                    "Gemini key %d/%d rate-limited, switching to key %d",
-                    self._key_index + 1, len(self._clients), self._key_index + 2,
+                    "Gemini rate limit on every key (attempt %d/%d), retrying in %ss: %s",
+                    rate_limit_attempt, _GEMINI_RATE_LIMIT_RETRIES, wait, exc.message,
                 )
                 self.retry_status = {
                     "reason": "rate_limited",
-                    "message": f"Rate limited on key {self._key_index + 1}/"
-                               f"{len(self._clients)} - switching key and retrying.",
+                    "message": f"Rate limited on every configured key (attempt "
+                               f"{rate_limit_attempt}/{_GEMINI_RATE_LIMIT_RETRIES}) - "
+                               f"retrying in {wait:.0f}s.",
+                    "wait": wait,
                 }
-                self._key_index += 1
+                time.sleep(wait)
             except errors.ServerError as exc:
                 # "This model is currently experiencing high demand" (503) is
                 # Google's own wording for a transient condition, not a real
