@@ -95,27 +95,11 @@
       <div class="modes">
         <button class="mode active" data-mode="new">Describe a new flow</button>
         <button class="mode" data-mode="open">Open one from the org</button>
+        <button class="mode" data-mode="plan">Build multiple things</button>
       </div>
     </div>
 
-    <div class="pad" id="openPane" hidden>
-      <label for="flowPicker">Flows in the org</label>
-      <select id="flowPicker"><option value="">Loading...</option></select>
-      <button id="importBtn" class="primary">Open it</button>
-      <p class="dim" id="openNote">
-        Flows using screens, waits, or Apex actions are refused rather than
-        drawn approximately.
-      </p>
-      <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
-      <button id="orgSummaryLink" class="link-btn" type="button">Generate org summary</button>
-      <span id="orgSummaryStatusIndicator" class="dim"></span>
-    </div>
-
-    <div class="pad" id="newPane">
-      <label for="request">What should the flow do?</label>
-      <textarea id="request" rows="4"
-        placeholder="When an opportunity is won, mark its account as Hot"></textarea>
-
+    <div class="pad" id="sharedOptions">
       <details id="options">
         <summary>Options</summary>
         <div class="options">
@@ -145,8 +129,41 @@
           </label>
         </div>
       </details>
+    </div>
+
+    <div class="pad" id="openPane" hidden>
+      <label for="flowPicker">Flows in the org</label>
+      <select id="flowPicker"><option value="">Loading...</option></select>
+      <button id="importBtn" class="primary">Open it</button>
+      <p class="dim" id="openNote">
+        Flows using screens, waits, or Apex actions are refused rather than
+        drawn approximately.
+      </p>
+      <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
+      <button id="orgSummaryLink" class="link-btn" type="button">Generate org summary</button>
+      <span id="orgSummaryStatusIndicator" class="dim"></span>
+    </div>
+
+    <div class="pad" id="newPane">
+      <label for="request">What should the flow do?</label>
+      <textarea id="request" rows="4"
+        placeholder="When an opportunity is won, mark its account as Hot"></textarea>
 
       <button id="designBtn" class="primary">Design the flow</button>
+    </div>
+
+    <div class="pad" id="planPane" hidden>
+      <label for="planRequest">What should be built?</label>
+      <textarea id="planRequest" rows="4"
+        placeholder="An Invoice object with an Amount field, and a flow that marks it Paid when the amount is settled"></textarea>
+      <p class="dim">
+        Can be one thing or several - any mix of Custom Objects, Custom
+        Fields, Apex Classes and Flows. A model first decides how many
+        pieces the request needs and in what order, then each piece is
+        generated on its own.
+      </p>
+
+      <button id="planBtn" class="primary">Plan and build</button>
     </div>
 
     <div class="log" id="log"></div>
@@ -162,7 +179,8 @@
   <!-- Right: the flow -->
   <section class="panel" id="right">
     <div id="empty" class="empty">
-      <p>Describe a flow and it appears here as a diagram.</p>
+      <p>Describe a flow - or several objects, fields, and Apex classes at
+        once - and it appears here for review.</p>
       <p class="dim">Nothing is sent to Salesforce until you approve it.</p>
     </div>
 
@@ -219,6 +237,32 @@
       </div>
 
       <div id="result" class="result" hidden></div>
+    </div>
+
+    <div id="planView" hidden>
+      <div class="flow-head">
+        <div>
+          <h2>Plan</h2>
+          <div class="meta" id="planMeta"></div>
+        </div>
+        <div class="badges">
+          <span class="badge dim" id="planVersionBadge"></span>
+        </div>
+      </div>
+
+      <div class="plan-overview" id="planOverview"></div>
+      <div class="plan-steps" id="planSteps"></div>
+
+      <div class="actions">
+        <div class="row">
+          <button id="planApproveBtn" class="primary">Approve all</button>
+          <button id="planValidateBtn" disabled>Validate</button>
+          <button id="planDeployBtn" class="danger" disabled>Deploy</button>
+        </div>
+        <div id="planGate" class="gate"></div>
+      </div>
+
+      <div id="planResult" class="result" hidden></div>
     </div>
   </section>
 </main>

@@ -46,12 +46,17 @@ class ApiName(str):
     """Marker type; validation happens in the models below."""
 
 
-def _check_api_name(value: str, what: str) -> str:
+def _check_api_name(value: str, what: str, max_length: Optional[int] = None) -> str:
     if not API_NAME_RE.match(value):
         raise ValueError(
             f"{what} {value!r} is not a valid Salesforce API name "
             "(letters/digits/underscores, must start with a letter, "
             "no consecutive or trailing underscores)"
+        )
+    if max_length is not None and len(value) > max_length:
+        raise ValueError(
+            f"{what} {value!r} is {len(value)} characters, over Salesforce's "
+            f"{max_length}-character limit"
         )
     return value
 

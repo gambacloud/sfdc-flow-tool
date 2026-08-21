@@ -16,11 +16,13 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, Generic, List, Optional, Protocol, Type, TypeVar
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .ir import Flow
+from .ir_apex import ApexClass, heuristic_errors
+from .ir_object import CustomField, CustomObject
 
 DEFAULT_MAX_REPAIRS = 3
 
@@ -446,6 +448,76 @@ document does not contain what is being asked, say so plainly rather than \
 guessing or answering from general Salesforce knowledge.
 
 Be concrete and brief. No restating the question, no preamble.
+"""
+
+
+OBJECT_SYSTEM_PROMPT = """\
+You translate a description of data structure into a Salesforce Custom Object IR \
+document.
+
+You produce IR only, never metadata XML - a compiler generates that from your IR.
+
+- `api_name` is suffixed `__c` automatically; write it without the suffix or \
+with it, either is fine.
+- `label` is singular ("Invoice"), `plural_label` is plural ("Invoices").
+- `record_name_type` is `Text` for an ordinary Name field, or `AutoNumber` for \
+one Salesforce generates - which requires `record_name_display_format` \
+(for example `INV-{0000}`).
+- Prefer `sharing_model: ReadWrite` unless the request specifically asks for \
+tighter or looser sharing.
+- Do not invent fields here - a Custom Object in this IR is the object shell \
+alone. Fields are a separate request.
+"""
+
+
+FIELD_SYSTEM_PROMPT = """\
+You translate a description of a data field into a Salesforce Custom Field IR \
+document.
+
+You produce IR only, never metadata XML - a compiler generates that from your IR.
+
+- `api_name` is suffixed `__c` automatically; write it without the suffix or \
+with it, either is fine. `object_api_name` names the object this field is \
+added to - a standard object ("Account") or a custom one (suffixed `__c` \
+automatically).
+- `type` is one of Text, Number, Checkbox, Picklist, Lookup, MasterDetail. \
+Each carries only the properties that belong to it - do not set `length` on \
+anything but Text, `precision`/`scale` on anything but Number, \
+`picklist_values` on anything but Picklist, or `reference_to` on anything but \
+Lookup/MasterDetail.
+- A Picklist needs at least one value in `picklist_values`, written exactly as \
+the user should see them.
+- A Lookup or MasterDetail needs `reference_to` naming the target object. A \
+MasterDetail field is always required by Salesforce - never set `required` on \
+one.
+- A Checkbox always needs a `default_value` of `"true"` or `"false"` - \
+Salesforce refuses one left blank.
+- Do not invent a target object for a Lookup/MasterDetail that the request did \
+not name or imply.
+"""
+
+
+APEX_SYSTEM_PROMPT = """\
+You translate a description of server-side logic into a Salesforce Apex Class \
+IR document.
+
+You produce IR only, never metadata XML - a compiler generates the deployable \
+files from your IR. Unlike the Flow, Object and Field IRs, `body` is not \
+structured - it is the class source itself, written out in full.
+
+- `api_name` is the class name, and the class you declare in `body` (`public \
+class Foo { ... }`) must use exactly that name - the deployed file is named \
+after api_name, so a mismatch fails to deploy.
+- Write complete, compilable Apex: balanced braces, a real class declaration, \
+no placeholders or "TODO" left where logic belongs.
+- Prefer the smallest class that does what was asked. Do not add error \
+handling, logging, or methods that were not requested.
+- Do not invent a reference to a field, object or another class the request \
+did not name or clearly imply - a guessed API name compiles today and breaks \
+the moment it is wrong.
+- No compiler runs against this output before it is checked here - only a \
+brace-balance and class-name sanity check. Write it as if it must be correct \
+the first time.
 """
 
 
@@ -1103,29 +1175,75 @@ class OllamaProvider:
 # Generator
 # --------------------------------------------------------------------------
 
+T = TypeVar("T", bound=BaseModel)
+
 
 @dataclass
-class GenerationResult:
-    flow: Flow
+class IRGenerationResult(Generic[T]):
+    value: T
     messages: List[Message]
     repairs: int
 
 
-class FlowGenerator:
+class IRGenerator(Generic[T]):
     """
-    Turns a request into a validated Flow, repairing its own mistakes.
+    Turns a request into a validated instance of `model_cls`, repairing its own
+    mistakes: schema-constrained generate, a Pydantic ValidationError fed back
+    verbatim, retry, up to `max_repairs` times.
 
-    The conversation is kept so a refinement continues from the same context
-    rather than re-deriving the flow from scratch.
+    This is the engine behind FlowGenerator, factored out so a future artifact
+    type (a Custom Object, an Apex class, ...) can reuse the same repair loop
+    with its own model, system prompt and checks - subclass and override the
+    hooks below rather than duplicating the loop.
     """
 
-    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+    def __init__(
+        self,
+        provider: Provider,
+        model_cls: Type[T],
+        system_prompt: str,
+        max_repairs: int = DEFAULT_MAX_REPAIRS,
+    ):
         self.provider = provider
+        self.model_cls = model_cls
+        self.system_prompt = system_prompt
         self.max_repairs = max_repairs
         # Handed to the provider raw; each one adapts it to its own dialect.
-        self._schema = Flow.model_json_schema()
+        self._schema = model_cls.model_json_schema()
 
-    def _validated(self, messages: List[Message]) -> GenerationResult:
+    # -- hooks a subclass overrides for its own domain -----------------
+
+    def _tracked_names(self, payload: Dict[str, Any]) -> Optional[set]:
+        """
+        Names to guard against being silently dropped between repair attempts
+        (see the anti-shrink check in `_validated`). Return None to disable
+        the guard - the default, since it is specific to a graph of named
+        elements like a Flow's.
+        """
+        return None
+
+    _dropped_item_noun = "items"
+
+    def _extra_error(self, payload: Dict[str, Any]) -> Optional[str]:
+        """
+        A pre-validation sanity check beyond the schema itself - a hook for a
+        domain that cannot lean on Pydantic alone (for example a heuristic
+        syntax check on generated Apex). Return an error message to send the
+        payload back for another attempt, or None to proceed to validation.
+        """
+        return None
+
+    def _warnings(self, instance: T) -> List[str]:
+        """Non-fatal issues worth one round trip. Default: none."""
+        return []
+
+    def _describe(self, instance: T) -> str:
+        """One line for the success log line."""
+        return type(instance).__name__
+
+    # -- the loop itself -------------------------------------------------
+
+    def _validated(self, messages: List[Message]) -> IRGenerationResult[T]:
         conversation = list(messages)
         last_error: Optional[str] = None
         asked_about_warnings = False
@@ -1136,20 +1254,22 @@ class FlowGenerator:
                 "attempt %s/%s (%s messages)",
                 attempt + 1, self.max_repairs + 1, len(conversation),
             )
-            payload = self.provider.complete_json(SYSTEM_PROMPT, conversation, self._schema)
+            payload = self.provider.complete_json(
+                self.system_prompt, conversation, self._schema
+            )
 
             # A model repairing a reachability error can "win" by deleting the
             # orphaned elements instead of adding the connector that was asked
             # for - a smaller flow trivially satisfies "everything is
             # reachable". That is never the fix, so catch it before it reaches
-            # Flow.model_validate, which cannot tell it from a deliberate
+            # model_validate, which cannot tell it from a deliberate
             # simplification. Compare counts, not just names - a repair that
             # renames an element (e.g. to fix an invalid API name) changes its
             # name without shrinking the flow, and that is fine.
             #
-            # Only elements the previous complaint actually named count. A flow
+            # Only names the previous complaint actually named count. A flow
             # can shrink for good reasons - the user asked for a step to go, or
-            # two updates were merged into one - and those elements are ones no
+            # two updates were merged into one - and those names are ones no
             # error mentioned. Rejecting every shrink cost a repair round on a
             # legitimate "remove the urgency check" and told the model to put
             # back exactly what it had been asked to delete.
@@ -1157,26 +1277,25 @@ class FlowGenerator:
             # The baseline is the previous attempt in this loop, not the flow
             # being refined, so a refinement that removes something is compared
             # against nothing and passes on its first attempt.
-            current_names = {
-                e.get("name")
-                for e in payload.get("elements", []) or []
-                if isinstance(e, dict) and e.get("name")
-            }
+            current_names = self._tracked_names(payload)
             dropped = set()
-            if previous_names is not None and len(current_names) < len(previous_names):
+            if current_names is not None and previous_names is not None \
+                    and len(current_names) < len(previous_names):
                 dropped = {
                     name for name in previous_names - current_names
                     if last_error and name in last_error
                 }
-            previous_names = current_names
+            if current_names is not None:
+                previous_names = current_names
 
             if dropped:
                 last_error = (
-                    f"elements {sorted(dropped)} are missing from this attempt, but "
-                    "were present in the one before it, and the error you were "
-                    "given names them. Deleting an element is not a fix for a "
-                    "validation error about it - it just hides the problem. "
-                    "Restore them and fix what the error actually named."
+                    f"{self._dropped_item_noun} {sorted(dropped)} are missing "
+                    "from this attempt, but were present in the one before it, "
+                    "and the error you were given names them. Deleting an "
+                    "element is not a fix for a validation error about it - it "
+                    "just hides the problem. Restore them and fix what the "
+                    "error actually named."
                 )
                 log.warning("attempt %s rejected: %s", attempt + 1, last_error)
                 if attempt == self.max_repairs:
@@ -1187,8 +1306,31 @@ class FlowGenerator:
                 conversation.append(Message(role="user", content=last_error))
                 continue
 
+            extra_error = self._extra_error(payload)
+            if extra_error is not None:
+                last_error = extra_error
+                log.warning(
+                    "attempt %s rejected: %s",
+                    attempt + 1, last_error.replace(chr(10), ' | '),
+                )
+                if attempt == self.max_repairs:
+                    break
+                conversation.append(
+                    Message(role="assistant", content=json.dumps(payload, indent=1))
+                )
+                conversation.append(
+                    Message(
+                        role="user",
+                        content=(
+                            f"That was rejected:\n\n{last_error}\n\n"
+                            "Return the corrected version."
+                        ),
+                    )
+                )
+                continue
+
             try:
-                flow = Flow.model_validate(payload)
+                instance = self.model_cls.model_validate(payload)
             except ValidationError as exc:
                 last_error = _readable_errors(exc)
                 log.warning(
@@ -1221,7 +1363,7 @@ class FlowGenerator:
             # that flow unopenable. Worth one round trip when we wrote the flow
             # ourselves, and no more: if the model looks at it and produces the
             # same shape again, it meant it.
-            notes = flow.warnings()
+            notes = self._warnings(instance)
             if notes and not asked_about_warnings and attempt < self.max_repairs:
                 asked_about_warnings = True
                 joined = "\n\n".join(notes)
@@ -1244,21 +1386,71 @@ class FlowGenerator:
                 continue
 
             log.info(
-                "valid IR after %s attempt%s: %s, %s element%s",
-                attempt + 1, '' if attempt == 0 else 's', flow.api_name,
-                len(flow.elements), '' if len(flow.elements) == 1 else 's',
+                "valid IR after %s attempt%s: %s",
+                attempt + 1, '' if attempt == 0 else 's', self._describe(instance),
             )
-            return GenerationResult(flow=flow, messages=conversation, repairs=attempt)
+            return IRGenerationResult(value=instance, messages=conversation, repairs=attempt)
 
         raise LLMError(
             f"Could not get valid IR after {self.max_repairs + 1} attempts. "
             f"Last errors:\n{last_error}"
         )
 
+
+@dataclass
+class GenerationResult:
+    flow: Flow
+    messages: List[Message]
+    repairs: int
+
+
+class FlowGenerator(IRGenerator[Flow]):
+    """
+    Turns a request into a validated Flow, repairing its own mistakes.
+
+    The conversation is kept so a refinement continues from the same context
+    rather than re-deriving the flow from scratch.
+    """
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, Flow, SYSTEM_PROMPT, max_repairs)
+
+    def _tracked_names(self, payload: Dict[str, Any]) -> Optional[set]:
+        return {
+            e.get("name")
+            for e in payload.get("elements", []) or []
+            if isinstance(e, dict) and e.get("name")
+        }
+
+    _dropped_item_noun = "elements"
+
+    def _warnings(self, flow: Flow) -> List[str]:
+        return flow.warnings()
+
+    def _describe(self, flow: Flow) -> str:
+        return (
+            f"{flow.api_name}, {len(flow.elements)} element"
+            f"{'' if len(flow.elements) == 1 else 's'}"
+        )
+
+    def _validated(self, messages: List[Message]) -> GenerationResult:
+        generic = super()._validated(messages)
+        return GenerationResult(
+            flow=generic.value, messages=generic.messages, repairs=generic.repairs
+        )
+
+    def _stamp_name(self, flow: Flow) -> None:
+        """
+        Naming policy applied to a flow generated from scratch. Factored out so
+        another artifact type can define its own policy (a Custom Object's
+        `__c` suffix, say) without touching the repair loop.
+        """
+        if not flow.api_name.startswith(GENERATED_NAME_PREFIX):
+            flow.api_name = GENERATED_NAME_PREFIX + flow.api_name
+
     def generate(self, request: str) -> GenerationResult:
         result = self._validated([Message(role="user", content=request)])
-        if not result.flow.api_name.startswith(GENERATED_NAME_PREFIX):
-            result.flow.api_name = GENERATED_NAME_PREFIX + result.flow.api_name
+        self._stamp_name(result.flow)
         return result
 
     def adopt(self, flow: Flow, origin: str = "an existing flow in the org") -> GenerationResult:
@@ -1334,6 +1526,59 @@ class FlowGenerator:
             f"{problems}\n\n"
             "Correct the IR so the deploy passes. Change only what these errors require.",
         )
+
+
+class CustomObjectGenerator(IRGenerator[CustomObject]):
+    """Turns a description of a data structure into a validated CustomObject."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, CustomObject, OBJECT_SYSTEM_PROMPT, max_repairs)
+
+    def _describe(self, obj: CustomObject) -> str:
+        return f"{obj.api_name} ({obj.label})"
+
+    def generate(self, request: str) -> IRGenerationResult[CustomObject]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class CustomFieldGenerator(IRGenerator[CustomField]):
+    """Turns a description of a field into a validated CustomField."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, CustomField, FIELD_SYSTEM_PROMPT, max_repairs)
+
+    def _describe(self, field: CustomField) -> str:
+        return f"{field.api_name} ({field.type}) on {field.object_api_name}"
+
+    def generate(self, request: str) -> IRGenerationResult[CustomField]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class ApexClassGenerator(IRGenerator[ApexClass]):
+    """
+    Turns a description of server-side logic into a validated ApexClass.
+
+    Validation here has no compiler behind it - see ir_apex.py for why - so
+    `_extra_error` is what actually catches most mistakes: brace/paren
+    balance and a class declaration matching api_name, checked on the raw
+    payload before Pydantic even sees it (Pydantic itself only rejects an
+    empty body or a bad api_name, same as any other IR).
+    """
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, ApexClass, APEX_SYSTEM_PROMPT, max_repairs)
+
+    def _extra_error(self, payload: Dict[str, Any]) -> Optional[str]:
+        problems = heuristic_errors(payload.get("api_name") or "", payload.get("body") or "")
+        if not problems:
+            return None
+        return "\n".join(f"- {p}" for p in problems)
+
+    def _describe(self, cls: ApexClass) -> str:
+        return f"{cls.api_name}, {len(cls.body.splitlines())} lines"
+
+    def generate(self, request: str) -> IRGenerationResult[ApexClass]:
+        return self._validated([Message(role="user", content=request)])
 
 
 # Constraints the structured-outputs schema compiler does not accept. They stay

@@ -27,6 +27,8 @@ from pydantic import BaseModel
 
 from flowtool.config import load_env
 from flowtool.ir import Flow
+from flowtool.ir_apex import ApexClass
+from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import (
     AnthropicProvider,
     FlowGenerator,
@@ -39,6 +41,7 @@ from flowtool.llm import (
 from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
+from flowtool.planner import Plan, PlannerGenerator, StepResult, execute_plan
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
@@ -47,9 +50,12 @@ from flowtool.sfdc import (
     retrieve_all_flows,
     retrieve_flow,
     retrieve_org_summary_zip,
+    validate_bundle,
     validate_flow,
 )
 from flowtool.xmlgen import generate as generate_xml
+from flowtool.xmlgen_apex import generate_apex
+from flowtool.xmlgen_object import generate_field, generate_object
 from survey import Survey, text_report
 
 ROOT = Path(__file__).parent
@@ -996,6 +1002,368 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
         raise HTTPException(404, f"No such artifact: {artifact}")
     text, media_type = bodies[artifact]
     return PlainTextResponse(text, media_type=media_type)
+
+
+
+# --------------------------------------------------------------------------
+# Multi-artifact plans (Object / Field / Apex / Flow, one request)
+# --------------------------------------------------------------------------
+#
+# Additive on purpose: nothing above this point changes. A single-Flow
+# request still goes through /api/design/* exactly as before; this is the
+# separate path for "an object with a field and a flow that uses it" -
+# planner.py decides how many steps that needs and of what type, and each
+# step runs through the same generator /api/design/* already uses under the
+# hood (FlowGenerator, CustomObjectGenerator, ...). See the multi-artifact
+# plan doc for why this stays a second path rather than replacing Session:
+# splitting the risk of this rework from the tool's existing, working one.
+
+
+class PlanRequest(BaseModel):
+    request: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: Literal["medium", "high"] = "medium"
+    api_version: str = "62.0"
+    api_key: Optional[str] = None
+
+
+class PlanExecuteRequest(BaseModel):
+    plan_id: str
+
+
+@dataclass
+class PendingPlan:
+    """A planning call running in the background - same shape as PendingDesign,
+    one level up: this produces a Plan, not yet any generated metadata."""
+
+    task: "asyncio.Task"
+    provider: Provider
+    api_version: str
+
+
+PLAN_JOBS: Dict[str, PendingPlan] = {}
+
+
+@dataclass
+class StoredPlan:
+    """
+    A validated Plan awaiting execution. Kept separate from PlanSession
+    because a plan is cheap to produce and worth showing the user before
+    spending a generation call per step - the browser can look at the
+    decomposition and back out before anything downstream runs.
+    """
+
+    provider: Provider
+    plan: Plan
+    api_version: str
+
+
+PLANS: Dict[str, StoredPlan] = {}
+
+
+@dataclass
+class PendingPlanExecution:
+    task: "asyncio.Task"
+    provider: Provider
+    plan: Plan
+    api_version: str
+
+
+PLAN_EXECUTIONS: Dict[str, PendingPlanExecution] = {}
+
+
+@dataclass
+class PlanSession:
+    provider: Provider
+    plan: Plan
+    steps: List[StepResult]
+    activate: bool = False
+    api_version: str = "62.0"
+    version: int = 1
+    approved_version: int = 0
+    pending_deploy: Optional[PendingDeploy] = None
+
+    @property
+    def approved(self) -> bool:
+        return self.approved_version == self.version
+
+    def apply_policy(self) -> None:
+        """Same call as Session.apply_policy: status/API version are the
+        tool's, never the model's - applied to every Flow step in the plan."""
+        for result in self.steps:
+            if isinstance(result.value, Flow):
+                result.value.status = "Active" if self.activate else "Draft"
+                result.value.api_version = self.api_version
+
+
+PLAN_SESSIONS: Dict[str, PlanSession] = {}
+
+
+def get_plan_session(session_id: str) -> PlanSession:
+    session = PLAN_SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown plan session. Start a new plan.")
+    return session
+
+
+def _step_view(result: StepResult) -> Dict[str, Any]:
+    value = result.value
+    entry: Dict[str, Any] = {
+        "name": result.step.name,
+        "artifact_type": result.step.artifact_type,
+        "depends_on": result.step.depends_on,
+        "repairs": result.repairs,
+    }
+    if isinstance(value, Flow):
+        entry.update({
+            "api_name": value.api_name,
+            "label": value.label,
+            "element_count": len(value.elements),
+            "mermaid": to_mermaid(value),
+        })
+    elif isinstance(value, CustomObject):
+        entry.update({
+            "api_name": value.api_name,
+            "label": value.label,
+            "plural_label": value.plural_label,
+        })
+    elif isinstance(value, CustomField):
+        entry.update({
+            "api_name": value.api_name,
+            "object_api_name": value.object_api_name,
+            "field_type": value.type,
+        })
+    elif isinstance(value, ApexClass):
+        entry.update({
+            "api_name": value.api_name,
+            "lines": len(value.body.splitlines()),
+            "body": value.body,
+        })
+    return entry
+
+
+def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "version": session.version,
+        "approved": session.approved,
+        "steps": [_step_view(r) for r in session.steps],
+        "usage": session.provider.usage.as_dict(),
+    }
+
+
+def _bundle_files_and_types(
+    steps: List[StepResult],
+) -> tuple[Dict[str, str], Dict[str, List[str]]]:
+    """
+    Every step's generated IR, compiled to the metadata files and package.xml
+    member names a single deploy needs - the same mapping verify_object_apex.py
+    (a dev-QA script) builds by hand per shape, generalized here for a real
+    plan's steps of mixed artifact types.
+    """
+    files: Dict[str, str] = {}
+    types: Dict[str, List[str]] = {}
+    for result in steps:
+        value = result.value
+        if isinstance(value, Flow):
+            files[f"flows/{value.api_name}.flow"] = generate_xml(value)
+            types.setdefault("Flow", []).append(value.api_name)
+        elif isinstance(value, CustomObject):
+            files[f"objects/{value.api_name}.object"] = generate_object(value)
+            types.setdefault("CustomObject", []).append(value.api_name)
+        elif isinstance(value, CustomField):
+            files[f"objects/{value.object_api_name}/fields/{value.api_name}.field"] = \
+                generate_field(value)
+            types.setdefault("CustomField", []).append(
+                f"{value.object_api_name}.{value.api_name}"
+            )
+        elif isinstance(value, ApexClass):
+            body, meta = generate_apex(value)
+            files[f"classes/{value.api_name}.cls"] = body
+            files[f"classes/{value.api_name}.cls-meta.xml"] = meta
+            types.setdefault("ApexClass", []).append(value.api_name)
+    return files, types
+
+
+@app.post("/api/plan/start")
+async def plan_start(body: PlanRequest) -> Dict[str, Any]:
+    """Kick off planning in the background - same reasoning as design_start:
+    the provider call is synchronous, so it runs in a thread."""
+    if not body.request.strip():
+        raise HTTPException(400, "Describe what should be built.")
+    try:
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    generator = PlannerGenerator(provider)
+    task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
+    job_id = uuid.uuid4().hex
+    PLAN_JOBS[job_id] = PendingPlan(task=task, provider=provider, api_version=body.api_version)
+    return {"job_id": job_id}
+
+
+@app.get("/api/plan/status")
+async def plan_status(job_id: str) -> Dict[str, Any]:
+    pending = PLAN_JOBS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown plan job.")
+    if not pending.task.done():
+        return {"done": False}
+    del PLAN_JOBS[job_id]
+
+    result = llm_result(pending.task)
+    plan_id = uuid.uuid4().hex
+    PLANS[plan_id] = StoredPlan(
+        provider=pending.provider, plan=result.value, api_version=pending.api_version
+    )
+    steps = [
+        {"name": s.name, "artifact_type": s.artifact_type, "brief": s.brief,
+         "depends_on": s.depends_on}
+        for s in result.value.steps
+    ]
+    return {"done": True, "plan_id": plan_id, "steps": steps}
+
+
+@app.post("/api/plan/execute/start")
+async def plan_execute_start(body: PlanExecuteRequest) -> Dict[str, Any]:
+    """
+    Run every step of a planned request through its generator. One request
+    can take as long as N generations - a bigger plan is a bigger wait, the
+    same "runs in the background, browser polls" shape as everything else
+    here handles, just with more work behind one job id.
+    """
+    stored = PLANS.get(body.plan_id)
+    if stored is None:
+        raise HTTPException(404, "Unknown plan. Call /api/plan/start first.")
+    del PLANS[body.plan_id]
+
+    task = asyncio.create_task(
+        asyncio.to_thread(execute_plan, stored.provider, stored.plan)
+    )
+    job_id = uuid.uuid4().hex
+    PLAN_EXECUTIONS[job_id] = PendingPlanExecution(
+        task=task, provider=stored.provider, plan=stored.plan, api_version=stored.api_version,
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/plan/execute/status")
+async def plan_execute_status(job_id: str) -> Dict[str, Any]:
+    pending = PLAN_EXECUTIONS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown plan execution job.")
+    if not pending.task.done():
+        return {"done": False}
+    del PLAN_EXECUTIONS[job_id]
+
+    steps = llm_result(pending.task)
+    session_id = uuid.uuid4().hex
+    session = PlanSession(
+        provider=pending.provider, plan=pending.plan, steps=steps,
+        api_version=pending.api_version,
+    )
+    session.apply_policy()
+    PLAN_SESSIONS[session_id] = session
+    return {"done": True, **plan_view(session_id, session)}
+
+
+@app.post("/api/plan/approve")
+def plan_approve(body: ApproveRequest) -> Dict[str, Any]:
+    session = get_plan_session(body.session_id)
+    if body.version != session.version:
+        raise HTTPException(
+            409, "The plan changed since you looked at it. Review it again."
+        )
+    session.approved_version = session.version
+    return plan_view(body.session_id, session)
+
+
+def _start_plan_deploy(
+    session: PlanSession,
+    org: Optional[str],
+    instance_url: Optional[str],
+    access_token: Optional[str],
+    check_only: bool,
+) -> None:
+    if session.pending_deploy is not None and not session.pending_deploy.task.done():
+        raise HTTPException(409, "A validate/deploy is already running for this plan.")
+    url, token = credentials(org, instance_url, access_token)
+    files, types = _bundle_files_and_types(session.steps)
+    task = asyncio.create_task(
+        validate_bundle(
+            url, token, files, types,
+            api_version=session.api_version, check_only=check_only,
+        )
+    )
+    session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
+
+
+@app.post("/api/plan/validate/start")
+async def plan_validate_start(body: OrgRequest) -> Dict[str, Any]:
+    session = get_plan_session(body.session_id)
+    if not session.approved:
+        raise HTTPException(403, "Approve the plan before validating it.")
+    _start_plan_deploy(session, body.org, body.instance_url, body.access_token, check_only=True)
+    return {"started": True}
+
+
+@app.get("/api/plan/validate/status")
+async def plan_validate_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    pending = session.pending_deploy
+    if pending is None:
+        raise HTTPException(400, "No validation in progress - call /api/plan/validate/start first.")
+    if not pending.task.done():
+        return {"done": False}
+    session.pending_deploy = None
+    result = pending.task.result()
+    return {
+        "done": True,
+        "success": result.success,
+        "status": result.status,
+        "failures": _failures(result),
+        "checked_version": session.version,
+    }
+
+
+@app.post("/api/plan/deploy/start")
+async def plan_deploy_start(body: DeployRequest) -> Dict[str, Any]:
+    session = get_plan_session(body.session_id)
+    if not session.approved:
+        raise HTTPException(403, "Approve the plan before deploying it.")
+    if not body.confirm:
+        raise HTTPException(400, "Deploying needs an explicit confirmation.")
+    _start_plan_deploy(session, body.org, body.instance_url, body.access_token, check_only=False)
+    return {"started": True}
+
+
+@app.get("/api/plan/deploy/status")
+async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    pending = session.pending_deploy
+    if pending is None:
+        raise HTTPException(400, "No deploy in progress - call /api/plan/deploy/start first.")
+    if not pending.task.done():
+        return {"done": False}
+    session.pending_deploy = None
+    result = pending.task.result()
+    return {
+        "done": True,
+        "success": result.success,
+        "status": result.status,
+        "failures": _failures(result),
+        "instance_url": pending.instance_url,
+    }
+
+
+@app.get("/api/plan/session/{session_id}")
+def plan_session_view(session_id: str) -> Dict[str, Any]:
+    """Re-fetch a plan session's current state - same reasoning as
+    /api/session/{session_id} above."""
+    session = get_plan_session(session_id)
+    return plan_view(session_id, session)
 
 
 @app.get("/")

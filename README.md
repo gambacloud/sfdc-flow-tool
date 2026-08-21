@@ -9,6 +9,12 @@ description ─┐
 existing flow┘
 ```
 
+The same pipeline also builds Custom Objects, Custom Fields, and Apex
+Classes — describe several at once ("an Invoice object with an Amount field,
+and a flow that totals it") and a planner works out how many pieces the
+request needs, in what order, before generating each one. See
+[Building more than a Flow](#building-more-than-a-flow).
+
 ## Install
 
 Needs **Python 3.11+**. Node is optional — only for the Salesforce CLI.
@@ -56,7 +62,7 @@ PowerShell and Git Bash.
 .venv/Scripts/python.exe -m pytest tests -q
 ```
 
-~880 tests, none of which need a key, a network, or an org.
+~990 tests, none of which need a key, a network, or an org.
 
 ## Use it
 
@@ -71,6 +77,12 @@ get a rendered diagram, an **Explain** tab that reads the flow back in prose,
 and tabs for the generated Markdown, Flow XML, and IR. Change it by asking.
 Approve, validate, deploy — with a link straight into Flow Builder when it
 lands.
+
+A third mode, **Build multiple things**, takes a request that needs more than
+one Flow — plus, optionally, Objects, Fields, and Apex Classes — and reviews
+every piece as one plan: an expandable card per step (a diagram for a Flow, a
+field table for an Object/Field, the source for an Apex Class), approved and
+deployed together as a single transaction.
 
 ### CLI
 
@@ -275,22 +287,63 @@ list; a component output's landing variable (**a missing one deploys and
 silently discards the value**); and a visibility rule's condition (**a rule
 naming something undefined also deploys**, and the field just never appears).
 
+## Building more than a Flow
+
+The **Build multiple things** mode adds three sibling artifact types, each
+with its own IR, validated the same way the Flow IR is — invalid shapes are
+unrepresentable before a single byte of metadata exists:
+
+- **Custom Object** — label, plural label, a Text or AutoNumber name field,
+  sharing model.
+- **Custom Field** — Text, Number, Checkbox, Picklist, Lookup, or
+  MasterDetail, each restricted to the properties that actually apply to it
+  (a Picklist needs values, a Lookup needs a target object, a MasterDetail
+  can't be marked optional). `__c` is appended automatically.
+- **Apex Class** — the one IR that's mostly free text (`body`), since Apex is
+  code, not a structural graph. Two things are still checked before a repair
+  round: brace/paren/bracket balance, and that the class declared in `body`
+  is actually named `api_name`.
+
+A planner (`flowtool/planner.py`) reads the request first and decides how
+many steps it needs and in what order — a request that only needs one Flow
+still produces a one-step plan, so this isn't a separate mode's worth of extra
+ceremony for the common case. Each step then runs through its own generator
+(`FlowGenerator`, `CustomObjectGenerator`, `CustomFieldGenerator`,
+`ApexClassGenerator`), and every approved step deploys together in one
+Metadata API transaction — the reason a Flow can reference a field from the
+same request: it doesn't exist in the org until this deploy creates it.
+
+**What this doesn't do yet.** Apex validation is heuristic only — brace
+balance and a name check, not a real compile. A class that passes the
+heuristic can still fail to deploy on an unresolved symbol or a type error;
+that only surfaces once you validate against the org. `verify_object_apex.py`
+(a repo-root dev script, not part of the shipped tool — same idea as
+`verify.py`) checks real Object/Field/Apex/bundle shapes against a live org,
+including two shapes that specifically deploy an Object, its Field, and an
+Apex Class together in one transaction.
+
 ## Layout
 
 | Module | Role |
 |---|---|
-| `flowtool/ir.py` | The IR — the single source of truth |
-| `flowtool/xmlgen.py` | IR → Flow XML, deterministic, with auto-layout |
+| `flowtool/ir.py` | The Flow IR — the single source of truth |
+| `flowtool/xmlgen.py` | Flow IR → Flow XML, deterministic, with auto-layout |
 | `flowtool/parse.py` | Flow XML → IR, or a refusal naming what it can't model |
-| `flowtool/mermaid.py` | IR → Mermaid + Markdown |
-| `flowtool/llm.py` | Text → IR, bring-your-own-key, self-repairing |
-| `flowtool/sfdc.py` | Metadata API: list, retrieve, validate, deploy |
+| `flowtool/mermaid.py` | Flow IR → Mermaid + Markdown |
+| `flowtool/ir_object.py` | The Custom Object / Custom Field IR |
+| `flowtool/xmlgen_object.py` | Object/Field IR → metadata XML |
+| `flowtool/ir_apex.py` | The Apex Class IR, plus its heuristic syntax checks |
+| `flowtool/xmlgen_apex.py` | Apex Class IR → `.cls` + `.cls-meta.xml` |
+| `flowtool/planner.py` | Request → an ordered list of typed steps, run through the matching generator |
+| `flowtool/llm.py` | Text → IR, bring-your-own-key, self-repairing — the generic engine behind every IR type above |
+| `flowtool/sfdc.py` | Metadata API: list, retrieve, validate, deploy — single- or multi-type |
 | `flowtool/orgs.py` | Reads org credentials from the `sf` CLI |
 | `flowtool/config.py` | Loads `.env` |
-| `forge.py` | The pipeline, as a CLI |
-| `server.py` | The pipeline, over HTTP |
+| `forge.py` | The Flow pipeline, as a CLI |
+| `server.py` | The Flow pipeline and the multi-artifact plan pipeline, over HTTP |
 | `survey.py` | Measures how much of an org this build can model |
-| `verify.py` | Checks every metadata shape against a real org |
+| `verify.py` | Checks every Flow metadata shape against a real org |
+| `verify_object_apex.py` | Same, for Object/Field/Apex shapes and mixed-type bundles |
 | `harvest.py` | Collects flows from public repos to survey against |
 | `diagnose.py` | Isolates where org authentication breaks |
 

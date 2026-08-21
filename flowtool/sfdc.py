@@ -62,23 +62,61 @@ def _fault_string(payload: str) -> Optional[str]:
     return message
 
 
-def build_package(flow_api_name: str, flow_xml: str, api_version: str) -> bytes:
-    """Metadata-API-format ZIP: package.xml + flows/<name>.flow."""
-    package_xml = (
+def _deploy_package_xml(types: Dict[str, List[str]], api_version: str) -> str:
+    """
+    The <Package> manifest for a deploy zip: one <types> block per metadata
+    type, each member of that type listed inside. A plain document (no SOAP
+    envelope, no met: prefix) - the deploy zip's package.xml, unlike
+    build_multi_type_package's <met:unpackaged> fragment, which is inlined
+    straight into a retrieve request body instead of zipped.
+    """
+    blocks = "".join(
+        "    <types>\n"
+        + "".join(f"        <members>{m}</members>\n" for m in members)
+        + f"        <name>{type_name}</name>\n    </types>\n"
+        for type_name, members in types.items()
+    )
+    return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<Package xmlns="{METADATA_NS}">\n'
-        "    <types>\n"
-        f"        <members>{flow_api_name}</members>\n"
-        "        <name>Flow</name>\n"
-        "    </types>\n"
+        f"{blocks}"
         f"    <version>{api_version}</version>\n"
         "</Package>\n"
     )
+
+
+def build_deploy_package(
+    files: Dict[str, str], types: Dict[str, List[str]], api_version: str
+) -> bytes:
+    """
+    Metadata-API-format ZIP spanning one or more component types: package.xml
+    plus arbitrary member files. Generalizes the single-type case below so one
+    deploy can bundle a Flow with the Object/Field/Apex components it depends
+    on - the same package.xml shape verify_object_apex.py (a dev-QA script)
+    built by hand before this became the real, shipped version.
+
+    `files` maps each member's zip path to its content (`"objects/X__c.object"`,
+    `"classes/Y.cls"`, ...). `types` maps each metadata type name to the
+    members package.xml should declare for it - a CustomField's member name is
+    the dotted `"Object__c.Field__c"` form Salesforce expects, not just the
+    field's own name.
+    """
+    package_xml = _deploy_package_xml(types, api_version)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("package.xml", package_xml)
-        archive.writestr(f"flows/{flow_api_name}.flow", flow_xml)
+        for path, content in files.items():
+            archive.writestr(path, content)
     return buffer.getvalue()
+
+
+def build_package(flow_api_name: str, flow_xml: str, api_version: str) -> bytes:
+    """Metadata-API-format ZIP: package.xml + flows/<name>.flow."""
+    return build_deploy_package(
+        {f"flows/{flow_api_name}.flow": flow_xml},
+        {"Flow": [flow_api_name]},
+        api_version,
+    )
 
 
 def _normalise(instance_url: str) -> str:
@@ -569,5 +607,21 @@ async def validate_flow(
 ) -> DeployResult:
     """One-shot helper: package a Flow and run it through the org."""
     zip_bytes = build_package(flow_api_name, flow_xml, api_version)
+    async with MetadataClient(instance_url, session_id, api_version) as client:
+        return await client.deploy_and_wait(zip_bytes, check_only=check_only)
+
+
+async def validate_bundle(
+    instance_url: str, session_id: str, files: Dict[str, str], types: Dict[str, List[str]],
+    api_version: str = "62.0", check_only: bool = True,
+) -> DeployResult:
+    """
+    One-shot helper: package a mixed bundle - any combination of Object,
+    Field, Apex, Flow, ... members - and run it through the org as a single
+    deploy transaction. The multi-artifact counterpart to validate_flow,
+    for when a plan's steps depend on each other (a Flow referencing a field
+    that does not exist in the org until this same deploy creates it).
+    """
+    zip_bytes = build_deploy_package(files, types, api_version)
     async with MetadataClient(instance_url, session_id, api_version) as client:
         return await client.deploy_and_wait(zip_bytes, check_only=check_only)

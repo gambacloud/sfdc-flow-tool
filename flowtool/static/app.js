@@ -22,6 +22,15 @@ const state = {
   orgSummaryMarkdown: null, // the approved org-summary knowledge base, never rendered editable
   orgSummaryPending: null, // generated but not yet approved
   orgSummaryStatus: null, // null | "working" | "ready" - guards against starting a second retrieve
+
+  // "Build multiple things" mode - a Plan of N steps (Object/Field/Apex/Flow),
+  // run through /api/plan/*. Kept separate from the single-Flow fields above
+  // rather than merged into them - see server.py's PlanSession, additive
+  // alongside Session for the same reason.
+  planSessionId: null,
+  planVersion: 0,
+  planApproved: false,
+  planValidatedVersion: null,
 };
 
 let mermaid = null;
@@ -506,6 +515,206 @@ function renderResult(result) {
 }
 
 // --------------------------------------------------------------------------
+// Plans ("build multiple things" mode - Object/Field/Apex/Flow, one request)
+// --------------------------------------------------------------------------
+
+const PLAN_ARTIFACT_LABELS = { flow: "Flow", object: "Object", field: "Field", apex: "Apex Class" };
+
+function planStepSummary(step) {
+  switch (step.artifact_type) {
+    case "flow":
+      return `${step.element_count} element${step.element_count === 1 ? "" : "s"}`;
+    case "object":
+      return step.api_name;
+    case "field":
+      return `${step.field_type} on ${step.object_api_name}`;
+    case "apex":
+      return `${step.lines} line${step.lines === 1 ? "" : "s"}`;
+    default:
+      return "";
+  }
+}
+
+// A standalone render, unlike the pan/zoom-wired renderDiagram() above: a
+// plan can hold several Flow steps, each needing its own small diagram, and
+// wiring pan/zoom state per card is more machinery than a review view needs.
+async function renderPlanStepDiagram(host, source) {
+  if (!mermaid) {
+    const pre = document.createElement("pre");
+    pre.textContent = source;
+    host.appendChild(pre);
+    return;
+  }
+  try {
+    const id = "p" + Date.now() + Math.random().toString(36).slice(2);
+    const { svg } = await mermaid.render(id, source);
+    host.innerHTML = svg;
+  } catch (err) {
+    const pre = document.createElement("pre");
+    pre.textContent = source + "\n\n// could not render: " + err.message;
+    host.appendChild(pre);
+  }
+}
+
+function planStepTable(rows) {
+  const table = document.createElement("table");
+  table.className = "plan-step-table";
+  rows.forEach(([label, value]) => {
+    const row = document.createElement("tr");
+    const th = document.createElement("th");
+    th.textContent = label;
+    const td = document.createElement("td");
+    td.textContent = value ?? "";
+    row.appendChild(th);
+    row.appendChild(td);
+    table.appendChild(row);
+  });
+  return table;
+}
+
+function renderPlanStep(step) {
+  const card = document.createElement("details");
+  card.className = "plan-step " + step.artifact_type;
+  card.open = true;
+
+  const summary = document.createElement("summary");
+  const badge = document.createElement("span");
+  badge.className = "badge plan-type-badge " + step.artifact_type;
+  badge.textContent = PLAN_ARTIFACT_LABELS[step.artifact_type] || step.artifact_type;
+  const name = document.createElement("span");
+  name.className = "plan-step-name";
+  name.textContent = step.name;
+  const sub = document.createElement("span");
+  sub.className = "dim plan-step-sub";
+  sub.textContent = planStepSummary(step);
+  summary.append(badge, name, sub);
+  card.appendChild(summary);
+
+  const body = document.createElement("div");
+  body.className = "plan-step-body";
+
+  if (step.artifact_type === "flow") {
+    const diagram = document.createElement("div");
+    diagram.className = "plan-step-diagram";
+    body.appendChild(diagram);
+    renderPlanStepDiagram(diagram, step.mermaid);
+  } else if (step.artifact_type === "apex") {
+    const pre = document.createElement("pre");
+    pre.textContent = step.body;
+    body.appendChild(pre);
+  } else if (step.artifact_type === "object") {
+    body.appendChild(planStepTable([
+      ["API name", step.api_name],
+      ["Label", step.label],
+      ["Plural label", step.plural_label],
+    ]));
+  } else if (step.artifact_type === "field") {
+    body.appendChild(planStepTable([
+      ["API name", step.api_name],
+      ["On object", step.object_api_name],
+      ["Type", step.field_type],
+    ]));
+  }
+
+  if (step.depends_on && step.depends_on.length) {
+    const dep = document.createElement("div");
+    dep.className = "dim plan-step-deps";
+    dep.textContent = "After: " + step.depends_on.join(", ");
+    body.appendChild(dep);
+  }
+  if (step.repairs) {
+    const note = document.createElement("div");
+    note.className = "dim plan-step-repairs";
+    note.textContent =
+      `Corrected itself ${step.repairs} time${step.repairs === 1 ? "" : "s"} before validating.`;
+    body.appendChild(note);
+  }
+
+  card.appendChild(body);
+  return card;
+}
+
+function renderPlan(data) {
+  state.planSessionId = data.session_id;
+  state.planVersion = data.version;
+  state.planApproved = data.approved;
+
+  $("empty").hidden = true;
+  $("flowView").hidden = true;
+  $("refineBox").hidden = true;
+  $("planView").hidden = false;
+
+  const steps = data.steps || [];
+  $("planMeta").textContent = `${steps.length} step${steps.length === 1 ? "" : "s"}`;
+  $("planVersionBadge").textContent = "v" + data.version;
+
+  const overview = $("planOverview");
+  overview.innerHTML = "";
+  steps.forEach((step) => {
+    const chip = document.createElement("span");
+    chip.className = "plan-chip " + step.artifact_type;
+    chip.textContent = `${PLAN_ARTIFACT_LABELS[step.artifact_type] || step.artifact_type}: ${step.name}`;
+    overview.appendChild(chip);
+  });
+
+  const container = $("planSteps");
+  container.innerHTML = "";
+  steps.forEach((step) => container.appendChild(renderPlanStep(step)));
+
+  if (data.usage) state.usage = data.usage;
+  renderLogs();
+
+  $("planResult").hidden = true;
+  renderPlanGate();
+}
+
+function renderPlanGate() {
+  const approve = $("planApproveBtn");
+  const validate = $("planValidateBtn");
+  const deploy = $("planDeployBtn");
+  const gate = $("planGate");
+
+  approve.disabled = state.planApproved;
+  approve.textContent = state.planApproved ? "Approved" : "Approve all";
+  validate.disabled = !state.planApproved;
+
+  const validatedNow = state.planValidatedVersion === state.planVersion;
+  deploy.disabled = !state.planApproved || !validatedNow;
+
+  if (!state.planApproved) {
+    gate.textContent =
+      "Nothing here has been approved. Nothing is sent to Salesforce until you approve it.";
+  } else if (!validatedNow) {
+    gate.textContent = "Approved. Validate the whole bundle against the org before deploying.";
+  } else {
+    gate.textContent = "Validated. Deploying sends every step above to the org in one transaction.";
+  }
+}
+
+function renderPlanResult(result) {
+  const box = $("planResult");
+  box.hidden = false;
+  box.className = "result " + (result.success ? "ok" : "bad");
+  box.innerHTML = "";
+
+  const title = document.createElement("h3");
+  title.textContent = result.success
+    ? `${result.status} - this bundle will deploy cleanly`
+    : `${result.status} - Salesforce rejected it`;
+  box.appendChild(title);
+
+  if (result.failures.length) {
+    const list = document.createElement("ul");
+    result.failures.forEach((failure) => {
+      const item = document.createElement("li");
+      item.textContent = failure;
+      list.appendChild(item);
+    });
+    box.appendChild(list);
+  }
+}
+
+// --------------------------------------------------------------------------
 // Actions
 // --------------------------------------------------------------------------
 
@@ -971,6 +1180,96 @@ async function deploy() {
   }
 }
 
+async function planAndBuild() {
+  const button = $("planBtn");
+  showError(button.parentElement, "");
+  busy(button, true, "Planning...");
+  try {
+    const { job_id } = await api("api/plan/start", {
+      request: $("planRequest").value,
+      provider: $("provider").value || null,
+      effort: $("effort").value,
+      api_version: $("apiVersion").value.trim() || "62.0",
+      api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
+    });
+    const planned = await poll("api/plan/status", { job_id });
+    // Not another busy(button, true, ...) call: it stashes the *current*
+    // text as the label to restore, so a second call here would overwrite
+    // the real original ("Plan and build") with this stage's own text and
+    // leave the button reading it forever after busy(button, false) below.
+    button.textContent =
+      `Building ${planned.steps.length} step${planned.steps.length === 1 ? "" : "s"}...`;
+    const { job_id: execJobId } = await api(
+      "api/plan/execute/start", { plan_id: planned.plan_id }
+    );
+    const data = await poll("api/plan/execute/status", { job_id: execJobId });
+    state.planValidatedVersion = null;
+    renderPlan(data);
+  } catch (err) {
+    showError(button.parentElement, err.message);
+    logError("Plan", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function planApprove() {
+  try {
+    const data = await api("api/plan/approve", {
+      session_id: state.planSessionId,
+      version: state.planVersion,
+    });
+    renderPlan(data);
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Approve plan", err.message);
+  }
+}
+
+async function planValidate() {
+  const button = $("planValidateBtn");
+  showError($("planGate").parentElement, "");
+  busy(button, true, "Validating...");
+  try {
+    await api("api/plan/validate/start", {
+      session_id: state.planSessionId,
+      ...orgCredentials(),
+    });
+    const result = await poll("api/plan/validate/status", { session_id: state.planSessionId });
+    if (result.success) state.planValidatedVersion = result.checked_version;
+    renderPlanResult(result);
+    renderPlanGate();
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Validate plan", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function planDeploy() {
+  if (!confirm("Deploy every step above to the org?\n\nThis happens as one transaction.")) return;
+
+  const button = $("planDeployBtn");
+  showError($("planGate").parentElement, "");
+  busy(button, true, "Deploying...");
+  try {
+    await api("api/plan/deploy/start", {
+      session_id: state.planSessionId,
+      ...orgCredentials(),
+      confirm: true,
+    });
+    const result = await poll("api/plan/deploy/status", { session_id: state.planSessionId });
+    renderPlanResult(result);
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Deploy plan", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
 // --------------------------------------------------------------------------
 // API key memory (browser-local only - never written to a file or sent
 // anywhere but the request that needs it)
@@ -1224,15 +1523,35 @@ async function boot() {
 
   document.querySelectorAll(".mode").forEach((mode) => {
     mode.onclick = () => {
-      const open = mode.dataset.mode === "open";
+      const selected = mode.dataset.mode; // "new" | "open" | "plan"
       document.querySelectorAll(".mode").forEach((other) =>
         other.classList.toggle("active", other === mode)
       );
-      $("openPane").hidden = !open;
-      $("newPane").hidden = open;
-      if (open && !$("flowPicker").dataset.loaded) {
+      $("openPane").hidden = selected !== "open";
+      $("newPane").hidden = selected !== "new";
+      $("planPane").hidden = selected !== "plan";
+      // Shared by "new" and "plan" - a plan's Flow steps respect Activate
+      // too (see PlanSession.apply_policy in server.py). Meaningless for
+      // "open": an imported flow keeps whatever status it already has.
+      $("sharedOptions").hidden = selected === "open";
+      if (selected === "open" && !$("flowPicker").dataset.loaded) {
         $("flowPicker").dataset.loaded = "1";
         loadFlows();
+      }
+
+      // The right panel shows exactly one of: empty state, a single Flow
+      // (design/open), or a plan (several artifacts) - whichever this mode
+      // last produced, so switching modes never leaves two results overlaid.
+      if (selected === "plan") {
+        $("refineBox").hidden = true;
+        $("flowView").hidden = true;
+        $("planView").hidden = !state.planSessionId;
+        $("empty").hidden = !!state.planSessionId;
+      } else {
+        $("planView").hidden = true;
+        $("flowView").hidden = !state.sessionId;
+        $("refineBox").hidden = !state.sessionId;
+        $("empty").hidden = !!state.sessionId;
       }
     };
   });
@@ -1285,6 +1604,11 @@ async function boot() {
   $("approveBtn").onclick = approve;
   $("validateBtn").onclick = validate;
   $("deployBtn").onclick = deploy;
+
+  $("planBtn").onclick = planAndBuild;
+  $("planApproveBtn").onclick = planApprove;
+  $("planValidateBtn").onclick = planValidate;
+  $("planDeployBtn").onclick = planDeploy;
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.onclick = () => {

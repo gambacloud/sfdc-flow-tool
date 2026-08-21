@@ -4,11 +4,76 @@ retrieve/deploy calls themselves are exercised for real by verify.py and
 spike.py against a live org, not here.
 """
 
+import io
+import zipfile
+
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     _is_unmanaged,
+    build_deploy_package,
     build_multi_type_package,
+    build_package,
 )
+
+
+class TestBuildDeployPackage:
+    """
+    The multi-type deploy manifest, generalized from build_package (Flow-only)
+    so one deploy can bundle Object/Field/Apex/Flow members together - the
+    Phase 4 piece the multi-artifact plan calls for.
+    """
+
+    def test_matches_build_package_for_a_single_flow(self):
+        # build_package becomes a thin wrapper over this - must stay
+        # byte-identical, since server.py and validate_flow still call it.
+        old = build_package("My_Flow", "<Flow/>", "62.0")
+        new = build_deploy_package(
+            {"flows/My_Flow.flow": "<Flow/>"}, {"Flow": ["My_Flow"]}, "62.0"
+        )
+        assert old == new
+
+    def test_bundles_several_types_in_one_zip(self):
+        zip_bytes = build_deploy_package(
+            files={
+                "objects/Invoice__c.object": "<CustomObject/>",
+                "objects/Invoice__c/fields/Amount__c.field": "<CustomField/>",
+                "classes/Helper.cls": "public class Helper {}",
+                "classes/Helper.cls-meta.xml": "<ApexClass/>",
+            },
+            types={
+                "CustomObject": ["Invoice__c"],
+                "CustomField": ["Invoice__c.Amount__c"],
+                "ApexClass": ["Helper"],
+            },
+            api_version="62.0",
+        )
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+            names = set(archive.namelist())
+            package_xml = archive.read("package.xml").decode()
+
+        assert names == {
+            "package.xml",
+            "objects/Invoice__c.object",
+            "objects/Invoice__c/fields/Amount__c.field",
+            "classes/Helper.cls",
+            "classes/Helper.cls-meta.xml",
+        }
+        assert "<members>Invoice__c</members>" in package_xml
+        assert "<members>Invoice__c.Amount__c</members>" in package_xml
+        assert "<members>Helper</members>" in package_xml
+        assert package_xml.count("<types>") == 3
+        assert "<name>CustomObject</name>" in package_xml
+        assert "<name>CustomField</name>" in package_xml
+        assert "<name>ApexClass</name>" in package_xml
+
+    def test_no_types_produces_an_empty_package(self):
+        # A degenerate case that should never crash - an empty plan approved
+        # with nothing left to deploy, say.
+        zip_bytes = build_deploy_package({}, {}, "62.0")
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+            package_xml = archive.read("package.xml").decode()
+        assert "<types>" not in package_xml
+        assert "<version>62.0</version>" in package_xml
 
 
 class TestBuildMultiTypePackage:

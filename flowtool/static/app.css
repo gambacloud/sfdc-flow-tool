@@ -382,6 +382,51 @@ pre#code {
 .result li { font-family: var(--mono); font-size: 12.5px; margin-bottom: 6px; }
 .result button { margin-top: 12px; }
 
+/* Plan mode - one card per step (Object/Field/Apex/Flow), colour-coded by
+   type so a long plan stays scannable at a glance. */
+.plan-type-badge.flow { border-color: var(--accent); color: var(--accent); }
+.plan-type-badge.object { border-color: var(--ok); color: var(--ok); }
+.plan-type-badge.field { border-color: var(--warn); color: var(--warn); }
+.plan-type-badge.apex { border-color: var(--accent); color: var(--accent); }
+
+.plan-overview { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
+.plan-chip {
+  font-size: 12px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--dim);
+}
+.plan-chip.flow { border-color: var(--accent); }
+.plan-chip.object { border-color: var(--ok); }
+.plan-chip.field { border-color: var(--warn); }
+.plan-chip.apex { border-color: var(--accent); }
+
+.plan-steps { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.plan-step {
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  overflow: hidden;
+}
+.plan-step summary {
+  cursor: pointer; list-style: none; padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px; font-size: 14px;
+}
+.plan-step summary::-webkit-details-marker { display: none; }
+.plan-step summary::before { content: "▸"; color: var(--dim); font-size: 11px; }
+.plan-step[open] summary::before { content: "▾"; }
+.plan-step-name { font-weight: 600; }
+.plan-step-sub { font-size: 12.5px; }
+.plan-step-body { padding: 0 14px 14px; }
+.plan-step-body pre {
+  margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--code);
+  font-family: var(--mono); font-size: 12.5px; overflow-x: auto; white-space: pre-wrap;
+}
+.plan-step-diagram { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow-x: auto; }
+.plan-step-diagram svg { max-width: 100%; height: auto; }
+.plan-step-table { border-collapse: collapse; font-size: 13px; }
+.plan-step-table th {
+  text-align: left; color: var(--dim); font-weight: 400; padding: 3px 12px 3px 0; white-space: nowrap;
+}
+.plan-step-table td { padding: 3px 0; font-family: var(--mono); }
+.plan-step-deps, .plan-step-repairs { margin-top: 8px; font-size: 12px; }
+
 .error { color: var(--danger); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
 .spin { color: var(--dim); font-size: 13px; margin-top: 10px; }
 
