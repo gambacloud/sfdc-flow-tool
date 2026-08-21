@@ -244,6 +244,17 @@ class PendingKbAnswer:
 KB_JOBS: Dict[str, PendingKbAnswer] = {}
 
 
+def waiting(provider: Provider) -> Dict[str, Any]:
+    """
+    A `{"done": False}` poll response, plus - when the provider is mid-retry
+    on a rate limit or a transient server error - what it's waiting on. Only
+    GeminiProvider currently sets `retry_status` (see flowtool/llm.py); any
+    other provider simply has none, so this stays `None` for it rather than
+    needing a per-provider special case here.
+    """
+    return {"done": False, "retry": getattr(provider, "retry_status", None)}
+
+
 def llm_result(task: "asyncio.Task"):
     """
     Unwrap a background LLM task, turning any failure into an HTTPException
@@ -563,7 +574,7 @@ async def design_status(job_id: str) -> Dict[str, Any]:
     if pending is None:
         raise HTTPException(404, "Unknown design job.")
     if not pending.task.done():
-        return {"done": False}
+        return waiting(pending.generator.provider)
     del DESIGN_JOBS[job_id]
 
     result = llm_result(pending.task)
@@ -707,7 +718,7 @@ async def kb_chat_status(job_id: str) -> Dict[str, Any]:
     if pending is None:
         raise HTTPException(404, "Unknown kb-chat job.")
     if not pending.task.done():
-        return {"done": False}
+        return waiting(pending.provider)
     del KB_JOBS[job_id]
     answer = llm_result(pending.task)
     return {"done": True, "answer": answer, "usage": pending.provider.usage.as_dict()}
@@ -797,7 +808,7 @@ async def explain_status(session_id: str) -> Dict[str, Any]:
     if task is None:
         raise HTTPException(400, "No explain in progress - call /api/explain/start first.")
     if not task.done():
-        return {"done": False}
+        return waiting(session.generator.provider)
     session.pending_explain = None
     explanation = llm_result(task)
     return {
@@ -820,7 +831,7 @@ def _llm_status(session_id: str) -> Dict[str, Any]:
     if pending is None:
         raise HTTPException(400, "Nothing in progress - call the matching /start endpoint first.")
     if not pending.task.done():
-        return {"done": False}
+        return waiting(session.generator.provider)
     session.pending_llm = None
     result = llm_result(pending.task)
     session.record(result, pending.note)
@@ -1210,7 +1221,7 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
     if pending is None:
         raise HTTPException(404, "Unknown plan job.")
     if not pending.task.done():
-        return {"done": False}
+        return waiting(pending.provider)
     del PLAN_JOBS[job_id]
 
     result = llm_result(pending.task)
@@ -1255,7 +1266,7 @@ async def plan_execute_status(job_id: str) -> Dict[str, Any]:
     if pending is None:
         raise HTTPException(404, "Unknown plan execution job.")
     if not pending.task.done():
-        return {"done": False}
+        return waiting(pending.provider)
     del PLAN_EXECUTIONS[job_id]
 
     steps = llm_result(pending.task)

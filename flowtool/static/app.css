@@ -46,6 +46,20 @@ body {
   color: var(--text);
 }
 
+/* Shown while a background generation is waiting out a rate limit or a
+   transient provider error (see flowtool/llm.py's retry_status and
+   server.py's waiting()) - transparency for a wait that would otherwise look
+   identical to a hang. Sits above <main> so it's visible regardless of which
+   mode is active. */
+.retry-notice {
+  flex-shrink: 0;
+  padding: 8px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 13px;
+}
+
 /* Wraps as whole groups (title, org status, Log in buttons, Manual entry,
    Logs) rather than shrinking - without this, a header too narrow for one
    line squeezed every item instead, and a squeezed h1 has nowhere to put the

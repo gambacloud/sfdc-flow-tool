@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Generic, List, Optional, Protocol, Type, TypeVar
 
@@ -677,6 +678,11 @@ _GEMINI_THINKING = {
     "high": "HIGH",
 }
 
+# Seconds to wait between retries of a Gemini 503 ("high demand"), one entry
+# per attempt. Short and few: this is a fallback for a transient blip, not a
+# substitute for the user retrying by hand if the model is down for a while.
+_GEMINI_SERVER_ERROR_BACKOFF = (2, 5, 10)
+
 # Gemini caps how large a response_json_schema may be, and it counts the schema
 # with every $ref inlined - so a definition referenced from six places costs six
 # times. Over the cap the whole request is rejected with a flat
@@ -831,6 +837,12 @@ class GeminiProvider:
         self.max_tokens = max_tokens
         self.usage = Usage()
         self._warned_about_budget = False
+        # Set while _generate is waiting out a rate limit or a transient
+        # server error, cleared the moment it stops - a caller polling a
+        # background job (server.py) reads this to tell the browser "still
+        # working, here's why" instead of a silent wait that looks the same
+        # as a hang. None the rest of the time.
+        self.retry_status: Optional[Dict[str, Any]] = None
 
     @property
     def _client(self):
@@ -839,26 +851,61 @@ class GeminiProvider:
     def _generate(self, **kwargs):
         """
         Runs generate_content, rotating to the next Gemini key on a rate
-        limit. Free-tier limits are per Google Cloud project, not per key -
-        two keys under the same project share one quota - so this only helps
-        when GEMINI_API_KEY2 (GEMINI_API_KEY3, ...) genuinely belongs to a
-        different project. Anything other than a rate limit is raised
-        straight through; the caller's own except clauses handle those.
+        limit and retrying with backoff on a server error. Free-tier limits
+        are per Google Cloud project, not per key - two keys under the same
+        project share one quota - so key rotation only helps when
+        GEMINI_API_KEY2 (GEMINI_API_KEY3, ...) genuinely belongs to a
+        different project. Anything else is raised straight through; the
+        caller's own except clauses handle those.
         """
         from google.genai import errors
 
+        server_error_attempt = 0
         while True:
             try:
-                return self._client.models.generate_content(**kwargs)
+                result = self._client.models.generate_content(**kwargs)
+                self.retry_status = None
+                return result
             except errors.ClientError as exc:
                 rate_limited = exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED"
                 if not rate_limited or self._key_index == len(self._clients) - 1:
+                    self.retry_status = None
                     raise
                 log.warning(
                     "Gemini key %d/%d rate-limited, switching to key %d",
                     self._key_index + 1, len(self._clients), self._key_index + 2,
                 )
+                self.retry_status = {
+                    "reason": "rate_limited",
+                    "message": f"Rate limited on key {self._key_index + 1}/"
+                               f"{len(self._clients)} - switching key and retrying.",
+                }
                 self._key_index += 1
+            except errors.ServerError as exc:
+                # "This model is currently experiencing high demand" (503) is
+                # Google's own wording for a transient condition, not a real
+                # failure - a short retry clears most of them, which matters
+                # a lot more here than in a single-generation flow: a plan
+                # with several steps loses every step after this one to a
+                # failure the very next request would likely not have hit.
+                if server_error_attempt >= len(_GEMINI_SERVER_ERROR_BACKOFF):
+                    self.retry_status = None
+                    raise
+                wait = _GEMINI_SERVER_ERROR_BACKOFF[server_error_attempt]
+                server_error_attempt += 1
+                log.warning(
+                    "Gemini server error (attempt %d/%d), retrying in %ss: %s",
+                    server_error_attempt, len(_GEMINI_SERVER_ERROR_BACKOFF),
+                    wait, exc.message,
+                )
+                self.retry_status = {
+                    "reason": "server_error",
+                    "message": f"Gemini is experiencing high demand (attempt "
+                               f"{server_error_attempt}/{len(_GEMINI_SERVER_ERROR_BACKOFF)}) - "
+                               f"retrying in {wait}s.",
+                    "wait": wait,
+                }
+                time.sleep(wait)
 
     def _record(self, response) -> None:
         meta = getattr(response, "usage_metadata", None)

@@ -11,9 +11,11 @@ import pytest
 
 from flowtool.llm import (
     FlowGenerator,
+    GeminiProvider,
     LLMError,
     Message,
     Usage,
+    _GEMINI_SERVER_ERROR_BACKOFF,
     gemini_schema,
     strict_schema,
 )
@@ -169,6 +171,116 @@ class TestRefine:
         instruction = provider.calls[1][-1].content
         assert "Salesforce rejected" in instruction
         assert "sObjectInputReference" in instruction
+
+
+class TestGeminiServerErrorRetry:
+    """
+    A Gemini 503 ("high demand") is transient by Google's own description -
+    _generate retries it with backoff instead of failing the whole
+    generation (and, inside a multi-step plan, every step after it) on what
+    is usually a momentary blip.
+    """
+
+    def _provider(self, monkeypatch):
+        provider = GeminiProvider(api_key="fake-key-for-test")
+        monkeypatch.setattr("time.sleep", lambda seconds: None)
+        return provider
+
+    def _server_error(self):
+        from google.genai import errors
+        return errors.ServerError(
+            503, {"error": {"message": "high demand", "status": "UNAVAILABLE"}}
+        )
+
+    def test_succeeds_after_transient_server_errors(self, monkeypatch):
+        provider = self._provider(monkeypatch)
+        calls = {"n": 0}
+
+        def flaky(**kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise self._server_error()
+            return "ok"
+
+        monkeypatch.setattr(provider._client.models, "generate_content", flaky)
+        assert provider._generate() == "ok"
+        assert calls["n"] == 3
+        # Cleared once it actually succeeds - a poller must not keep showing
+        # a stale "retrying" note after the call that mattered came back.
+        assert provider.retry_status is None
+
+    def test_retry_status_is_set_while_waiting(self, monkeypatch):
+        # Read from inside the flaky call itself: retry_status has to be set
+        # *before* the sleep a poller would be racing against, not just
+        # noticeable afterwards.
+        provider = self._provider(monkeypatch)
+        seen = []
+
+        def flaky(**kwargs):
+            seen.append(provider.retry_status)
+            if len(seen) < 2:
+                raise self._server_error()
+            return "ok"
+
+        monkeypatch.setattr(provider._client.models, "generate_content", flaky)
+        provider._generate()
+        assert seen[0] is None, "nothing to report before the first attempt"
+        assert seen[1]["reason"] == "server_error"
+        assert seen[1]["wait"] == _GEMINI_SERVER_ERROR_BACKOFF[0]
+        assert "high demand" in seen[1]["message"].lower()
+
+    def test_gives_up_after_the_retry_budget(self, monkeypatch):
+        provider = self._provider(monkeypatch)
+
+        def always_503(**kwargs):
+            raise self._server_error()
+
+        monkeypatch.setattr(provider._client.models, "generate_content", always_503)
+        from google.genai import errors
+        with pytest.raises(errors.ServerError):
+            provider._generate()
+        # A final, un-retried failure is not "still waiting" - nothing left
+        # for a poller to show once the exception has already propagated.
+        assert provider.retry_status is None
+
+    def test_a_rate_limit_is_not_treated_as_a_server_error(self, monkeypatch):
+        # Rate limiting already has its own handling (key rotation) - this
+        # pins down that a 429 isn't accidentally caught by the new 503
+        # branch and retried the wrong way.
+        provider = self._provider(monkeypatch)
+        from google.genai import errors
+
+        def rate_limited(**kwargs):
+            raise errors.ClientError(
+                429, {"error": {"message": "quota", "status": "RESOURCE_EXHAUSTED"}}
+            )
+
+        monkeypatch.setattr(provider._client.models, "generate_content", rate_limited)
+        # Only one key configured, so key rotation has nowhere to go and the
+        # original error surfaces - not retried as if it were a 503.
+        with pytest.raises(errors.ClientError):
+            provider._generate()
+        assert provider.retry_status is None
+
+    def test_retry_status_reports_a_rate_limit_switch(self, monkeypatch):
+        provider = GeminiProvider(api_key="fake-key-for-test")
+        provider._clients.append(provider._clients[0])  # a second "key" to switch to
+        from google.genai import errors
+
+        calls = {"n": 0}
+
+        def rate_limited_once(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise errors.ClientError(
+                    429, {"error": {"message": "quota", "status": "RESOURCE_EXHAUSTED"}}
+                )
+            return "ok"
+
+        monkeypatch.setattr(provider._clients[0].models, "generate_content", rate_limited_once)
+        monkeypatch.setattr(provider._clients[1].models, "generate_content", rate_limited_once)
+        assert provider._generate() == "ok"
+        assert provider.retry_status is None  # cleared on the eventual success
 
 
 RAW = Flow.model_json_schema()

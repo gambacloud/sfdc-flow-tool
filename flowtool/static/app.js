@@ -79,12 +79,22 @@ function sleep(ms) {
 // A validate/deploy/import can run past Heroku's 30s request limit, so the
 // server hands back a job immediately and this polls for the result instead
 // of one request sitting open the whole time.
+//
+// While it's waiting, `data.retry` (see server.py's waiting()) says whether
+// the model itself is stuck retrying a rate limit or a transient provider
+// error - shown here rather than left as a silent wait indistinguishable
+// from a hang, and cleared the moment this poll loop ends either way.
 async function poll(path, params) {
   const query = new URLSearchParams(params).toString();
-  for (;;) {
-    const data = await api(`${path}?${query}`);
-    if (data.done) return data;
-    await sleep(1500);
+  try {
+    for (;;) {
+      const data = await api(`${path}?${query}`);
+      showRetryNotice(data.retry);
+      if (data.done) return data;
+      await sleep(1500);
+    }
+  } finally {
+    showRetryNotice(null);
   }
 }
 
@@ -131,6 +141,19 @@ function showError(where, message) {
   node.className = "error";
   node.textContent = message;
   where.appendChild(node);
+}
+
+// The amber bar above <main> - see poll()'s comment for why this exists.
+// `retry` is the `{reason, message, ...}` object server.py's waiting()
+// sends, or null/undefined to hide the bar.
+function showRetryNotice(retry) {
+  const el = $("retryNotice");
+  if (!retry) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.textContent = retry.message || "Waiting on the model - retrying automatically.";
 }
 
 // Every error the user sees also lands in the Logs panel, so a failure that
