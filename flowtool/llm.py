@@ -17,6 +17,7 @@ import math
 import os
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Generic, List, Optional, Protocol, Type, TypeVar
@@ -53,6 +54,11 @@ class Usage:
     output_tokens: int = 0
     cached_input_tokens: int = 0
     thinking_tokens: int = 0
+    # A plan can now run several steps' generations concurrently in separate
+    # threads (see planner.execute_plan), all updating the one Usage a
+    # session's provider carries - `+=` is not atomic, so without this a
+    # lost update under real concurrency would silently under-report cost.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add(
         self,
@@ -61,11 +67,12 @@ class Usage:
         cached_input_tokens: int = 0,
         thinking_tokens: int = 0,
     ) -> None:
-        self.calls += 1
-        self.input_tokens += input_tokens or 0
-        self.output_tokens += output_tokens or 0
-        self.cached_input_tokens += cached_input_tokens or 0
-        self.thinking_tokens += thinking_tokens or 0
+        with self._lock:
+            self.calls += 1
+            self.input_tokens += input_tokens or 0
+            self.output_tokens += output_tokens or 0
+            self.cached_input_tokens += cached_input_tokens or 0
+            self.thinking_tokens += thinking_tokens or 0
 
     def as_dict(self) -> Dict[str, int]:
         return {
@@ -875,10 +882,18 @@ class GeminiProvider:
         # working, here's why" instead of a silent wait that looks the same
         # as a hang. None the rest of the time.
         self.retry_status: Optional[Dict[str, Any]] = None
+        # A plan can run several steps concurrently against this one
+        # provider (see planner.execute_plan) - guards _key_index, which a
+        # bare `+=` would corrupt under real concurrent access, the same
+        # concern Usage.add() has. Held only around the state mutation
+        # itself, never around the network call, so concurrent generations
+        # still genuinely run in parallel.
+        self._key_lock = threading.Lock()
 
     @property
     def _client(self):
-        return self._clients[self._key_index]
+        with self._key_lock:
+            return self._clients[self._key_index]
 
     def _generate(self, **kwargs):
         """
@@ -914,7 +929,8 @@ class GeminiProvider:
                     # An untried key remains - wrap around from wherever the
                     # random starting index landed, rather than assuming key
                     # 1 is next just because it's index 0.
-                    self._key_index = (self._key_index + 1) % len(self._clients)
+                    with self._key_lock:
+                        self._key_index = (self._key_index + 1) % len(self._clients)
                     log.warning(
                         "Gemini key rate-limited (%d/%d tried), switching key",
                         keys_tried, len(self._clients),

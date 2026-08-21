@@ -5,18 +5,22 @@ plan looks like; execute_plan pins down that running one actually drives the
 Phase 1-3 generators end to end, not just that the plan itself validates.
 """
 
+import threading
+import time
+
 import pytest
 from pydantic import ValidationError
 
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
+from flowtool.llm import APEX_SYSTEM_PROMPT, FIELD_SYSTEM_PROMPT, OBJECT_SYSTEM_PROMPT
 from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, execute_plan, refine_step, repair_step,
 )
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
-from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider
+from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider, TypedScriptedProvider
 
 
 def _step(**overrides):
@@ -122,11 +126,16 @@ class TestExecutePlan:
                       depends_on=["Object"]),
             PlanStep(artifact_type="apex", name="Apex", brief="a helper class"),
         ])
-        # Queued in the order execute_plan will actually call the provider:
-        # Object first (no deps), then Field (depends on Object), then Apex
-        # (no deps, so it runs after everything with no deps came first - see
-        # Plan.ordered, which preserves original order among independent steps).
-        provider = ScriptedProvider(VALID_OBJECT, VALID_FIELD, VALID_APEX)
+        # Object and Apex share a layer (neither depends on anything) and now
+        # run concurrently - see execute_plan's docstring - so which one's
+        # thread calls the provider first is not guaranteed. A plain
+        # ScriptedProvider's FIFO queue would then risk handing Object's
+        # thread the Apex payload or vice versa; TypedScriptedProvider routes
+        # by which system prompt asked (each artifact type's is a distinct
+        # constant), so this stays deterministic regardless of thread timing.
+        provider = TypedScriptedProvider(
+            object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX,
+        )
         results = execute_plan(provider, plan)
 
         by_name = {r.step.name: r for r in results}
@@ -151,6 +160,78 @@ class TestExecutePlan:
         by_name = {r.step.name: r for r in results}
         assert isinstance(by_name["Object"].value, CustomObject)
         assert isinstance(by_name["Field"].value, CustomField)
+
+    def test_independent_steps_actually_run_concurrently(self, monkeypatch):
+        # Not just "safe under concurrency" (the tests above) - proves the
+        # wall-clock benefit is real: three independent steps, each with an
+        # artificial delay, finish in about one delay's worth of time, not
+        # three, if and only if they're genuinely running in parallel threads
+        # rather than one after another.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="object", name="A", brief="a"),
+            PlanStep(artifact_type="field", name="B", brief="b"),
+            PlanStep(artifact_type="apex", name="C", brief="c"),
+        ])
+        provider = TypedScriptedProvider(
+            object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX,
+        )
+        delay = 0.15
+
+        real_complete_json = provider.complete_json
+
+        def slow_complete_json(system, messages, schema):
+            time.sleep(delay)
+            return real_complete_json(system, messages, schema)
+
+        monkeypatch.setattr(provider, "complete_json", slow_complete_json)
+
+        started = time.monotonic()
+        execute_plan(provider, plan)
+        elapsed = time.monotonic() - started
+
+        # Sequential would take ~3x delay; concurrent, ~1x. The threshold
+        # sits well clear of both to absorb scheduling jitter without being
+        # able to pass a sequential run by accident.
+        assert elapsed < delay * 2, (
+            f"took {elapsed:.3f}s for 3 steps at {delay}s each - "
+            "looks sequential, not concurrent"
+        )
+
+    def test_dependent_step_waits_for_its_whole_layer_to_finish(self, monkeypatch):
+        # B and C are independent (layer 0); A depends on both (layer 1). A
+        # must not start until the slower of B/C is actually done, even
+        # though the other one finished earlier - a layer is a barrier, not
+        # "start as soon as your own deps happen to be done" per step.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="apex", name="A", brief="a", depends_on=["B", "C"]),
+            PlanStep(artifact_type="object", name="B", brief="b"),
+            PlanStep(artifact_type="field", name="C", brief="c"),
+        ])
+        provider = TypedScriptedProvider(
+            object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX,
+        )
+        real_complete_json = provider.complete_json
+        finished_layer_0 = threading.Event()
+        b_done = {"value": False}
+        c_done = {"value": False}
+
+        def tracking_complete_json(system, messages, schema):
+            if system == OBJECT_SYSTEM_PROMPT:
+                time.sleep(0.05)
+                b_done["value"] = True
+            elif system == FIELD_SYSTEM_PROMPT:
+                time.sleep(0.15)
+                c_done["value"] = True
+            elif system == APEX_SYSTEM_PROMPT:
+                # A's own call - by the time this runs, both of layer 0 must
+                # already be marked done.
+                assert b_done["value"] and c_done["value"]
+                finished_layer_0.set()
+            return real_complete_json(system, messages, schema)
+
+        monkeypatch.setattr(provider, "complete_json", tracking_complete_json)
+        execute_plan(provider, plan)
+        assert finished_layer_0.is_set()
 
 
 class TestRepairStep:

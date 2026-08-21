@@ -11,7 +11,7 @@ import server
 from flowtool.sfdc import ComponentProblem, DeployResult
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
-from tests.test_llm import ScriptedProvider, VALID as VALID_FLOW
+from tests.test_llm import ScriptedProvider, TypedScriptedProvider, VALID as VALID_FLOW
 
 ONE_STEP_PLAN = {
     "steps": [
@@ -52,6 +52,22 @@ def client(monkeypatch):
 def scripted(monkeypatch):
     def install(*payloads):
         provider = ScriptedProvider(*payloads)
+        monkeypatch.setattr(server, "build_provider", lambda *_a, **_k: provider)
+        return provider
+
+    return install
+
+
+@pytest.fixture
+def typed_scripted(monkeypatch):
+    """
+    Like `scripted`, but routes by artifact type rather than call order -
+    needed for BUNDLE_PLAN, where Object and Apex share a dependency layer
+    and now run concurrently (see planner.execute_plan), so a plain FIFO
+    queue can't guarantee which payload lands on which step's thread.
+    """
+    def install(**payloads_by_type):
+        provider = TypedScriptedProvider(**payloads_by_type)
         monkeypatch.setattr(server, "build_provider", lambda *_a, **_k: provider)
         return provider
 
@@ -110,8 +126,8 @@ class TestPlanStart:
 
 
 class TestPlanExecute:
-    def test_bundle_plan_runs_every_generator(self, client, scripted):
-        scripted(BUNDLE_PLAN, VALID_OBJECT, VALID_FIELD, VALID_APEX)
+    def test_bundle_plan_runs_every_generator(self, client, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         plan = make_plan(client)
         session = execute(client, plan["plan_id"])
 
@@ -184,8 +200,8 @@ class TestPlanDeploy:
         response = client.post("/api/plan/deploy/start", json={"session_id": sid})
         assert response.status_code == 400
 
-    def test_confirmed_deploy_bundles_every_step(self, client, scripted, monkeypatch):
-        scripted(BUNDLE_PLAN, VALID_OBJECT, VALID_FIELD, VALID_APEX)
+    def test_confirmed_deploy_bundles_every_step(self, client, typed_scripted, monkeypatch):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         plan = make_plan(client)
         session = execute(client, plan["plan_id"])
         sid = session["session_id"]
@@ -225,10 +241,15 @@ class TestPlanRepair:
         response = client.post("/api/plan/repair/start", json={"session_id": session["session_id"]})
         assert response.status_code == 400
 
-    def test_repair_regenerates_only_the_step_a_failure_names(self, client, scripted, monkeypatch):
+    def test_repair_regenerates_only_the_step_a_failure_names(
+        self, client, typed_scripted, monkeypatch
+    ):
         # Queue the bundle plan, its three step generations, then the fixed
         # field payload the repair round should ask for.
-        scripted(BUNDLE_PLAN, VALID_OBJECT, VALID_FIELD, VALID_APEX, VALID_FIELD)
+        typed_scripted(
+            plan=BUNDLE_PLAN, object=VALID_OBJECT, field=[VALID_FIELD, VALID_FIELD],
+            apex=VALID_APEX,
+        )
         plan = make_plan(client)
         session = execute(client, plan["plan_id"])
         sid = session["session_id"]
@@ -301,10 +322,13 @@ class TestPlanStepRevise:
         )
         assert response.status_code == 404
 
-    def test_revise_regenerates_only_the_named_step(self, client, scripted):
+    def test_revise_regenerates_only_the_named_step(self, client, typed_scripted):
         # Bundle plan + its three generations, then one more Field payload
         # for the revision itself.
-        scripted(BUNDLE_PLAN, VALID_OBJECT, VALID_FIELD, VALID_APEX, VALID_FIELD)
+        typed_scripted(
+            plan=BUNDLE_PLAN, object=VALID_OBJECT, field=[VALID_FIELD, VALID_FIELD],
+            apex=VALID_APEX,
+        )
         plan = make_plan(client)
         session = execute(client, plan["plan_id"])
         sid = session["session_id"]

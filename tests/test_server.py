@@ -24,7 +24,15 @@ def client(monkeypatch):
     monkeypatch.setattr(
         server, "credentials", lambda org, instance_url=None, access_token=None: ("https://x", "tok")
     )
-    return TestClient(server.app)
+    # Context-managed rather than a bare TestClient(): see test_server_plan.py's
+    # client fixture for why - an unscoped portal occasionally raced a
+    # background create_task()+to_thread() call against the next test's
+    # client (anyio.EndOfStream / "No response returned"). Rare enough here
+    # not to have been noticed before plan-mode's concurrent execute_plan
+    # added more background thread pressure across the suite; the fix is
+    # the same either way.
+    with TestClient(server.app) as test_client:
+        yield test_client
 
 
 @pytest.fixture

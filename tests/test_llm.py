@@ -6,14 +6,19 @@ without a human in the loop, and that the model is told exactly what was wrong.
 """
 
 import json
+import threading
 
 import pytest
 
 from flowtool.llm import (
+    APEX_SYSTEM_PROMPT,
+    FIELD_SYSTEM_PROMPT,
     FlowGenerator,
     GeminiProvider,
     LLMError,
     Message,
+    OBJECT_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
     Usage,
     _GEMINI_SERVER_ERROR_BACKOFF,
     gemini_schema,
@@ -75,7 +80,17 @@ BAD_NAME = _with(
 
 
 class ScriptedProvider:
-    """Returns each queued payload in turn and records what it was asked."""
+    """
+    Returns each queued payload in turn and records what it was asked.
+
+    Locked because a plan can now run independent steps' generations
+    concurrently (planner.execute_plan) against the one provider a test
+    passes it - without this, two threads racing pop(0)/append at once could
+    corrupt call order or, worse, hand one step the payload queued for a
+    different step's type, in a way that fails unpredictably rather than
+    deterministically. Existing single-threaded callers are unaffected: an
+    uncontended lock costs nothing worth noticing.
+    """
 
     name = "scripted"
 
@@ -83,11 +98,62 @@ class ScriptedProvider:
         self.payloads = list(payloads)
         self.calls = []
         self.usage = Usage()
+        self._lock = threading.Lock()
 
     def complete_json(self, system, messages, schema):
-        self.calls.append(list(messages))
-        self.usage.add(input_tokens=100, output_tokens=50)
-        return self.payloads.pop(0)
+        with self._lock:
+            self.calls.append(list(messages))
+            self.usage.add(input_tokens=100, output_tokens=50)
+            return self.payloads.pop(0)
+
+
+class TypedScriptedProvider:
+    """
+    Routes a queued payload to whichever artifact type actually asked for
+    it, by matching the system prompt (each generator's is a distinct
+    constant) rather than call order. Needed wherever a test drives a plan
+    with more than one artifact type in the same dependency layer:
+    planner.execute_plan runs those concurrently, so a plain
+    ScriptedProvider's FIFO queue can't guarantee Object's thread gets
+    Object's payload rather than Apex's.
+    """
+
+    name = "scripted"
+
+    # Imported lazily inside __init__ rather than at module level: importing
+    # flowtool.planner here would make every test_llm.py test pay for
+    # loading it, when only tests that actually construct a
+    # TypedScriptedProvider(plan=...) need PLANNER_SYSTEM_PROMPT at all.
+    _PROMPT_TO_TYPE = {
+        SYSTEM_PROMPT: "flow",
+        OBJECT_SYSTEM_PROMPT: "object",
+        FIELD_SYSTEM_PROMPT: "field",
+        APEX_SYSTEM_PROMPT: "apex",
+    }
+
+    def __init__(self, **payloads_by_type):
+        """Each kwarg (plan=..., flow=..., object=..., field=..., apex=...)
+        is either one payload or a list of payloads served in order to that
+        type's calls."""
+        prompt_to_type = dict(self._PROMPT_TO_TYPE)
+        if "plan" in payloads_by_type:
+            from flowtool.planner import PLANNER_SYSTEM_PROMPT
+            prompt_to_type[PLANNER_SYSTEM_PROMPT] = "plan"
+        self._prompt_to_type = prompt_to_type
+        self._queues = {
+            artifact_type: (value if isinstance(value, list) else [value])
+            for artifact_type, value in payloads_by_type.items()
+        }
+        self.calls = []
+        self.usage = Usage()
+        self._lock = threading.Lock()
+
+    def complete_json(self, system, messages, schema):
+        artifact_type = self._prompt_to_type[system]
+        with self._lock:
+            self.calls.append((artifact_type, list(messages)))
+            self.usage.add(input_tokens=100, output_tokens=50)
+            return self._queues[artifact_type].pop(0)
 
 
 class TestRepairLoop:

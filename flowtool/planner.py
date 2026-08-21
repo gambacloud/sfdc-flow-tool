@@ -17,6 +17,7 @@ behaviour working through this same path rather than needing a separate one.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Dict, List, Type, Union
 
@@ -90,12 +91,14 @@ class Plan(BaseModel):
 
     def ordered(self) -> List[PlanStep]:
         """
-        Steps with every dependency placed before its dependents - a
-        topological sort, needed because execute_plan below runs steps in
-        this order and nothing else enforces it. A cycle is a bug in the
-        planner's own output; names_unique_and_dependencies_resolve already
-        guarantees every depends_on entry names a real step, so the only way
-        ordered() can fail is a genuine cycle.
+        Steps with every dependency placed before its dependents - a flat
+        topological sort. execute_plan below actually runs steps by layers()
+        (parallel where nothing depends on nothing), not this flat order;
+        ordered() stays as the simpler sequential-order utility, and the one
+        thing layers() reuses its failure mode from: a cycle is a bug in the
+        planner's own output, since names_unique_and_dependencies_resolve
+        already guarantees every depends_on entry names a real step, so the
+        only way either can fail is a genuine cycle.
         """
         by_name = {s.name: s for s in self.steps}
         order: List[PlanStep] = []
@@ -117,6 +120,45 @@ class Plan(BaseModel):
         for step in self.steps:
             visit(step)
         return order
+
+    def layers(self) -> List[List[PlanStep]]:
+        """
+        Steps grouped into dependency-respecting waves: every step in one
+        layer can run in parallel, because every step it depends on is
+        already finished by the end of an earlier layer. A step with no
+        dependencies is in layer 0; otherwise a step's layer is one past the
+        deepest layer among the steps it depends on, so it never starts
+        before the last thing it needs actually finishes.
+
+        Order within a layer follows the plan's own step order, the same
+        stability ordered() keeps, so which step happens to run first among
+        equals isn't arbitrary run to run.
+        """
+        by_name = {s.name: s for s in self.steps}
+        depth_of: Dict[str, int] = {}
+
+        def depth(name: str, visiting: frozenset) -> int:
+            if name in depth_of:
+                return depth_of[name]
+            if name in visiting:
+                raise ValueError(f"circular dependency involving step {name!r}")
+            step = by_name[name]
+            d = 0
+            for dep_name in step.depends_on:
+                d = max(d, 1 + depth(dep_name, visiting | {name}))
+            depth_of[name] = d
+            return d
+
+        for step in self.steps:
+            depth(step.name, frozenset())
+
+        result: List[List[PlanStep]] = []
+        for step in self.steps:
+            d = depth_of[step.name]
+            while len(result) <= d:
+                result.append([])
+            result[d].append(step)
+        return result
 
 
 PLANNER_SYSTEM_PROMPT = """\
@@ -184,6 +226,12 @@ _GENERATOR_BY_TYPE: Dict[str, Type[IRGenerator]] = {
     "apex": ApexClassGenerator,
 }
 
+# A cap on how many steps in one layer run at once, not "as many as fit."
+# More concurrent requests against the same free-tier quota is exactly what
+# made rate limits worse to begin with (see llm.py's Gemini 429 handling) -
+# this bounds the downside while still shortening a wide plan's wall time.
+_MAX_PARALLEL_STEPS = 3
+
 # What a generator's own .generate() returns, per artifact type - FlowGenerator
 # keeps its pre-existing GenerationResult (the .flow attribute server.py
 # already relies on); the others return the generic IRGenerationResult (.value)
@@ -203,28 +251,50 @@ class StepResult:
     messages: List[Message]
 
 
+def _run_one_step(provider: Provider, step: PlanStep, max_repairs: int) -> StepResult:
+    generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
+    generator = generator_cls(provider, max_repairs=max_repairs)
+    raw = generator.generate(step.brief)
+    value = raw.flow if isinstance(raw, GenerationResult) else raw.value
+    return StepResult(step=step, value=value, repairs=raw.repairs, messages=raw.messages)
+
+
 def execute_plan(
     provider: Provider, plan: Plan, max_repairs: int = DEFAULT_MAX_REPAIRS
 ) -> List[StepResult]:
     """
-    Run every step of a validated Plan through its matching generator, in
-    dependency order (see Plan.ordered). Each step gets a fresh generator and
-    conversation - nothing here threads context between generators, because a
-    step's `brief` is written to be self-contained (that is the planner's job,
-    decided once, not something to redo per step here).
+    Run every step of a validated Plan through its matching generator, layer
+    by layer (see Plan.layers): steps with nothing to do with each other run
+    concurrently, in threads - a model call is blocking network I/O, so
+    running independent steps one at a time only adds wall-clock time for no
+    reason. A step still never starts until every step it depends on has
+    actually finished, since its `brief` may name an api_name that only
+    exists once that earlier step has run.
 
-    Returns results in the plan's original order, not the execution order, so
-    a caller can zip them back up against plan.steps directly.
+    Concurrency is capped at _MAX_PARALLEL_STEPS rather than one thread per
+    step in the layer: this is also the thing that was making rate limits
+    worse (see llm.py's Gemini 429 handling) - more simultaneous requests
+    against the same quota, not fewer. Each step gets a fresh generator and
+    conversation - nothing here threads context between generators, because
+    a step's `brief` is written to be self-contained (that is the planner's
+    job, decided once, not something to redo per step here). The shared
+    `provider` itself is safe under concurrent use: Usage.add() and
+    GeminiProvider's key rotation are both guarded against exactly this.
+
+    Returns results in the plan's original order, not the order steps
+    finished in, so a caller can zip them back up against plan.steps directly.
     """
     by_name: Dict[str, StepResult] = {}
-    for step in plan.ordered():
-        generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
-        generator = generator_cls(provider, max_repairs=max_repairs)
-        raw = generator.generate(step.brief)
-        value = raw.flow if isinstance(raw, GenerationResult) else raw.value
-        by_name[step.name] = StepResult(
-            step=step, value=value, repairs=raw.repairs, messages=raw.messages
-        )
+    for layer in plan.layers():
+        workers = min(len(layer), _MAX_PARALLEL_STEPS)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_run_one_step, provider, step, max_repairs): step
+                for step in layer
+            }
+            for future in as_completed(futures):
+                step = futures[future]
+                by_name[step.name] = future.result()
 
     return [by_name[step.name] for step in plan.steps]
 
