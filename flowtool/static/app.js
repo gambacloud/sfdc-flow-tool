@@ -7,6 +7,14 @@ const $ = (id) => document.getElementById(id);
 // later in a fresh tab against a server that has very likely since restarted
 // and forgotten it.
 const SESSION_STORAGE_KEY = "flowtool.sessionId";
+const PLAN_SESSION_STORAGE_KEY = "flowtool.planSessionId";
+// Which mode ("new" | "open" | "plan") a reload should land back on, when a
+// single-Flow session and a plan session happen to both be stored at once
+// (the user used more than one mode in this tab) - whichever actually
+// produced a result most recently, not just "flow" generically: a flow
+// opened from the org should come back on "Open one from the org", not
+// silently swapped for "Describe a new flow".
+const LAST_MODE_STORAGE_KEY = "flowtool.lastMode";
 
 const state = {
   sessionId: null,
@@ -16,6 +24,7 @@ const state = {
   status: "Draft",
   artifacts: {},
   tab: "diagram",
+  lastFlowMode: null, // "new" | "open" - which mode produced state.sessionId
   org: null, // { accessToken, instanceUrl } once logged into Salesforce directly
   usage: null, // cumulative token usage for this session, refreshed on every model call
   errors: [], // every error message shown to the user this session, newest first
@@ -439,6 +448,10 @@ function renderGate() {
 function renderFlow(data) {
   state.sessionId = data.session_id;
   sessionStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
+  // "new" or "open" - whichever mode actually produced this session (set by
+  // design()/importFlow()), not hardcoded here: a later refine()/repair()
+  // also calls renderFlow() and must not overwrite it back to a default.
+  sessionStorage.setItem(LAST_MODE_STORAGE_KEY, state.lastFlowMode || "new");
   state.version = data.version;
   state.approved = data.approved;
   state.status = data.status;
@@ -659,6 +672,8 @@ function renderPlanStep(step) {
 
 function renderPlan(data) {
   state.planSessionId = data.session_id;
+  sessionStorage.setItem(PLAN_SESSION_STORAGE_KEY, data.session_id);
+  sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "plan");
   state.planVersion = data.version;
   state.planApproved = data.approved;
 
@@ -762,6 +777,7 @@ async function design() {
     });
     const data = await poll("api/design/status", { job_id });
     state.validatedVersion = null;
+    state.lastFlowMode = "new";
     renderFlow(data);
   } catch (err) {
     showError(button.parentElement, err.message);
@@ -820,6 +836,7 @@ async function importFlow() {
     const data = await poll("api/import/status", { job_id });
     state.validatedVersion = null;
     state.explanation = null;
+    state.lastFlowMode = "open";
     renderFlow(data);
   } catch (err) {
     showError($("openPane"), err.message);
@@ -1434,6 +1451,74 @@ async function restoreSession() {
   }
 }
 
+// Same idea as restoreSession(), for a "Build multiple things" plan - was
+// missing entirely until a reload was reported to silently drop it, unlike
+// the single-Flow path this mirrors.
+async function restorePlanSession() {
+  const sessionId = sessionStorage.getItem(PLAN_SESSION_STORAGE_KEY);
+  if (!sessionId) return;
+  try {
+    const data = await api(`api/plan/session/${sessionId}`);
+    state.planValidatedVersion = null;
+    renderPlan(data);
+  } catch {
+    sessionStorage.removeItem(PLAN_SESSION_STORAGE_KEY);
+  }
+}
+
+// Switches the left pane's mode and, correspondingly, which one of {empty
+// state, a single Flow, a plan} the right panel shows - shared by the mode
+// buttons' own click handler and by restoreSessions() below, so a reload
+// lands on whichever mode was actually last in use, not always "new".
+function activateMode(selected) {
+  document.querySelectorAll(".mode").forEach((btn) =>
+    btn.classList.toggle("active", btn.dataset.mode === selected)
+  );
+  $("openPane").hidden = selected !== "open";
+  $("newPane").hidden = selected !== "new";
+  $("planPane").hidden = selected !== "plan";
+  // Shared by "new" and "plan" - a plan's Flow steps respect Activate too
+  // (see PlanSession.apply_policy in server.py). Meaningless for "open": an
+  // imported flow keeps whatever status it already has.
+  $("sharedOptions").hidden = selected === "open";
+  if (selected === "open" && !$("flowPicker").dataset.loaded) {
+    $("flowPicker").dataset.loaded = "1";
+    loadFlows();
+  }
+
+  // The right panel shows exactly one of: empty state, a single Flow
+  // (design/open), or a plan (several artifacts) - whichever this mode last
+  // produced, so switching modes never leaves two results overlaid.
+  if (selected === "plan") {
+    $("refineBox").hidden = true;
+    $("flowView").hidden = true;
+    $("planView").hidden = !state.planSessionId;
+    $("empty").hidden = !!state.planSessionId;
+  } else {
+    $("planView").hidden = true;
+    $("flowView").hidden = !state.sessionId;
+    $("refineBox").hidden = !state.sessionId;
+    $("empty").hidden = !!state.sessionId;
+  }
+}
+
+// Restores whichever session(s) sessionStorage still has a pointer to, then
+// activates whichever mode was actually in view when the tab last reloaded
+// (or navigated away and back) - not always "new", and not just whichever
+// of the two restore calls happened to finish last.
+async function restoreSessions() {
+  await restoreSession();
+  await restorePlanSession();
+  const lastMode = sessionStorage.getItem(LAST_MODE_STORAGE_KEY);
+  if (lastMode === "plan" && state.planSessionId) {
+    activateMode("plan");
+  } else if (lastMode === "open" && state.sessionId) {
+    activateMode("open");
+  } else if (state.sessionId) {
+    activateMode("new");
+  }
+}
+
 // The implicit flow issues no refresh token, so an expired session just
 // means logging in again - callers send whatever this returns and the
 // sf-CLI-backed `org` alias only applies when it is empty.
@@ -1544,7 +1629,7 @@ async function boot() {
     }
     restoreOAuthFromFragment();
     renderOAuthStatus();
-    await restoreSession();
+    await restoreSessions();
 
     const bits = [];
     if (config.providers.length) {
@@ -1565,38 +1650,7 @@ async function boot() {
   }
 
   document.querySelectorAll(".mode").forEach((mode) => {
-    mode.onclick = () => {
-      const selected = mode.dataset.mode; // "new" | "open" | "plan"
-      document.querySelectorAll(".mode").forEach((other) =>
-        other.classList.toggle("active", other === mode)
-      );
-      $("openPane").hidden = selected !== "open";
-      $("newPane").hidden = selected !== "new";
-      $("planPane").hidden = selected !== "plan";
-      // Shared by "new" and "plan" - a plan's Flow steps respect Activate
-      // too (see PlanSession.apply_policy in server.py). Meaningless for
-      // "open": an imported flow keeps whatever status it already has.
-      $("sharedOptions").hidden = selected === "open";
-      if (selected === "open" && !$("flowPicker").dataset.loaded) {
-        $("flowPicker").dataset.loaded = "1";
-        loadFlows();
-      }
-
-      // The right panel shows exactly one of: empty state, a single Flow
-      // (design/open), or a plan (several artifacts) - whichever this mode
-      // last produced, so switching modes never leaves two results overlaid.
-      if (selected === "plan") {
-        $("refineBox").hidden = true;
-        $("flowView").hidden = true;
-        $("planView").hidden = !state.planSessionId;
-        $("empty").hidden = !!state.planSessionId;
-      } else {
-        $("planView").hidden = true;
-        $("flowView").hidden = !state.sessionId;
-        $("refineBox").hidden = !state.sessionId;
-        $("empty").hidden = !!state.sessionId;
-      }
-    };
+    mode.onclick = () => activateMode(mode.dataset.mode);
   });
 
   wireDiagramPanZoom();
