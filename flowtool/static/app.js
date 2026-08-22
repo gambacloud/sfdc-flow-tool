@@ -40,6 +40,8 @@ const state = {
   planVersion: 0,
   planApproved: false,
   planValidatedVersion: null,
+
+  flows: [], // cached, alphabetically-sorted /api/flows result backing the search combo
 };
 
 let mermaid = null;
@@ -829,32 +831,83 @@ async function design() {
   }
 }
 
+function formatLastMod(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString();
+}
+
+function renderFlowResults(query) {
+  const list = $("flowResults");
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? state.flows.filter(
+        (f) => f.label.toLowerCase().includes(q) || f.api_name.toLowerCase().includes(q)
+      )
+    : state.flows;
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = "no matching flows";
+    list.appendChild(empty);
+  } else {
+    matches.forEach((flow) => {
+      const mark = flow.active ? "" : "  (inactive)";
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = flow.api_name;
+      row.innerHTML =
+        `<span>${escapeHtml(flow.label + mark)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(flow.last_modified))}</span>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $("flowSearch").value = flow.label + mark;
+        $("flowPicker").value = flow.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
 async function loadFlows() {
+  const search = $("flowSearch");
   const picker = $("flowPicker");
-  picker.innerHTML = "";
+  const list = $("flowResults");
+  state.flows = [];
+  picker.value = "";
+  list.hidden = true;
   // Neither an OAuth/manual session nor the sf CLI is available yet - hitting
   // /api/flows anyway would surface the CLI's "not on PATH" message, which is
   // meaningless to someone who was never going to use the CLI in the first
   // place (every Heroku deployment). Wait for a real credential instead.
   if (!state.org && !state.sfCli) {
-    picker.add(new Option("connect to an org first", ""));
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
     return;
   }
-  picker.add(new Option("Loading...", ""));
+  search.disabled = true;
+  search.placeholder = "Loading...";
   try {
     const data = await api("api/flows", orgCredentials());
-    picker.innerHTML = "";
-    if (!data.flows.length) {
-      picker.add(new Option("no flows in this org", ""));
-      return;
-    }
-    data.flows.forEach((flow) => {
-      const mark = flow.active ? "" : "  (inactive)";
-      picker.add(new Option(`${flow.label}${mark}`, flow.api_name));
-    });
+    // Alphabetical by label, not the API's newest-first order - this is a
+    // picker someone scans by name, not an activity feed.
+    state.flows = data.flows
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+    search.disabled = false;
+    search.placeholder = data.flows.length ? "Search flows..." : "no flows in this org";
   } catch (err) {
-    picker.innerHTML = "";
-    picker.add(new Option("could not list flows", ""));
+    search.disabled = false;
+    search.placeholder = "could not list flows";
     showError($("openPane"), err.message);
     logError("Load flows", err.message);
   }
@@ -1540,10 +1593,9 @@ function activateMode(selected) {
   $("openPane").hidden = selected !== "open";
   $("newPane").hidden = selected !== "new";
   $("planPane").hidden = selected !== "plan";
-  // Shared by "new" and "plan" - a plan's Flow steps respect Activate too
-  // (see PlanSession.apply_policy in server.py). Meaningless for "open": an
-  // imported flow keeps whatever status it already has.
-  $("sharedOptions").hidden = selected === "open";
+  // "Describe a new flow" only - "open" doesn't use it (an imported flow
+  // keeps whatever status it already has), and "plan" no longer shows it.
+  $("sharedOptions").hidden = selected !== "new";
   if (selected === "open" && !$("flowPicker").dataset.loaded) {
     $("flowPicker").dataset.loaded = "1";
     loadFlows();
@@ -1720,6 +1772,16 @@ async function boot() {
 
   $("designBtn").onclick = design;
   $("importBtn").onclick = importFlow;
+  $("flowSearch").addEventListener("input", () => {
+    $("flowPicker").value = "";
+    renderFlowResults($("flowSearch").value);
+  });
+  $("flowSearch").addEventListener("focus", () => {
+    if (state.flows.length) renderFlowResults($("flowSearch").value);
+  });
+  $("flowSearch").addEventListener("blur", () => {
+    $("flowResults").hidden = true;
+  });
   $("surveyLink").onclick = runSurvey;
   $("orgSummaryLink").onclick = runOrgSummary;
   $("orgSummaryGenerateBtn").onclick = startOrgSummaryRetrieve;

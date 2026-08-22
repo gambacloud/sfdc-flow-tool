@@ -139,8 +139,12 @@
     </div>
 
     <div class="pad" id="openPane" hidden>
-      <label for="flowPicker">Flows in the org</label>
-      <select id="flowPicker"><option value="">Loading...</option></select>
+      <label for="flowSearch">Flows in the org</label>
+      <div class="combo">
+        <input id="flowSearch" type="text" autocomplete="off" placeholder="Loading...">
+        <input type="hidden" id="flowPicker" value="">
+        <div id="flowResults" class="combo-list" hidden></div>
+      </div>
       <button id="importBtn" class="primary">Open it</button>
       <p class="dim" id="openNote">
         Flows using screens, waits, or Apex actions are refused rather than
