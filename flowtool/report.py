@@ -13,12 +13,16 @@ view of the same build never drift apart.
 from __future__ import annotations
 
 import html
+from pathlib import Path
 from typing import Any, List
 
 from .ir import Flow
 from .ir_apex import ApexClass
 from .ir_object import CustomField, CustomObject
+from .mermaid import element_index, to_mermaid
 from .planner import StepResult
+
+_VENDOR_MERMAID_JS = Path(__file__).parent / "static" / "vendor" / "mermaid.min.js"
 
 
 def _esc(value: Any) -> str:
@@ -56,14 +60,25 @@ def render_html_fragment(steps: List[StepResult]) -> str:
         elif isinstance(value, ApexClass):
             parts.append(f"<pre><code>{_esc(value.body)}</code></pre>")
         elif isinstance(value, Flow):
-            parts.append(f"<p>{len(value.elements)} element(s)</p>")
-            parts.append("<ol>")
-            for element in value.elements:
-                label = getattr(element, "label", None) or getattr(
-                    element, "name", type(element).__name__
+            # A live diagram, not a screenshot - <pre class="mermaid"> is the
+            # same convention Claude's own Artifact viewer renders natively,
+            # and render_standalone_report below inlines the vendored
+            # mermaid.js so it also renders when this fragment is wrapped
+            # into a plain downloaded file, opened outside either of those.
+            parts.append(f'<pre class="mermaid">{_esc(to_mermaid(value))}</pre>')
+            # Per-element detail, the same table the in-app Documentation tab
+            # already shows via flowtool.mermaid.element_index - what each
+            # element actually does, not just its one-line diagram caption.
+            parts.append(
+                "<table><thead><tr><th>Element</th><th>Type</th>"
+                "<th>What it does</th></tr></thead><tbody>"
+            )
+            for row in element_index(value):
+                parts.append(
+                    f"<tr><td>{_esc(row['label'])}</td><td>{_esc(row['type'])}</td>"
+                    f"<td>{_esc(row['detail'])}</td></tr>"
                 )
-                parts.append(f"<li>{_esc(label)}</li>")
-            parts.append("</ol>")
+            parts.append("</tbody></table>")
 
         parts.append("</article>")
     parts.append("</section>")
@@ -89,11 +104,51 @@ def render_standalone_report(steps: List[StepResult], title: str, meta: str = ""
     report" button hands out. Meant to be opened in a browser and printed to
     PDF from there (or emailed/shared as-is) for someone or something outside
     this tool to review before approval.
+
+    Any Flow step's diagram needs mermaid.js to actually render once this is
+    a plain file on someone's disk, no longer inside this app's own page or
+    Claude's Artifact viewer - so the vendored copy this project already
+    ships (static/vendor/mermaid.min.js, chosen over a CDN script tag for
+    the same reason the app itself avoids one) gets inlined here too, but
+    only when a step actually needs it.
     """
     body = render_html_fragment(steps)
     meta_html = f'<p class="meta">{_esc(meta)}</p>' if meta else ""
+    mermaid_script = ""
+    if any(isinstance(r.value, Flow) for r in steps):
+        mermaid_js = _VENDOR_MERMAID_JS.read_text(encoding="utf-8")
+        # Manual render, not startOnLoad - the same approach app.js's own
+        # renderPlanStepDiagram already uses, proven to actually work with
+        # this vendored build rather than relying on a load-timing race.
+        mermaid_script = (
+            f"<script>{mermaid_js}</script>"
+            "<script>"
+            'mermaid.initialize({startOnLoad:false,securityLevel:"strict"});'
+            "document.querySelectorAll('pre.mermaid').forEach(async (pre, i) => {"
+            "const source = pre.textContent;"
+            "try {"
+            "const {svg} = await mermaid.render('report-diagram-' + i, source);"
+            "pre.outerHTML = svg;"
+            "} catch (err) { pre.textContent = source + '\\n\\n// could not render: ' + err.message; }"
+            "});"
+            "</script>"
+        )
+    # A document-level CSP, not just relying on whatever headers (or none)
+    # the page happens to be served with: server.py's own CSP is 'self'-only
+    # for scripts, which is right for the live app but would silently break
+    # this file's inlined mermaid.js the moment it's downloaded and reopened
+    # from disk with no server in front of it to send headers at all. This
+    # meta tag is what governs in that real, intended use case; it never
+    # loosens the live app's own stricter HTTP header, since a page under
+    # two CSPs (header + meta) is bound by whichever is more restrictive.
+    csp_meta = (
+        '<meta http-equiv="Content-Security-Policy" '
+        'content="default-src \'none\'; script-src \'unsafe-inline\'; '
+        'style-src \'unsafe-inline\'; img-src data:">'
+        if mermaid_script else ""
+    )
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
-        f"<title>{_esc(title)}</title><style>{_PAGE_CSS}</style></head><body>"
-        f"<h1>{_esc(title)}</h1>{meta_html}{body}</body></html>"
+        f"{csp_meta}<title>{_esc(title)}</title><style>{_PAGE_CSS}</style></head><body>"
+        f"<h1>{_esc(title)}</h1>{meta_html}{body}{mermaid_script}</body></html>"
     )
