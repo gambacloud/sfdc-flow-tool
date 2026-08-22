@@ -4,17 +4,21 @@ CustomObject / CustomField IR -> metadata XML.
 Deterministic, no LLM involved - the same rule as xmlgen.py, whose `_sub`/
 `_bool` helpers and namespace this reuses.
 
-A new object's own fields are embedded directly inside its `.object` file
-(generate_object's `fields` argument), not deployed as separate standalone
-CustomField members - confirmed live: a standalone CustomField, correctly
-named and correctly suffixed, still failed checkOnly with "named in
-package.xml, but was not found in zipped directory" for every field tried,
-on both a brand-new object and a pre-existing standard one. Embedding is not
-a guess - it is exactly the shape Salesforce itself returns a CustomObject
-in on retrieve, so there is no ambiguity about the convention. generate_field
-still exists for a field added to an object this deploy does *not* also
-create (where there is nothing to embed it into) - that path remains the
-open question the live failure surfaced, not yet resolved.
+There is no standalone single-CustomField document format in the classic
+Metadata API - it does not exist, despite `objects/<Object>/fields/<Field>
+.field-meta.xml` being a widely-repeated (and wrong) convention. Confirmed
+two ways: live against a real org, a correctly-named, correctly-suffixed
+attempt at that path failed checkOnly with "named in package.xml, but was
+not found in zipped directory" for every field tried, new object or
+pre-existing standard one; and `sf project convert source` - Salesforce's
+own tooling - converts a standalone field into a *delta* `objects/<Object>
+.object` file containing only the `<fields>` being added, package.xml still
+declaring it under `<name>CustomField</name>` with the dotted
+`Object.Field` member. Every field in this module - whether it belongs to a
+brand-new object created in the same deploy (generate_object's `fields`
+argument, a *complete* object) or one being added to an object that
+deploy does not also create (generate_field_delta, a *partial* one) -
+ultimately lands inside an `.object` file. There is no other shape.
 """
 
 from __future__ import annotations
@@ -141,16 +145,27 @@ def generate_object(obj: CustomObject, fields: Sequence[CustomField] = ()) -> st
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + body + "\n"
 
 
-def generate_field(field: CustomField) -> str:
+def generate_field_delta(fields: Sequence[CustomField]) -> str:
     """
-    Render a validated CustomField IR as a standalone metadata document -
-    for a field added to an object this same deploy does not also create
-    (so there is nothing to embed it into). See the module docstring: this
-    path is the one still unconfirmed against a real org.
+    Render one or more CustomField IRs as a *partial* CustomObject document -
+    for fields added to an object this deploy does not also create, where
+    there is no full CustomObject to embed them in. All `fields` must belong
+    to the same object; the caller (server.py's _bundle_files_and_types)
+    groups by object_api_name before calling this, since every field
+    targeting one existing object has to land in the same delta file, not
+    one file each overwriting the last.
+
+    No deploymentStatus/label/nameField/pluralLabel/sharingModel here - this
+    is not creating or replacing the object, only adding fields to it, and
+    Salesforce's own tooling (`sf project convert source`) confirms the
+    delta file carries nothing else.
     """
     ET.register_namespace("", METADATA_NS)
-    root = ET.Element(f"{{{METADATA_NS}}}CustomField")
-    _fill_field(root, field)
+    root = ET.Element(f"{{{METADATA_NS}}}CustomObject")
+
+    for field in sorted(fields, key=lambda f: f.api_name):
+        field_el = _sub(root, "fields")
+        _fill_field(field_el, field)
 
     ET.indent(root, space="    ")
     body = ET.tostring(root, encoding="unicode")

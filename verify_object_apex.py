@@ -41,7 +41,7 @@ from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.sfdc import validate_bundle
 from flowtool.xmlgen_apex import generate_apex
-from flowtool.xmlgen_object import generate_field, generate_object
+from flowtool.xmlgen_object import generate_field_delta, generate_object
 
 API_VERSION = "62.0"
 
@@ -81,19 +81,17 @@ def _object_shape(
 
 def _field_shape(group: str, name: str, fld: CustomField, note: str = "") -> Shape:
     """
-    Standalone CustomField member - for a field on an object this deploy
-    does *not* also create (there's nothing to embed it into). Kept
-    deliberately as its own probe, separate from the embedded object+field
-    shapes below: a standalone CustomField, correctly named and suffixed,
-    failed checkOnly live ("named in package.xml, but was not found in
-    zipped directory") for a field on a pre-existing standard object -
-    exactly what the shapes here target. This is the open, unconfirmed
-    path; running these against a real org is how it gets resolved.
+    A field on an object this deploy does *not* also create - a delta
+    .object file holding only this field, confirmed live and against
+    Salesforce's own `sf project convert source` output (see
+    xmlgen_object.py's module docstring). There is no separate per-field
+    file format; the standalone-CustomField-file convention this shape used
+    before failed checkOnly live for every field tried, regardless of
+    naming or extension.
     """
     return Shape(
         group=group, name=name, note=note,
-        files={f"objects/{fld.object_api_name}/fields/{fld.api_name}.field-meta.xml":
-               generate_field(fld)},
+        files={f"objects/{fld.object_api_name}.object": generate_field_delta([fld])},
         types={"CustomField": [f"{fld.object_api_name}.{fld.api_name}"]},
     )
 

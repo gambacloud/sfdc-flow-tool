@@ -57,7 +57,7 @@ from flowtool.sfdc import (
 )
 from flowtool.xmlgen import generate as generate_xml
 from flowtool.xmlgen_apex import generate_apex
-from flowtool.xmlgen_object import generate_field, generate_object
+from flowtool.xmlgen_object import generate_field_delta, generate_object
 from survey import Survey, text_report
 
 ROOT = Path(__file__).parent
@@ -1193,20 +1193,17 @@ def _bundle_files_and_types(
     plan's steps of mixed artifact types.
 
     A field whose object_api_name matches a CustomObject step in this same
-    plan is embedded directly inside that object's .object file rather than
-    deployed as its own CustomField member - confirmed live: a standalone
-    CustomField, correctly named and correctly suffixed, still failed
-    checkOnly with "named in package.xml, but was not found in zipped
-    directory" on every field tried, new object or pre-existing standard
-    one. Embedding is not a guess: it is exactly the shape Salesforce itself
-    returns a CustomObject in on retrieve. A field targeting an object *not*
-    created in this plan (there is nothing to embed it into) still goes
-    through the standalone CustomField path - see xmlgen_object.py's module
-    docstring for why that path remains the open, unconfirmed one.
+    plan is embedded directly inside that object's .object file (a complete
+    document); a field targeting an object this plan does not also create
+    goes into a *delta* .object file holding only that object's new fields
+    (generate_field_delta) - there is no separate per-field file format.
+    Both were confirmed live and via Salesforce's own tooling
+    (`sf project convert source`) - see xmlgen_object.py's module docstring
+    for the full story, including the standalone-CustomField-file convention
+    that turned out not to exist despite being a widely-repeated one.
     """
     objects: Dict[str, CustomObject] = {}
     fields_by_object: Dict[str, List[CustomField]] = {}
-    standalone_fields: List[CustomField] = []
     other_steps: List[StepResult] = []
 
     for result in steps:
@@ -1218,10 +1215,6 @@ def _bundle_files_and_types(
         else:
             other_steps.append(result)
 
-    for object_api_name, fields in fields_by_object.items():
-        if object_api_name not in objects:
-            standalone_fields.extend(fields)
-
     files: Dict[str, str] = {}
     types: Dict[str, List[str]] = {}
 
@@ -1231,12 +1224,14 @@ def _bundle_files_and_types(
         )
         types.setdefault("CustomObject", []).append(api_name)
 
-    for value in standalone_fields:
-        files[f"objects/{value.object_api_name}/fields/{value.api_name}.field-meta.xml"] = \
-            generate_field(value)
-        types.setdefault("CustomField", []).append(
-            f"{value.object_api_name}.{value.api_name}"
-        )
+    for object_api_name, fields in fields_by_object.items():
+        if object_api_name in objects:
+            continue  # already embedded above
+        files[f"objects/{object_api_name}.object"] = generate_field_delta(fields)
+        for field in fields:
+            types.setdefault("CustomField", []).append(
+                f"{object_api_name}.{field.api_name}"
+            )
 
     for result in other_steps:
         value = result.value
