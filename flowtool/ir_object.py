@@ -42,8 +42,9 @@ class CustomField(BaseModel):
     label: str
     type: FieldType
     object_api_name: str = Field(
-        description="The object this field is added to - a standard object "
-        "('Account'), or a custom object's api_name (suffixed __c automatically)"
+        description="The object this field is added to - write a standard "
+        "object exactly as named ('Account', 'Case' - never __c), or a "
+        "custom object's api_name including its __c suffix"
     )
     description: Optional[str] = None
     required: bool = False
@@ -72,24 +73,38 @@ class CustomField(BaseModel):
     relationship_label: Optional[str] = None
     relationship_name: Optional[str] = None
 
-    @field_validator("api_name", "object_api_name")
+    @field_validator("api_name")
     @classmethod
     def valid_and_suffixed(cls, v: str) -> str:
+        # The field itself is always custom - unlike object_api_name and
+        # reference_to below, there is no standard-object case to leave alone.
         _check_api_name(v.removesuffix("__c"), "field api_name", max_length=40)
         return _with_suffix(v)
 
-    @field_validator("reference_to")
+    @field_validator("object_api_name", "reference_to")
     @classmethod
-    def valid_reference(cls, v: Optional[str]) -> Optional[str]:
+    def valid_object_reference(cls, v: Optional[str]) -> Optional[str]:
+        """
+        Shared by object_api_name (the field's own object) and reference_to
+        (a Lookup/MasterDetail's target): both name an object that may be
+        standard ("Account", "Case" - never suffixed) or custom (always
+        ends __c). Forcing __c here the way api_name's validator does was a
+        real bug, not a hypothetical one: it silently rewrote a field's
+        object_api_name from "Case" to "Case__c" - an object that does not
+        exist - and Salesforce's own deploy error ("Case__c.SLA_Level__c ...
+        not found") is what the corruption looked like from the outside.
+        Whether __c belongs here is the LLM's call, not ours to guess or
+        force; only the api_name's *shape* is checked either way.
+        """
         if v is None:
             return v
-        # A standard object ("Account") has no length limit worth enforcing -
-        # only a custom one (ending __c) is capped at 40 characters for its
-        # base name, the same as any other custom api_name here.
+        # A standard object has no length limit worth enforcing - only a
+        # custom one (ending __c) is capped at 40 characters for its base
+        # name, the same as any other custom api_name here.
         if v.endswith("__c"):
-            _check_api_name(v.removesuffix("__c"), "reference_to", max_length=40)
+            _check_api_name(v.removesuffix("__c"), "object reference", max_length=40)
         else:
-            _check_api_name(v, "reference_to")
+            _check_api_name(v, "object reference")
         return v
 
     @model_validator(mode="after")

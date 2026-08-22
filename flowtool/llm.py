@@ -487,9 +487,15 @@ document.
 You produce IR only, never metadata XML - a compiler generates that from your IR.
 
 - `api_name` is suffixed `__c` automatically; write it without the suffix or \
-with it, either is fine. `object_api_name` names the object this field is \
-added to - a standard object ("Account") or a custom one (suffixed `__c` \
-automatically).
+with it, either is fine.
+- `object_api_name` names the object this field is added to, and here the \
+suffix is **not** automatic - get it right: a standard object is written \
+exactly as Salesforce names it, with no suffix at all ("Account", "Case", \
+"Contact", "Opportunity"). A custom object - one this same request is also \
+creating, or one that already exists in the org - must be written with its \
+`__c` suffix ("Invoice__c"). Writing a standard object with a `__c` suffix \
+names an object that does not exist, and the deploy fails on a field that \
+looks otherwise correct.
 - `type` is one of Text, Number, Checkbox, Picklist, Lookup, MasterDetail. \
 Each carries only the properties that belong to it - do not set `length` on \
 anything but Text, `precision`/`scale` on anything but Number, \

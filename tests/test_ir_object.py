@@ -24,12 +24,26 @@ class TestApiNameSuffix:
         )
         assert field.api_name == "Amount__c"
 
-    def test_object_api_name_on_a_field_is_suffixed_too(self):
+    def test_object_api_name_for_a_custom_object_is_left_alone(self):
+        # __c is not auto-appended here the way it is for api_name - see
+        # test_object_api_name_for_a_standard_object_is_not_suffixed for why:
+        # this field is a real regression test, not a hypothetical one.
         field = CustomField(
             api_name="Amount", label="Amount", type="Number",
-            object_api_name="Invoice", precision=18, scale=2,
+            object_api_name="Invoice__c", precision=18, scale=2,
         )
         assert field.object_api_name == "Invoice__c"
+
+    def test_object_api_name_for_a_standard_object_is_not_suffixed(self):
+        # The actual bug, caught live: object_api_name="Case" was silently
+        # rewritten to "Case__c" - an object that does not exist - and the
+        # deploy failed with a "not found in zipped directory" error that
+        # gave no hint the object name itself had been corrupted.
+        field = CustomField(
+            api_name="SLA_Level", label="SLA Level", type="Text",
+            object_api_name="Case",
+        )
+        assert field.object_api_name == "Case"
 
     def test_reference_to_a_standard_object_is_left_alone(self):
         field = CustomField(
