@@ -161,6 +161,34 @@ class TestExecutePlan:
         assert isinstance(by_name["Object"].value, CustomObject)
         assert isinstance(by_name["Field"].value, CustomField)
 
+    def test_default_is_sequential(self, monkeypatch):
+        # Parallel was tried as the default and rolled back (see
+        # execute_plan's docstring) - this pins the default down so a future
+        # refactor can't silently flip it back without a test noticing.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="object", name="A", brief="a"),
+            PlanStep(artifact_type="apex", name="B", brief="b"),
+        ])
+        provider = TypedScriptedProvider(object=VALID_OBJECT, apex=VALID_APEX)
+        delay = 0.1
+
+        real_complete_json = provider.complete_json
+
+        def slow_complete_json(system, messages, schema):
+            time.sleep(delay)
+            return real_complete_json(system, messages, schema)
+
+        monkeypatch.setattr(provider, "complete_json", slow_complete_json)
+
+        started = time.monotonic()
+        execute_plan(provider, plan)  # parallel not passed - must default off
+        elapsed = time.monotonic() - started
+
+        assert elapsed >= delay * 2 * 0.9, (
+            f"took only {elapsed:.3f}s for 2 steps at {delay}s each - "
+            "looks concurrent, but parallel=True was never asked for"
+        )
+
     def test_independent_steps_actually_run_concurrently(self, monkeypatch):
         # Not just "safe under concurrency" (the tests above) - proves the
         # wall-clock benefit is real: three independent steps, each with an
@@ -186,7 +214,7 @@ class TestExecutePlan:
         monkeypatch.setattr(provider, "complete_json", slow_complete_json)
 
         started = time.monotonic()
-        execute_plan(provider, plan)
+        execute_plan(provider, plan, parallel=True)
         elapsed = time.monotonic() - started
 
         # Sequential would take ~3x delay; concurrent, ~1x. The threshold
@@ -230,7 +258,7 @@ class TestExecutePlan:
             return real_complete_json(system, messages, schema)
 
         monkeypatch.setattr(provider, "complete_json", tracking_complete_json)
-        execute_plan(provider, plan)
+        execute_plan(provider, plan, parallel=True)
         assert finished_layer_0.is_set()
 
 

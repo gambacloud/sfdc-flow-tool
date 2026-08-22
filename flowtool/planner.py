@@ -260,33 +260,41 @@ def _run_one_step(provider: Provider, step: PlanStep, max_repairs: int) -> StepR
 
 
 def execute_plan(
-    provider: Provider, plan: Plan, max_repairs: int = DEFAULT_MAX_REPAIRS
+    provider: Provider, plan: Plan, max_repairs: int = DEFAULT_MAX_REPAIRS,
+    parallel: bool = False,
 ) -> List[StepResult]:
     """
     Run every step of a validated Plan through its matching generator, layer
-    by layer (see Plan.layers): steps with nothing to do with each other run
-    concurrently, in threads - a model call is blocking network I/O, so
-    running independent steps one at a time only adds wall-clock time for no
-    reason. A step still never starts until every step it depends on has
-    actually finished, since its `brief` may name an api_name that only
-    exists once that earlier step has run.
+    by layer (see Plan.layers). A step never starts until every step it
+    depends on has actually finished, since its `brief` may name an api_name
+    that only exists once that earlier step has run.
 
-    Concurrency is capped at _MAX_PARALLEL_STEPS rather than one thread per
-    step in the layer: this is also the thing that was making rate limits
-    worse (see llm.py's Gemini 429 handling) - more simultaneous requests
-    against the same quota, not fewer. Each step gets a fresh generator and
+    `parallel` (off by default) lets independent steps within one layer run
+    concurrently instead of one at a time - a model call is blocking network
+    I/O, so this can shorten a wide plan's wall time. It was tried on by
+    default and rolled back: several requests racing the same rate-limited
+    quota at once meant more of them hit a 429 and paid llm.py's backoff
+    wait, which in practice cost more than the wall-clock time it saved, and
+    it was suspected of hurting result quality too - plausible, since more
+    concurrent load also means more retries/repairs happening under time
+    pressure. Off by default until that trade-off is actually measured;
+    still available to opt back into and compare.
+
+    Concurrency, when enabled, is capped at _MAX_PARALLEL_STEPS rather than
+    one thread per step in the layer - the exact contention above, just
+    bounded rather than unbounded. Each step gets a fresh generator and
     conversation - nothing here threads context between generators, because
     a step's `brief` is written to be self-contained (that is the planner's
     job, decided once, not something to redo per step here). The shared
-    `provider` itself is safe under concurrent use: Usage.add() and
-    GeminiProvider's key rotation are both guarded against exactly this.
+    `provider` itself is safe under concurrent use either way: Usage.add()
+    and GeminiProvider's key rotation are both guarded against exactly this.
 
     Returns results in the plan's original order, not the order steps
     finished in, so a caller can zip them back up against plan.steps directly.
     """
     by_name: Dict[str, StepResult] = {}
     for layer in plan.layers():
-        workers = min(len(layer), _MAX_PARALLEL_STEPS)
+        workers = min(len(layer), _MAX_PARALLEL_STEPS) if parallel else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(_run_one_step, provider, step, max_repairs): step

@@ -145,6 +145,48 @@ class TestPlanExecute:
         session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
         assert "flowchart TD" in session["steps"][0]["mermaid"]
 
+    def test_parallel_flag_defaults_off_and_is_threaded_through(
+        self, client, scripted, monkeypatch
+    ):
+        # Off by default (see planner.execute_plan's docstring on why it was
+        # rolled back), and still reachable when explicitly asked for -
+        # neither of those is exercised by the other tests here, which never
+        # pass `parallel` at all.
+        seen = {}
+
+        def fake_execute_plan(provider, plan, max_repairs=3, parallel=False):
+            seen["parallel"] = parallel
+            return []
+
+        monkeypatch.setattr(server, "execute_plan", fake_execute_plan)
+        scripted(ONE_STEP_PLAN)
+        plan = make_plan(client)
+
+        started = client.post(
+            "/api/plan/execute/start", json={"plan_id": plan["plan_id"], "parallel": True}
+        )
+        assert started.status_code == 200, started.text
+        poll(client, "/api/plan/execute/status", job_id=started.json()["job_id"])
+        assert seen["parallel"] is True
+
+    def test_parallel_flag_omitted_defaults_off(self, client, scripted, monkeypatch):
+        seen = {}
+
+        def fake_execute_plan(provider, plan, max_repairs=3, parallel=False):
+            seen["parallel"] = parallel
+            return []
+
+        monkeypatch.setattr(server, "execute_plan", fake_execute_plan)
+        scripted(ONE_STEP_PLAN)
+        plan = make_plan(client)
+
+        started = client.post(
+            "/api/plan/execute/start", json={"plan_id": plan["plan_id"]}
+        )
+        assert started.status_code == 200, started.text
+        poll(client, "/api/plan/execute/status", job_id=started.json()["job_id"])
+        assert seen["parallel"] is False
+
     def test_a_plan_can_only_be_executed_once(self, client, scripted):
         scripted(ONE_STEP_PLAN, VALID_FLOW)
         plan = make_plan(client)

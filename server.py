@@ -1043,6 +1043,9 @@ class PlanRequest(BaseModel):
 
 class PlanExecuteRequest(BaseModel):
     plan_id: str
+    # Off by default - see execute_plan's docstring for why. Exposed as a UI
+    # toggle so it can still be compared against, not removed outright.
+    parallel: bool = False
 
 
 class PlanStepReviseRequest(BaseModel):
@@ -1275,7 +1278,7 @@ async def plan_execute_start(body: PlanExecuteRequest) -> Dict[str, Any]:
     del PLANS[body.plan_id]
 
     task = asyncio.create_task(
-        asyncio.to_thread(execute_plan, stored.provider, stored.plan)
+        asyncio.to_thread(execute_plan, stored.provider, stored.plan, parallel=body.parallel)
     )
     job_id = uuid.uuid4().hex
     PLAN_EXECUTIONS[job_id] = PendingPlanExecution(

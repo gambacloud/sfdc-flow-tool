@@ -1263,7 +1263,8 @@ async function planAndBuild() {
     button.textContent =
       `Building ${planned.steps.length} step${planned.steps.length === 1 ? "" : "s"}...`;
     const { job_id: execJobId } = await api(
-      "api/plan/execute/start", { plan_id: planned.plan_id }
+      "api/plan/execute/start",
+      { plan_id: planned.plan_id, parallel: $("planParallel").checked }
     );
     const data = await poll("api/plan/execute/status", { job_id: execJobId });
     state.planValidatedVersion = null;
