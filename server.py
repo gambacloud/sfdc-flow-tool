@@ -1191,36 +1191,64 @@ def _bundle_files_and_types(
     member names a single deploy needs - the same mapping verify_object_apex.py
     (a dev-QA script) builds by hand per shape, generalized here for a real
     plan's steps of mixed artifact types.
+
+    A field whose object_api_name matches a CustomObject step in this same
+    plan is embedded directly inside that object's .object file rather than
+    deployed as its own CustomField member - confirmed live: a standalone
+    CustomField, correctly named and correctly suffixed, still failed
+    checkOnly with "named in package.xml, but was not found in zipped
+    directory" on every field tried, new object or pre-existing standard
+    one. Embedding is not a guess: it is exactly the shape Salesforce itself
+    returns a CustomObject in on retrieve. A field targeting an object *not*
+    created in this plan (there is nothing to embed it into) still goes
+    through the standalone CustomField path - see xmlgen_object.py's module
+    docstring for why that path remains the open, unconfirmed one.
     """
+    objects: Dict[str, CustomObject] = {}
+    fields_by_object: Dict[str, List[CustomField]] = {}
+    standalone_fields: List[CustomField] = []
+    other_steps: List[StepResult] = []
+
+    for result in steps:
+        value = result.value
+        if isinstance(value, CustomObject):
+            objects[value.api_name] = value
+        elif isinstance(value, CustomField):
+            fields_by_object.setdefault(value.object_api_name, []).append(value)
+        else:
+            other_steps.append(result)
+
+    for object_api_name, fields in fields_by_object.items():
+        if object_api_name not in objects:
+            standalone_fields.extend(fields)
+
     files: Dict[str, str] = {}
     types: Dict[str, List[str]] = {}
-    for result in steps:
+
+    for api_name, obj in objects.items():
+        files[f"objects/{api_name}.object"] = generate_object(
+            obj, fields_by_object.get(api_name, [])
+        )
+        types.setdefault("CustomObject", []).append(api_name)
+
+    for value in standalone_fields:
+        files[f"objects/{value.object_api_name}/fields/{value.api_name}.field-meta.xml"] = \
+            generate_field(value)
+        types.setdefault("CustomField", []).append(
+            f"{value.object_api_name}.{value.api_name}"
+        )
+
+    for result in other_steps:
         value = result.value
         if isinstance(value, Flow):
             files[f"flows/{value.api_name}.flow"] = generate_xml(value)
             types.setdefault("Flow", []).append(value.api_name)
-        elif isinstance(value, CustomObject):
-            files[f"objects/{value.api_name}.object"] = generate_object(value)
-            types.setdefault("CustomObject", []).append(value.api_name)
-        elif isinstance(value, CustomField):
-            # Unlike Flow (.flow) and CustomObject (.object) - older types
-            # whose bare-extension convention predates -meta.xml and is kept
-            # for backward compatibility - a standalone CustomField member
-            # needs the modern .field-meta.xml suffix. Confirmed live: the
-            # bare .field name deployed a package.xml that named the field
-            # correctly but Salesforce could not find the file at that path
-            # in the zip ("named in package.xml, but was not found in
-            # zipped directory") for every field, new object or existing.
-            files[f"objects/{value.object_api_name}/fields/{value.api_name}.field-meta.xml"] = \
-                generate_field(value)
-            types.setdefault("CustomField", []).append(
-                f"{value.object_api_name}.{value.api_name}"
-            )
         elif isinstance(value, ApexClass):
             body, meta = generate_apex(value)
             files[f"classes/{value.api_name}.cls"] = body
             files[f"classes/{value.api_name}.cls-meta.xml"] = meta
             types.setdefault("ApexClass", []).append(value.api_name)
+
     return files, types
 
 

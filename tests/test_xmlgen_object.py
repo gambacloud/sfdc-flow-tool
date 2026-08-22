@@ -49,6 +49,64 @@ class TestObjectXml:
         root = _root(generate_object(obj))
         assert root.find("m:description", NS) is None
 
+    def test_no_fields_element_when_none_given(self):
+        obj = CustomObject(api_name="Invoice", label="Invoice", plural_label="Invoices")
+        root = _root(generate_object(obj))
+        assert root.find("m:fields", NS) is None
+
+    def test_embedded_fields_carry_their_own_shape(self):
+        # The point of embedding (see xmlgen_object.py's module docstring):
+        # a new object's fields deploy inside the .object file, with the
+        # exact same per-field content generate_field would produce
+        # standalone - just nested under <fields> instead of being their
+        # own document.
+        obj = CustomObject(api_name="Invoice", label="Invoice", plural_label="Invoices")
+        amount = CustomField(
+            api_name="Amount", label="Amount", type="Number",
+            object_api_name="Invoice__c", precision=18, scale=2,
+        )
+        status = CustomField(
+            api_name="Status", label="Status", type="Picklist",
+            object_api_name="Invoice__c", picklist_values=["Draft", "Paid"],
+        )
+        root = _root(generate_object(obj, [amount, status]))
+        fields = root.findall("m:fields", NS)
+        assert [_text(f, "fullName") for f in fields] == ["Amount__c", "Status__c"]
+        assert _text(fields[0], "precision") == "18"
+        assert [_text(v, "fullName") for v in fields[1].findall(
+            "m:valueSet/m:valueSetDefinition/m:value", NS
+        )] == ["Draft", "Paid"]
+
+    def test_fields_element_sits_between_description_and_label(self):
+        # CustomObject's own alphabetical child order - deploymentStatus,
+        # description, fields, label, ... - matters to the Metadata API the
+        # same way it does for every other type this build generates.
+        obj = CustomObject(
+            api_name="Invoice", label="Invoice", plural_label="Invoices",
+            description="Invoices",
+        )
+        field = CustomField(
+            api_name="Amount", label="Amount", type="Number",
+            object_api_name="Invoice__c", precision=18,
+        )
+        root = _root(generate_object(obj, [field]))
+        tags = [child.tag.split("}")[-1] for child in root]
+        assert tags.index("description") < tags.index("fields") < tags.index("label")
+
+    def test_embedded_fields_are_sorted_by_api_name(self):
+        # Stable output regardless of the order steps happened to run in -
+        # useful for diffing, and not incidental to correctness either.
+        obj = CustomObject(api_name="Invoice", label="Invoice", plural_label="Invoices")
+        z_field = CustomField(
+            api_name="Zeta", label="Zeta", type="Text", object_api_name="Invoice__c",
+        )
+        a_field = CustomField(
+            api_name="Alpha", label="Alpha", type="Text", object_api_name="Invoice__c",
+        )
+        root = _root(generate_object(obj, [z_field, a_field]))
+        names = [_text(f, "fullName") for f in root.findall("m:fields", NS)]
+        assert names == ["Alpha__c", "Zeta__c"]
+
 
 class TestFieldXml:
     def test_text_field(self):

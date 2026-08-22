@@ -64,19 +64,32 @@ class Shape:
 # compiler's output is something Salesforce actually accepts - not just
 # something the IR considers well-formed.
 
-def _object_shape(group: str, name: str, obj: CustomObject, note: str = "") -> Shape:
+def _object_shape(
+    group: str, name: str, obj: CustomObject, fields=(), note: str = "",
+) -> Shape:
+    """
+    `fields`, if given, are embedded inside the object's own .object file -
+    see xmlgen_object.py's module docstring for why that replaced deploying
+    a new object's fields as separate CustomField members.
+    """
     return Shape(
         group=group, name=name, note=note,
-        files={f"objects/{obj.api_name}.object": generate_object(obj)},
+        files={f"objects/{obj.api_name}.object": generate_object(obj, list(fields))},
         types={"CustomObject": [obj.api_name]},
     )
 
 
 def _field_shape(group: str, name: str, fld: CustomField, note: str = "") -> Shape:
-    # .field-meta.xml, not the bare .field xmlgen_object.py's own naming might
-    # suggest by analogy with Flow/.flow - see server.py's _bundle_files_and_types
-    # for why: confirmed live against a real org, the bare name deploys a
-    # package.xml Salesforce cannot resolve back to the zip entry.
+    """
+    Standalone CustomField member - for a field on an object this deploy
+    does *not* also create (there's nothing to embed it into). Kept
+    deliberately as its own probe, separate from the embedded object+field
+    shapes below: a standalone CustomField, correctly named and suffixed,
+    failed checkOnly live ("named in package.xml, but was not found in
+    zipped directory") for a field on a pre-existing standard object -
+    exactly what the shapes here target. This is the open, unconfirmed
+    path; running these against a real org is how it gets resolved.
+    """
     return Shape(
         group=group, name=name, note=note,
         files={f"objects/{fld.object_api_name}/fields/{fld.api_name}.field-meta.xml":
@@ -148,19 +161,19 @@ SHAPES: List[Shape] = [
         api_name="FlowToolVerify_Flag", label="Flow Tool Verify Flag",
         type="Checkbox", object_api_name="Account",
     )),
-    _merged(
-        _object_shape("bundle", "object", _BUNDLE_OBJECT),
-        _field_shape("bundle", "field", _BUNDLE_FIELD),
-        group="bundle", name="object + field, one deploy",
-        note="the Phase 4 question: does a field on a not-yet-existing "
-             "object resolve within one transaction",
+    _object_shape(
+        "bundle", "object with an embedded field, one deploy", _BUNDLE_OBJECT,
+        fields=[_BUNDLE_FIELD],
+        note="the field is embedded in the .object file, not a separate "
+             "CustomField member - see xmlgen_object.py's module docstring",
     ),
     _merged(
-        _object_shape("bundle", "object", _BUNDLE_OBJECT),
-        _field_shape("bundle", "field", _BUNDLE_FIELD),
+        _object_shape("bundle", "object", _BUNDLE_OBJECT, fields=[_BUNDLE_FIELD]),
         _apex_shape("bundle", "apex", _BUNDLE_APEX),
-        group="bundle", name="object + field + apex, one deploy",
-        note="the same question, with a third component type in the mix",
+        group="bundle", name="object+field embedded + apex, one deploy",
+        note="the Phase 4 question with a third component type in the mix: "
+             "does an object (with its field embedded) and an unrelated Apex "
+             "class resolve within one transaction",
     ),
     _apex_shape("apex", "a plain class compiles", ApexClass(
         api_name="FlowToolVerify_Plain",

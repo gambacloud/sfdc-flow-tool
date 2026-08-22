@@ -249,9 +249,11 @@ class TestPlanDeploy:
         sid = session["session_id"]
 
         seen_types = {}
+        seen_files = {}
 
         async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
             seen_types.update(types)
+            seen_files.update(files)
             return DeployResult("1", "Succeeded", True)
 
         monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
@@ -263,7 +265,12 @@ class TestPlanDeploy:
         assert started.status_code == 200, started.text
         result = poll(client, "/api/plan/deploy/status", session_id=sid)
         assert result.json()["success"] is True
-        assert set(seen_types) == {"CustomObject", "CustomField", "ApexClass"}
+        # No CustomField type: the Field step's field targets the Object step's
+        # object, created in this same plan, so it's embedded in the .object
+        # file rather than deployed as its own CustomField member - see
+        # server.py's _bundle_files_and_types for why.
+        assert set(seen_types) == {"CustomObject", "ApexClass"}
+        assert "<fields>" in next(v for k, v in seen_files.items() if k.endswith(".object"))
 
 
 class TestPlanSessionView:
