@@ -251,10 +251,63 @@ class StepResult:
     messages: List[Message]
 
 
-def _run_one_step(provider: Provider, step: PlanStep, max_repairs: int) -> StepResult:
+def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
+    """
+    Ground truth about what this step's dependencies actually produced,
+    appended to its brief before it runs. The planner writes every brief up
+    front, before any step has actually generated anything - "name that
+    object's intended api_name in the brief exactly" is necessarily a guess
+    at that point. Once a dependency has really run, its generator may have
+    settled on a slightly different name than the planner predicted (or the
+    dependent step's own generator may invent a field that was never part of
+    any brief at all, the way a Flow step guessed at a junction object field
+    called `Account__c` that no object/field step ever created). Replacing
+    the guess with what actually exists, right before the dependent step
+    runs, catches that mismatch at generation time instead of leaving it to
+    surface only once a human opens the deployed Flow.
+    """
+    lines: List[str] = []
+    for dep_name in step.depends_on:
+        result = by_name.get(dep_name)
+        if result is None:
+            continue
+        value = result.value
+        if isinstance(value, CustomObject):
+            lines.append(
+                f"- Step {dep_name!r} created Custom Object api_name={value.api_name!r} "
+                f"(label {value.label!r})."
+            )
+        elif isinstance(value, CustomField):
+            lines.append(
+                f"- Step {dep_name!r} created Custom Field api_name={value.api_name!r} "
+                f"(label {value.label!r}, type {value.type}) on object "
+                f"{value.object_api_name!r}."
+            )
+        elif isinstance(value, ApexClass):
+            lines.append(
+                f"- Step {dep_name!r} created Apex Class api_name={value.api_name!r}. "
+                f"Its actual source, so you can call its real @InvocableMethod (if any) "
+                f"by name instead of guessing:\n{value.body}"
+            )
+        elif isinstance(value, Flow):
+            lines.append(f"- Step {dep_name!r} created Flow api_name={value.api_name!r}.")
+
+    if not lines:
+        return step.brief
+    return (
+        step.brief
+        + "\n\nThe steps this one depends on have already been generated. Use "
+          "their EXACT names below - do not guess a different name for "
+          "anything they created:\n" + "\n".join(lines)
+    )
+
+
+def _run_one_step(
+    provider: Provider, step: PlanStep, max_repairs: int, brief: str,
+) -> StepResult:
     generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
     generator = generator_cls(provider, max_repairs=max_repairs)
-    raw = generator.generate(step.brief)
+    raw = generator.generate(brief)
     value = raw.flow if isinstance(raw, GenerationResult) else raw.value
     return StepResult(step=step, value=value, repairs=raw.repairs, messages=raw.messages)
 
@@ -297,7 +350,10 @@ def execute_plan(
         workers = min(len(layer), _MAX_PARALLEL_STEPS) if parallel else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(_run_one_step, provider, step, max_repairs): step
+                pool.submit(
+                    _run_one_step, provider, step, max_repairs,
+                    _dependency_facts(step, by_name),
+                ): step
                 for step in layer
             }
             for future in as_completed(futures):

@@ -145,6 +145,34 @@ class TestExecutePlan:
         # Returned in the plan's original order, not execution order.
         assert [r.step.name for r in results] == ["Object", "Field", "Apex"]
 
+    def test_dependent_step_is_told_the_dependency_s_actual_name(self):
+        # The planner writes every brief before any step has actually run, so
+        # "name that object's api_name exactly" in a brief is only ever a
+        # guess. This is the fix for a real production bug: a Flow step
+        # guessed at a junction object field ('Account__c') that the object
+        # step never created, because nothing told the Flow step what the
+        # object step actually settled on. execute_plan must inject the real
+        # generated api_name into a dependent step's brief before it runs.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="object", name="Object", brief="an Invoice object"),
+            PlanStep(artifact_type="field", name="Field", brief="an Amount field",
+                      depends_on=["Object"]),
+        ])
+        provider = TypedScriptedProvider(object=VALID_OBJECT, field=VALID_FIELD)
+        execute_plan(provider, plan)
+
+        field_calls = [c for c in provider.calls if c[0] == "field"]
+        assert len(field_calls) == 1
+        brief = field_calls[0][1][0].content
+        assert VALID_OBJECT["api_name"] in brief
+
+    def test_step_with_no_dependencies_gets_its_brief_unchanged(self):
+        plan = Plan(steps=[PlanStep(artifact_type="apex", name="Apex", brief="a helper")])
+        provider = TypedScriptedProvider(apex=VALID_APEX)
+        execute_plan(provider, plan)
+
+        assert provider.calls[0][1][0].content == "a helper"
+
     def test_dependency_order_is_honoured_even_when_listed_out_of_order(self):
         plan = Plan(steps=[
             PlanStep(artifact_type="field", name="Field", brief="an Amount field",
