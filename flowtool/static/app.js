@@ -716,6 +716,8 @@ function renderPlan(data) {
   container.innerHTML = "";
   steps.forEach((step) => container.appendChild(renderPlanStep(step)));
 
+  $("planReportLink").href = `api/plan/session/${data.session_id}/report`;
+
   if (data.usage) state.usage = data.usage;
   renderLogs();
 

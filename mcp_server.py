@@ -33,7 +33,6 @@ server.py's own SESSIONS/PLAN_SESSIONS (in-memory, per-process).
 
 from __future__ import annotations
 
-import html
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -45,6 +44,7 @@ from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.orgs import SfCliError, get_org
 from flowtool.planner import Plan, PlannerGenerator, StepResult, execute_plan, refine_step
+from flowtool.report import render_html_fragment
 from flowtool.sfdc import component_setup_url, validate_bundle
 from server import _bundle_files_and_types, _failures, build_provider
 
@@ -98,58 +98,6 @@ def _step_summary(result: StepResult) -> Dict[str, Any]:
     return base
 
 
-def _render_html_report(steps: List[StepResult]) -> str:
-    """
-    An unstyled HTML fragment describing every step - not a full page (no
-    <html>/<head>), so whatever calls this tool can drop it straight into a
-    document of its own, an Artifact included. Kept deliberately plain: this
-    project's own artifact-publishing rules call for a design pass before
-    anything gets styled and shipped, and that pass belongs to whoever is
-    about to publish it, not to this server.
-    """
-    def esc(value: Any) -> str:
-        return html.escape(str(value))
-
-    parts: List[str] = ["<section>"]
-    for result in steps:
-        value = result.value
-        step = result.step
-        parts.append(f'<article data-step-type="{esc(step.artifact_type)}">')
-        parts.append(f"<h3>{esc(step.name)}</h3>")
-
-        if isinstance(value, CustomObject):
-            parts.append(
-                "<table><tbody>"
-                f"<tr><th>API name</th><td>{esc(value.api_name)}</td></tr>"
-                f"<tr><th>Label</th><td>{esc(value.label)}</td></tr>"
-                f"<tr><th>Plural label</th><td>{esc(value.plural_label)}</td></tr>"
-                "</tbody></table>"
-            )
-        elif isinstance(value, CustomField):
-            parts.append(
-                "<table><tbody>"
-                f"<tr><th>API name</th><td>{esc(value.api_name)}</td></tr>"
-                f"<tr><th>Type</th><td>{esc(value.type)}</td></tr>"
-                f"<tr><th>On object</th><td>{esc(value.object_api_name)}</td></tr>"
-                "</tbody></table>"
-            )
-        elif isinstance(value, ApexClass):
-            parts.append(f"<pre><code>{esc(value.body)}</code></pre>")
-        elif isinstance(value, Flow):
-            parts.append(f"<p>{len(value.elements)} element(s)</p>")
-            parts.append("<ol>")
-            for element in value.elements:
-                label = getattr(element, "label", None) or getattr(
-                    element, "name", type(element).__name__
-                )
-                parts.append(f"<li>{esc(label)}</li>")
-            parts.append("</ol>")
-
-        parts.append("</article>")
-    parts.append("</section>")
-    return "".join(parts)
-
-
 def _org_credentials(org_alias: str) -> tuple[str, str]:
     try:
         org = get_org(org_alias or None)
@@ -182,7 +130,7 @@ async def build(request: str) -> Dict[str, Any]:
         "build_id": build_id,
         "version": entry.version,
         "steps": [_step_summary(r) for r in steps],
-        "report_html": _render_html_report(steps),
+        "report_html": render_html_fragment(steps),
     }
 
 
@@ -238,7 +186,7 @@ async def revise(build_id: str, step_name: str, instruction: str) -> Dict[str, A
     return {
         "step": _step_summary(updated),
         "version": build_entry.version,
-        "report_html": _render_html_report(build_entry.steps),
+        "report_html": render_html_fragment(build_entry.steps),
     }
 
 

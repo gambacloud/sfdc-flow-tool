@@ -333,6 +333,33 @@ class TestPlanSessionView:
         assert client.get("/api/plan/session/nope").status_code == 404
 
 
+class TestPlanReport:
+    def test_report_is_a_downloadable_standalone_html_document(self, client, scripted):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+        sid = session["session_id"]
+
+        response = client.get(f"/api/plan/session/{sid}/report")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "attachment" in response.headers["content-disposition"]
+        assert "Won Deal Flow" in response.text
+        assert "not yet approved" in response.text
+
+    def test_report_reflects_approval_status(self, client, scripted):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+        sid = session["session_id"]
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+
+        response = client.get(f"/api/plan/session/{sid}/report")
+
+        assert "not yet approved" not in response.text
+        assert "approved" in response.text
+
+    def test_unknown_session_is_404(self, client):
+        assert client.get("/api/plan/session/nope/report").status_code == 404
+
+
 class TestPlanRepair:
     def test_repair_without_a_failure_is_rejected(self, client, scripted):
         session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)

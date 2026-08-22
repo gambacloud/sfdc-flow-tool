@@ -44,6 +44,7 @@ from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
     Plan, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
 )
+from flowtool.report import render_standalone_report
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
@@ -1598,6 +1599,31 @@ def plan_session_view(session_id: str) -> Dict[str, Any]:
     /api/session/{session_id} above."""
     session = get_plan_session(session_id)
     return plan_view(session_id, session)
+
+
+@app.get("/api/plan/session/{session_id}/report")
+def plan_report(session_id: str) -> PlainTextResponse:
+    """
+    A standalone HTML document of everything in this plan, downloadable
+    before deploying anything - so what's pending approval can be handed to
+    a person or another system for review, outside this tool entirely.
+    Print-to-PDF from a browser covers the "I need a PDF" case without this
+    project taking on a PDF-rendering dependency. Uses the same
+    render_standalone_report mcp_server.py's build/revise tools render their
+    report_html fragment from, so the web UI and an MCP client never
+    describe the same plan two different ways.
+    """
+    session = get_plan_session(session_id)
+    status = "approved" if session.approved else "not yet approved"
+    report = render_standalone_report(
+        session.steps,
+        title=f"Plan report - v{session.version}",
+        meta=f"{len(session.steps)} step(s) - {status}",
+    )
+    return PlainTextResponse(
+        report, media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="plan-{session_id}.html"'},
+    )
 
 
 @app.get("/")
