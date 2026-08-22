@@ -608,10 +608,16 @@ function planStepTable(rows) {
   return table;
 }
 
+function setAllPlanStepsOpen(open) {
+  document.querySelectorAll("#planSteps .plan-step").forEach((card) => {
+    card.open = open;
+  });
+}
+
 function renderPlanStep(step) {
   const card = document.createElement("details");
   card.className = "plan-step " + step.artifact_type;
-  card.open = true;
+  card.open = false;
 
   const summary = document.createElement("summary");
   const badge = document.createElement("span");
@@ -1763,6 +1769,8 @@ async function boot() {
   $("planApproveBtn").onclick = planApprove;
   $("planValidateBtn").onclick = planValidate;
   $("planDeployBtn").onclick = planDeploy;
+  $("planExpandAllBtn").onclick = () => setAllPlanStepsOpen(true);
+  $("planCollapseAllBtn").onclick = () => setAllPlanStepsOpen(false);
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.onclick = () => {

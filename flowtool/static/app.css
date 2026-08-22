@@ -413,7 +413,12 @@ pre#code {
 .plan-chip.field { border-color: var(--warn); }
 .plan-chip.apex { border-color: var(--accent); }
 
-.plan-steps { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.plan-steps-toolbar { margin-top: 10px; display: flex; gap: 14px; }
+.link-button {
+  background: none; border: none; padding: 0; color: var(--accent);
+  font-size: 12.5px; cursor: pointer; text-decoration: underline;
+}
+.plan-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
 .plan-step {
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
   overflow: hidden;
