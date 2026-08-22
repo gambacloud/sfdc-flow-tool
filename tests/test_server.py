@@ -140,6 +140,18 @@ class TestDesign:
         assert client.get(f"/api/session/{session_id}/markdown").status_code == 200
         assert client.get(f"/api/session/{session_id}/nope").status_code == 404
 
+    def test_report_is_a_downloadable_standalone_html_document(self, client, scripted):
+        scripted(VALID)
+        session_id = design(client)["session_id"]
+
+        response = client.get(f"/api/session/{session_id}/report")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "attachment" in response.headers["content-disposition"]
+        assert "Won Deal Flow" in response.text
+        assert "not yet approved" in response.text
+
 
 class TestApprovalGate:
     def test_validate_refuses_without_approval(self, client, scripted, monkeypatch):

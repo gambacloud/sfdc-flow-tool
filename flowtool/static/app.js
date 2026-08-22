@@ -499,6 +499,7 @@ function renderFlow(data) {
   $("explanation").className = "explanation dim";
 
   $("result").hidden = true;
+  $("flowReportLink").href = `api/session/${data.session_id}/report`;
   renderElementIndex(data.element_index);
   renderDiagram(data.mermaid);
   renderTab();

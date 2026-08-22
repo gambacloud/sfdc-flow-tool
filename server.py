@@ -42,7 +42,7 @@ from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
-    Plan, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
+    Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
 )
 from flowtool.report import render_standalone_report
 from flowtool.sfdc import (
@@ -1007,6 +1007,27 @@ def session_view(session_id: str) -> Dict[str, Any]:
 def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     session = get_session(session_id)
     flow = session.flow
+
+    if artifact == "report":
+        # Same downloadable-standalone-document idea as /api/plan/session's
+        # report - a single-Flow session wrapped as a one-step "plan" so it
+        # can reuse the identical renderer (live mermaid diagram + the same
+        # per-element detail table the Diagram tab's side panel shows),
+        # rather than a second HTML template drifting from that one.
+        status = "approved" if session.approved else "not yet approved"
+        step = StepResult(
+            step=PlanStep(artifact_type="flow", name=flow.label, brief=""),
+            value=flow, repairs=0, messages=[],
+        )
+        report = render_standalone_report(
+            [step], title=f"{flow.label} - v{session.version}",
+            meta=f"{len(flow.elements)} element(s) - {status}",
+        )
+        return PlainTextResponse(
+            report, media_type="text/html",
+            headers={"Content-Disposition": f'attachment; filename="flow-{session_id}.html"'},
+        )
+
     bodies = {
         "xml": (generate_xml(flow), "application/xml"),
         "markdown": (to_markdown(flow), "text/markdown"),
