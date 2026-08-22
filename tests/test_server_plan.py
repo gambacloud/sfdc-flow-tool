@@ -272,6 +272,55 @@ class TestPlanDeploy:
         assert set(seen_types) == {"CustomObject", "ApexClass"}
         assert "<fields>" in next(v for k, v in seen_files.items() if k.endswith(".object"))
 
+    def test_successful_deploy_returns_a_setup_link_per_step(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        # The user-facing gap this closes: after a plan deploys, nothing
+        # pointed at what actually got created in the org - see
+        # server.py's _plan_component_urls.
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            return DeployResult("1", "Succeeded", True)
+
+        async def fake_component_setup_url(
+            instance_url, session_id, artifact_type, api_name, api_version="62.0",
+            object_api_name=None,
+        ):
+            return f"https://x/setup/{artifact_type}/{api_name}"
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        monkeypatch.setattr(server, "component_setup_url", fake_component_setup_url)
+
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/deploy/start", json={"session_id": sid, "confirm": True})
+        result = poll(client, "/api/plan/deploy/status", session_id=sid).json()
+
+        assert result["setup_urls"] == {
+            "Object": "https://x/setup/object/Invoice__c",
+            "Field": "https://x/setup/field/Amount__c",
+            "Apex": "https://x/setup/apex/Invoice_Helper",
+        }
+
+    def test_failed_deploy_has_no_setup_links(self, client, scripted, monkeypatch):
+        session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            return DeployResult("1", "Failed", False, failures=[
+                ComponentProblem("Won_Deal_Flow", "boom", "Error"),
+            ])
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": session["session_id"], "version": session["version"]})
+        client.post(
+            "/api/plan/deploy/start", json={"session_id": session["session_id"], "confirm": True}
+        )
+        result = poll(client, "/api/plan/deploy/status", session_id=session["session_id"]).json()
+        assert result["setup_urls"] == {}
+
 
 class TestPlanSessionView:
     def test_session_can_be_refetched(self, client, scripted):

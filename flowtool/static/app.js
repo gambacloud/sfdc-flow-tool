@@ -758,6 +758,23 @@ function renderPlanResult(result) {
     : `${result.status} - Salesforce rejected it`;
   box.appendChild(title);
 
+  const setupUrls = result.setup_urls || {};
+  if (Object.keys(setupUrls).length) {
+    const list = document.createElement("ul");
+    list.className = "plan-setup-links";
+    Object.entries(setupUrls).forEach(([stepName, url]) => {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = `Open ${stepName} in Setup`;
+      item.appendChild(link);
+      list.appendChild(item);
+    });
+    box.appendChild(list);
+  }
+
   if (result.failures.length) {
     const list = document.createElement("ul");
     result.failures.forEach((failure) => {

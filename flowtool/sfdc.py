@@ -442,6 +442,49 @@ async def flow_builder_url(
     return f"{base}/builder_platform_interaction/flowBuilder.app?flowId={version_id}"
 
 
+async def component_setup_url(
+    instance_url: str, session_id: str, artifact_type: str, api_name: str,
+    api_version: str = "62.0", object_api_name: Optional[str] = None,
+) -> str:
+    """
+    A direct Setup link for a component that was just deployed, so a person
+    doesn't have to go hunting for what a plan actually created. Object and
+    field links are addressable by name alone; Apex needs its Id resolved
+    the same way flow_builder_url resolves a flow version's, since Setup's
+    class editor is keyed by Id, not by name.
+    """
+    base = _normalise(instance_url)
+    if artifact_type == "object":
+        return f"{base}/lightning/setup/ObjectManager/{api_name}/Details/view"
+    if artifact_type == "field":
+        return (
+            f"{base}/lightning/setup/ObjectManager/{object_api_name}"
+            f"/FieldsAndRelationships/{api_name}/view"
+        )
+    if artifact_type == "flow":
+        return await flow_builder_url(instance_url, session_id, api_name, api_version)
+    if artifact_type == "apex":
+        fallback = f"{base}/lightning/setup/ApexClasses/home"
+        query = f"SELECT Id FROM ApexClass WHERE Name = '{api_name}'"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{base}/services/data/v{api_version}/tooling/query",
+                    params={"q": query},
+                    headers={"Authorization": f"Bearer {session_id}"},
+                )
+            if resp.status_code != 200:
+                return fallback
+            records = resp.json().get("records", [])
+            if not records:
+                return fallback
+            class_id = records[0]["Id"]
+        except (httpx.HTTPError, ValueError, KeyError):
+            return fallback
+        return f"{base}/lightning/setup/ApexClasses/page?address=%2F{class_id}"
+    return f"{base}/lightning/setup/SetupOneHome/home"
+
+
 async def retrieve_all_flows(
     instance_url: str, session_id: str, api_version: str = "62.0"
 ) -> Dict[str, str]:

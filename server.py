@@ -47,6 +47,7 @@ from flowtool.planner import (
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
+    component_setup_url,
     flow_builder_url,
     list_flows,
     retrieve_all_flows,
@@ -1413,13 +1414,56 @@ async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
         return {"done": False}
     session.pending_deploy = None
     result = pending.task.result()
+    urls: Dict[str, str] = {}
+    if result.success:
+        urls = await _plan_component_urls(session, pending.instance_url, pending.token)
     return {
         "done": True,
         "success": result.success,
         "status": result.status,
         "failures": _failures(result),
         "instance_url": pending.instance_url,
+        "setup_urls": urls,
     }
+
+
+async def _plan_component_urls(
+    session: "PlanSession", instance_url: str, token: str,
+) -> Dict[str, str]:
+    """
+    A direct Setup link per step, keyed by step name - so a deploy that just
+    created several components doesn't leave a person hunting through Setup
+    to find what actually appeared. Resolved after a successful deploy, same
+    as the single-Flow path's flow_url.
+    """
+    async def one(result: StepResult) -> tuple:
+        value = result.value
+        if isinstance(value, CustomObject):
+            url = await component_setup_url(
+                instance_url, token, "object", value.api_name,
+                api_version=session.api_version,
+            )
+        elif isinstance(value, CustomField):
+            url = await component_setup_url(
+                instance_url, token, "field", value.api_name,
+                api_version=session.api_version, object_api_name=value.object_api_name,
+            )
+        elif isinstance(value, ApexClass):
+            url = await component_setup_url(
+                instance_url, token, "apex", value.api_name,
+                api_version=session.api_version,
+            )
+        elif isinstance(value, Flow):
+            url = await component_setup_url(
+                instance_url, token, "flow", value.api_name,
+                api_version=session.api_version,
+            )
+        else:
+            return result.step.name, None
+        return result.step.name, url
+
+    pairs = await asyncio.gather(*(one(r) for r in session.steps))
+    return {name: url for name, url in pairs if url}
 
 
 def _repair_plan(
