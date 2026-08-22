@@ -15,14 +15,19 @@ dependencies = [
     "google-genai",
     "anthropic",
     "ollama",
+    "mcp",
 ]
 
-# server.py and survey.py live at the repo root, not inside the flowtool
-# package, so they need to be listed explicitly - setuptools only
-# auto-discovers packages. survey.py is needed at runtime, not just from the
-# CLI: server.py imports it for the "Generate support report" endpoint.
+# server.py, survey.py and mcp_server.py live at the repo root, not inside
+# the flowtool package, so they need to be listed explicitly - setuptools
+# only auto-discovers packages. survey.py is needed at runtime, not just from
+# the CLI: server.py imports it for the "Generate support report" endpoint.
+# mcp_server.py is a separate entry point (`python -m mcp_server`, or a
+# client's MCP config pointing at it directly) - it imports server.py for
+# its build_provider/_bundle_files_and_types/_failures helpers rather than
+# re-implementing them, so both need to ship together.
 [tool.setuptools]
-py-modules = ["server", "survey"]
+py-modules = ["server", "survey", "mcp_server"]
 include-package-data = true
 
 [tool.setuptools.packages.find]
