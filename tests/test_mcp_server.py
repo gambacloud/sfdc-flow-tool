@@ -95,16 +95,58 @@ class TestReviseTool:
         assert object_step.value.label == "Sales Invoice"
 
 
+class TestApproveTool:
+    def test_unknown_build_id_is_rejected(self):
+        with pytest.raises(ValueError, match="Unknown build_id"):
+            asyncio.run(mcp_server.approve("nope", 1))
+
+    def test_stale_version_is_rejected(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+
+        with pytest.raises(ValueError, match="changed since"):
+            asyncio.run(mcp_server.approve(built["build_id"], built["version"] + 1))
+
+    def test_approve_makes_the_build_approved(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+        assert mcp_server.BUILDS[built["build_id"]].approved is False
+
+        result = asyncio.run(mcp_server.approve(built["build_id"], built["version"]))
+
+        assert result["approved"] is True
+        assert mcp_server.BUILDS[built["build_id"]].approved is True
+
+    def test_revise_requires_re_approval(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+        asyncio.run(mcp_server.approve(built["build_id"], built["version"]))
+        assert mcp_server.BUILDS[built["build_id"]].approved is True
+
+        typed_scripted(object=dict(VALID_OBJECT, label="Sales Invoice"))
+        asyncio.run(mcp_server.revise(built["build_id"], "Object", "rename the label"))
+
+        assert mcp_server.BUILDS[built["build_id"]].approved is False
+
+
 class TestValidateTool:
     def test_unknown_build_id_is_rejected(self):
         with pytest.raises(ValueError, match="Unknown build_id"):
             asyncio.run(mcp_server.validate("nope", "dev"))
+
+    def test_unapproved_build_is_rejected(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+
+        with pytest.raises(ValueError, match="Approve this build first"):
+            asyncio.run(mcp_server.validate(built["build_id"], "dev"))
 
     def test_validate_bundles_every_step_and_reports_the_org_s_answer(
         self, typed_scripted, monkeypatch,
     ):
         typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         built = asyncio.run(mcp_server.build("bundle it"))
+        asyncio.run(mcp_server.approve(built["build_id"], built["version"]))
 
         seen_types = {}
 
@@ -129,13 +171,22 @@ class TestDeployTool:
     def test_deploy_without_confirm_is_rejected(self, typed_scripted):
         typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         built = asyncio.run(mcp_server.build("bundle it"))
+        asyncio.run(mcp_server.approve(built["build_id"], built["version"]))
 
         with pytest.raises(ValueError, match="confirm"):
             asyncio.run(mcp_server.deploy(built["build_id"], "dev", False))
 
+    def test_unapproved_build_is_rejected_even_with_confirm(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+
+        with pytest.raises(ValueError, match="Approve this build first"):
+            asyncio.run(mcp_server.deploy(built["build_id"], "dev", True))
+
     def test_confirmed_deploy_returns_setup_links(self, typed_scripted, monkeypatch):
         typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         built = asyncio.run(mcp_server.build("bundle it"))
+        asyncio.run(mcp_server.approve(built["build_id"], built["version"]))
 
         async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
             assert check_only is False

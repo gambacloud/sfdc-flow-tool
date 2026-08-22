@@ -63,6 +63,18 @@ mcp = MCPServer(
 @dataclass
 class Build:
     steps: List[StepResult]
+    # Same optimistic-concurrency gate as PlanSession in server.py: version
+    # starts at 1, approved_version at 0, so a fresh build is unapproved.
+    # approve(build_id, version) only takes effect if `version` still matches
+    # - a revise() in between bumps `version` without touching
+    # approved_version, which is what makes approved() false again without a
+    # separate reset step.
+    version: int = 1
+    approved_version: int = 0
+
+    @property
+    def approved(self) -> bool:
+        return self.approved_version == self.version
 
 
 BUILDS: Dict[str, Build] = {}
@@ -153,8 +165,10 @@ async def build(request: str) -> Dict[str, Any]:
     (Custom Object / Custom Field / Apex Class / Flow), then generate each
     one. Nothing is sent to Salesforce - this only produces reviewable IR.
 
-    Returns a build_id (pass it to validate/deploy) and a summary of every
-    step generated.
+    Returns a build_id (pass it to approve/revise/validate/deploy), its
+    version (pass this exact number to approve - it changes if the build is
+    later revised), and a summary of every step generated. Nothing here is
+    approved yet: call approve before validate or deploy will accept it.
     """
     provider = build_provider(None, None, "medium")
     plan_result = PlannerGenerator(provider).generate(request)
@@ -162,12 +176,36 @@ async def build(request: str) -> Dict[str, Any]:
     steps = execute_plan(provider, plan)
 
     build_id = uuid.uuid4().hex[:12]
-    BUILDS[build_id] = Build(steps=steps)
+    entry = Build(steps=steps)
+    BUILDS[build_id] = entry
     return {
         "build_id": build_id,
+        "version": entry.version,
         "steps": [_step_summary(r) for r in steps],
         "report_html": _render_html_report(steps),
     }
+
+
+@mcp.tool()
+async def approve(build_id: str, version: int) -> Dict[str, Any]:
+    """
+    Approve a build so validate/deploy will accept it - the same gate the
+    web UI's "Approve all" enforces before its own Validate/Deploy buttons.
+    `version` must match the build's current version exactly (returned by
+    build, or by revise if the build changed since); a mismatch means the
+    build was revised since you last looked at it and needs reviewing again
+    before it can be approved.
+    """
+    build_entry = BUILDS.get(build_id)
+    if build_entry is None:
+        raise ValueError(f"Unknown build_id {build_id!r} - call build first.")
+    if version != build_entry.version:
+        raise ValueError(
+            f"This build is at version {build_entry.version}, not {version} - "
+            "it changed since you last looked at it. Review it again before approving."
+        )
+    build_entry.approved_version = build_entry.version
+    return {"build_id": build_id, "version": build_entry.version, "approved": True}
 
 
 @mcp.tool()
@@ -193,9 +231,13 @@ async def revise(build_id: str, step_name: str, instruction: str) -> Dict[str, A
     provider = build_provider(None, None, "medium")
     updated = refine_step(provider, build_entry.steps[index], instruction)
     build_entry.steps[index] = updated
+    # Not touching approved_version is what makes build_entry.approved false
+    # again - same mechanism as PlanSession's repair/refine handling.
+    build_entry.version += 1
 
     return {
         "step": _step_summary(updated),
+        "version": build_entry.version,
         "report_html": _render_html_report(build_entry.steps),
     }
 
@@ -204,14 +246,16 @@ async def revise(build_id: str, step_name: str, instruction: str) -> Dict[str, A
 async def validate(build_id: str, org_alias: str) -> Dict[str, Any]:
     """
     Check-only dry run of a build against a real org - creates nothing,
-    reports exactly what Salesforce would reject if deployed. org_alias is
-    an org the `sf` CLI is already authenticated against
-    (`sf org login web --alias <alias>`); no token is passed through this
-    call.
+    reports exactly what Salesforce would reject if deployed. Requires the
+    build to be approved first (call approve). org_alias is an org the `sf`
+    CLI is already authenticated against (`sf org login web --alias
+    <alias>`); no token is passed through this call.
     """
     build_entry = BUILDS.get(build_id)
     if build_entry is None:
         raise ValueError(f"Unknown build_id {build_id!r} - call build first.")
+    if not build_entry.approved:
+        raise ValueError("Approve this build first (call approve) before validating it.")
     instance_url, token = _org_credentials(org_alias)
     files, types = _bundle_files_and_types(build_entry.steps)
     result = await validate_bundle(instance_url, token, files, types, check_only=True)
@@ -222,15 +266,19 @@ async def validate(build_id: str, org_alias: str) -> Dict[str, Any]:
 async def deploy(build_id: str, org_alias: str, confirm: bool) -> Dict[str, Any]:
     """
     Deploy a build to a real org for real - every step, in one transaction.
-    This is NOT check-only: it creates/activates real metadata. Call
-    validate first. Requires confirm=true as an explicit, separate signal -
-    the same gate the web UI enforces before its own Deploy button.
+    This is NOT check-only: it creates/activates real metadata. Requires the
+    build to be approved first (call approve), and confirm=true as an
+    explicit, separate signal - the same two gates the web UI enforces
+    before its own Deploy button. Call validate first too, though nothing
+    here enforces that one.
     """
     if not confirm:
         raise ValueError("Deploying needs an explicit confirm=true.")
     build_entry = BUILDS.get(build_id)
     if build_entry is None:
         raise ValueError(f"Unknown build_id {build_id!r} - call build first.")
+    if not build_entry.approved:
+        raise ValueError("Approve this build first (call approve) before deploying it.")
     instance_url, token = _org_credentials(org_alias)
     files, types = _bundle_files_and_types(build_entry.steps)
     result = await validate_bundle(instance_url, token, files, types, check_only=False)
