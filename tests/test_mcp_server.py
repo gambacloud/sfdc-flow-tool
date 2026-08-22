@@ -57,6 +57,43 @@ class TestBuildTool:
         assert by_name["Field"]["object_api_name"] == "Invoice__c"
         assert by_name["Apex"]["api_name"] == VALID_APEX["api_name"]
 
+    def test_build_also_returns_an_html_report(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+
+        result = asyncio.run(mcp_server.build("bundle it"))
+
+        report = result["report_html"]
+        assert "Invoice__c" in report
+        assert VALID_APEX["body"].splitlines()[0] in report or "<pre>" in report
+
+
+class TestReviseTool:
+    def test_unknown_build_id_is_rejected(self):
+        with pytest.raises(ValueError, match="Unknown build_id"):
+            asyncio.run(mcp_server.revise("nope", "Object", "rename it"))
+
+    def test_unknown_step_name_is_rejected(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+
+        with pytest.raises(ValueError, match="No step named"):
+            asyncio.run(mcp_server.revise(built["build_id"], "Ghost", "rename it"))
+
+    def test_revise_replaces_the_step_and_updates_the_build_in_place(self, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        built = asyncio.run(mcp_server.build("bundle it"))
+
+        revised_object = dict(VALID_OBJECT, label="Sales Invoice")
+        typed_scripted(object=revised_object)
+
+        result = asyncio.run(mcp_server.revise(built["build_id"], "Object", "rename the label"))
+
+        assert result["step"]["label"] == "Sales Invoice"
+        # The build itself was updated, not just the return value.
+        stored = mcp_server.BUILDS[built["build_id"]]
+        object_step = next(r for r in stored.steps if r.step.name == "Object")
+        assert object_step.value.label == "Sales Invoice"
+
 
 class TestValidateTool:
     def test_unknown_build_id_is_rejected(self):
