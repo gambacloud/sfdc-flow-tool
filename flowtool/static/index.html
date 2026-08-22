@@ -129,6 +129,11 @@
             <input type="checkbox" id="activate">
             Deploy Active <span class="warn-inline">(runs on live records)</span>
           </label>
+          <label class="check">
+            <input type="checkbox" id="planParallel">
+            Run independent steps in parallel
+            <span class="dim">(Build multiple things only - faster, but can trip rate limits more and cost more retries; off by default)</span>
+          </label>
         </div>
       </details>
     </div>
@@ -164,12 +169,6 @@
         pieces the request needs and in what order, then each piece is
         generated on its own.
       </p>
-
-      <label class="check">
-        <input type="checkbox" id="planParallel">
-        Run independent steps in parallel
-        <span class="dim">(faster, but can trip rate limits more and cost more retries - off by default)</span>
-      </label>
 
       <button id="planBtn" class="primary">Plan and build</button>
     </div>
