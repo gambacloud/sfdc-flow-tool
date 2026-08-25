@@ -1532,6 +1532,26 @@ function startOAuthLogin(clientId, host) {
 // Salesforce returns the token in the URL fragment, not a query string or a
 // redirect the server ever sees - read it here and scrub it from the address
 // bar so it doesn't linger in history.
+// A session another tool already created server-side (see /api/import,
+// /api/refine) - handed off via ?session=<id> rather than sessionStorage,
+// since the tab opening this one has never had a chance to write anything
+// into this origin's storage. Adopting it into SESSION_STORAGE_KEY here
+// means restoreSession() below does the actual fetch-and-render exactly the
+// way it already does for a same-tab reload; this only decides *which*
+// session id that reload logic should use, and forces "open" mode (matching
+// how a Flow adopted from the org is opened everywhere else) so a plan
+// session from a previous tab session doesn't silently win instead.
+function restoreSessionFromUrlParam() {
+  const params = new URLSearchParams(location.search);
+  const sessionId = params.get("session");
+  if (!sessionId) return;
+  sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "open");
+  params.delete("session");
+  const rest = params.toString();
+  history.replaceState({}, document.title, location.pathname + (rest ? `?${rest}` : "") + location.hash);
+}
+
 function restoreOAuthFromFragment() {
   if (!location.hash) return;
   const params = new URLSearchParams(location.hash.slice(1));
@@ -1744,6 +1764,7 @@ async function boot() {
         startOAuthLogin(config.clientId, "https://test.salesforce.com");
     }
     restoreOAuthFromFragment();
+    restoreSessionFromUrlParam();
     renderOAuthStatus();
     await restoreSessions();
 
