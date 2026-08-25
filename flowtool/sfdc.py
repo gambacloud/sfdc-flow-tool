@@ -363,6 +363,12 @@ class FlowSummary:
     last_modified: Optional[str] = None
 
 
+@dataclass
+class ApexClassSummary:
+    api_name: str
+    last_modified: Optional[str] = None
+
+
 class RetrieveError(RuntimeError):
     pass
 
@@ -642,6 +648,64 @@ async def retrieve_flow(
                 "Check the API name, or that the flow has a saved version."
             )
         return archive.read(wanted).decode("utf-8")
+
+
+async def list_apex_classes(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> List[ApexClassSummary]:
+    """
+    Every Apex class in the org, newest first.
+
+    Plain REST /query, not /tooling/query - ApexClass is a queryable standard
+    object there too, and the regular endpoint is one less API surface to
+    depend on for something this simple.
+    """
+    base = _normalise(instance_url)
+    query = "SELECT Name, LastModifiedDate FROM ApexClass ORDER BY LastModifiedDate DESC"
+    url = f"{base}/services/data/v{api_version}/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(
+            fault or f"Could not list Apex classes ({resp.status_code}): {resp.text[:300]}"
+        )
+
+    return [
+        ApexClassSummary(
+            api_name=record["Name"],
+            last_modified=record.get("LastModifiedDate"),
+        )
+        for record in resp.json().get("records", [])
+    ]
+
+
+async def retrieve_apex_class(
+    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+) -> str:
+    """Pull one Apex class's source out of the org via plain REST query."""
+    base = _normalise(instance_url)
+    query = f"SELECT Body FROM ApexClass WHERE Name = '{api_name}'"
+    url = f"{base}/services/data/v{api_version}/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(
+            fault or f"Could not retrieve {api_name} ({resp.status_code}): {resp.text[:300]}"
+        )
+    records = resp.json().get("records", [])
+    if not records:
+        raise RetrieveError(f"{api_name} was not found in the org.")
+    return records[0]["Body"]
 
 
 async def validate_flow(

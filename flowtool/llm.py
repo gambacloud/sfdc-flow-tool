@@ -1569,6 +1569,27 @@ class IRGenerator(Generic[T]):
             "Correct it so the deploy passes. Change only what these errors require.",
         )
 
+    def adopt(self, value: T, origin: str = "an existing component in the org") -> IRGenerationResult[T]:
+        """
+        Start a conversation from a value that already exists, so a refinement
+        edits it rather than designing something new from its description.
+        Shared by any artifact type that supports editing an org original
+        (Flow, Apex, ...) - the wording is generic on purpose.
+        """
+        return IRGenerationResult(
+            value=value,
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        f"Here is {origin}. Keep everything about it the same "
+                        "unless I ask for a change."
+                    ),
+                )
+            ],
+            repairs=0,
+        )
+
 
 @dataclass
 class GenerationResult:
@@ -1627,22 +1648,9 @@ class FlowGenerator(IRGenerator[Flow]):
         return result
 
     def adopt(self, flow: Flow, origin: str = "an existing flow in the org") -> GenerationResult:
-        """
-        Start a conversation from a flow that already exists, so a refinement
-        edits it rather than designing something new from its description.
-        """
+        generic = super().adopt(flow, origin)
         return GenerationResult(
-            flow=flow,
-            messages=[
-                Message(
-                    role="user",
-                    content=(
-                        f"Here is {origin}. Keep everything about it the same "
-                        "unless I ask for a change."
-                    ),
-                )
-            ],
-            repairs=0,
+            flow=generic.value, messages=generic.messages, repairs=generic.repairs
         )
 
     def explain(self, flow: Flow, question: Optional[str] = None) -> str:
@@ -1752,6 +1760,21 @@ class ApexClassGenerator(IRGenerator[ApexClass]):
 
     def generate(self, request: str) -> IRGenerationResult[ApexClass]:
         return self._validated([Message(role="user", content=request)])
+
+    def explain(self, cls: ApexClass, question: Optional[str] = None) -> str:
+        """Prose about what an Apex class does, same reasoning as
+        FlowGenerator.explain: reads the source directly, no separate IR to
+        translate since the body already is the source."""
+        ask = question or (
+            "Explain what this Apex class does, in plain language, for a "
+            "Salesforce admin who has never seen it. Cover what each public "
+            "method does and anything about it that looks risky or surprising. "
+            "Do not restate the code line by line."
+        )
+        return self.provider.complete_text(
+            EXPLAIN_PROMPT,
+            [Message(role="user", content=f"{ask}\n\nApex class {cls.api_name}:\n\n{cls.body}")],
+        )
 
 
 # Constraints the structured-outputs schema compiler does not accept. They stay

@@ -31,8 +31,10 @@ from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import (
     AnthropicProvider,
+    ApexClassGenerator,
     FlowGenerator,
     GenerationResult,
+    IRGenerationResult,
     KB_CHAT_PROMPT,
     LLMError,
     Message,
@@ -49,13 +51,13 @@ from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
     component_setup_url,
-    flow_builder_url,
+    list_apex_classes,
     list_flows,
     retrieve_all_flows,
+    retrieve_apex_class,
     retrieve_flow,
     retrieve_org_summary_zip,
     validate_bundle,
-    validate_flow,
 )
 from flowtool.xmlgen import generate as generate_xml
 from flowtool.xmlgen_apex import generate_apex
@@ -120,7 +122,7 @@ class PendingDeploy:
     A validate/deploy running in the background. Heroku's router kills any
     single request after 30s, and a Salesforce deploy can occasionally run
     longer than that, so /start kicks the work off as a background task and
-    /status polls it - the task itself is the same validate_flow() call this
+    /status polls it - the task itself is the same validate_bundle() call this
     used to just await directly.
     """
 
@@ -144,8 +146,18 @@ class PendingLLM:
 
 @dataclass
 class Session:
-    generator: FlowGenerator
-    result: GenerationResult
+    """
+    Holds one artifact under review - a Flow (the original, larger use case) or
+    an Apex class opened from an org for editing. `kind` picks which; `result`
+    is a `GenerationResult` (`.flow`) for a Flow or an `IRGenerationResult`
+    (`.value`) for Apex - the `flow`/`apex` properties below are what the rest
+    of this module reads instead of poking at `.result` directly, so the two
+    shapes stay hidden behind one interface.
+    """
+
+    generator: Any
+    result: Any
+    kind: Literal["flow", "apex"] = "flow"
     activate: bool = False
     api_version: str = "62.0"
     # Bumped on every change; deploy compares the two.
@@ -155,7 +167,7 @@ class Session:
     # What the org said last time, kept so a repair does not depend on the
     # browser sending error text back to the server.
     last_failures: List[str] = field(default_factory=list)
-    # True when the flow came out of the org rather than from a description.
+    # True when the artifact came out of the org rather than from a description.
     imported: bool = False
     pending_deploy: Optional[PendingDeploy] = None
     pending_llm: Optional[PendingLLM] = None
@@ -166,10 +178,18 @@ class Session:
         return self.result.flow
 
     @property
+    def apex(self) -> ApexClass:
+        return self.result.value
+
+    @property
+    def artifact_name(self) -> str:
+        return self.apex.api_name if self.kind == "apex" else self.flow.api_name
+
+    @property
     def approved(self) -> bool:
         return self.approved_version == self.version
 
-    def record(self, result: GenerationResult, note: str) -> None:
+    def record(self, result, note: str) -> None:
         self.result = result
         self.version += 1
         self.history.append({"note": note, "version": str(self.version)})
@@ -177,6 +197,9 @@ class Session:
 
     def apply_policy(self) -> None:
         """Status and API version are the tool's call, never the model's."""
+        if self.kind == "apex":
+            self.apex.api_version = self.api_version
+            return
         self.flow.status = "Active" if self.activate else "Draft"
         self.flow.api_version = self.api_version
 
@@ -285,9 +308,29 @@ def get_session(session_id: str) -> Session:
 
 
 def view(session_id: str, session: Session) -> Dict[str, Any]:
+    if session.kind == "apex":
+        apex = session.apex
+        return {
+            "session_id": session_id,
+            "kind": "apex",
+            "version": session.version,
+            "approved": session.approved,
+            "api_name": apex.api_name,
+            "label": apex.api_name,
+            "description": apex.description,
+            "status": apex.status,
+            "api_version": apex.api_version,
+            "ir": apex.model_dump(exclude_none=True),
+            "repairs": session.result.repairs,
+            "usage": session.generator.provider.usage.as_dict(),
+            "imported": session.imported,
+            "history": session.history,
+        }
+
     flow = session.flow
     return {
         "session_id": session_id,
+        "kind": "flow",
         "version": session.version,
         "approved": session.approved,
         "api_name": flow.api_name,
@@ -418,6 +461,11 @@ class FlowsRequest(BaseModel):
     access_token: Optional[str] = None
 
 
+class ApexClassesRequest(FlowsRequest):
+    """Same shape and same reasoning as FlowsRequest - the Apex picker asked
+    for before any session exists."""
+
+
 class DeployRequest(OrgRequest):
     confirm: bool = False
 
@@ -441,6 +489,7 @@ class OrgSummaryRequest(SurveyRequest):
 
 class ImportRequest(BaseModel):
     api_name: str
+    kind: Literal["flow", "apex"] = "flow"
     org: Optional[str] = None
     instance_url: Optional[str] = None
     access_token: Optional[str] = None
@@ -516,6 +565,11 @@ def config() -> Dict[str, Any]:
             {"group": g["group"], "label": g["label"], "default": g["default"]}
             for g in ORG_SUMMARY_TYPE_GROUPS
         ],
+        # A raw IR dump is a debugging aid, not something most users need a
+        # tab for - off unless a Heroku Config Var (or local env var) turns
+        # it on, so it stays out of the way for everyone but this repo's own
+        # maintainer(s).
+        "show_ir_subtab": os.environ.get("SHOW_IR_SUBTAB", "").strip().lower() == "true",
     }
 
 
@@ -613,6 +667,21 @@ async def flows(body: FlowsRequest) -> Dict[str, Any]:
                 "last_modified": flow.last_modified,
             }
             for flow in found
+        ]
+    }
+
+
+@app.post("/api/apex-classes")
+async def apex_classes(body: ApexClassesRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        found = await list_apex_classes(url, token)
+    except RetrieveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "classes": [
+            {"api_name": cls.api_name, "last_modified": cls.last_modified}
+            for cls in found
         ]
     }
 
@@ -736,9 +805,14 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
     polls /api/import/status instead of waiting on one request.
     """
     url, token = credentials(body.org, body.instance_url, body.access_token)
-    task = asyncio.create_task(
-        retrieve_flow(url, token, body.api_name, api_version=body.api_version)
-    )
+    if body.kind == "apex":
+        task = asyncio.create_task(
+            retrieve_apex_class(url, token, body.api_name, api_version=body.api_version)
+        )
+    else:
+        task = asyncio.create_task(
+            retrieve_flow(url, token, body.api_name, api_version=body.api_version)
+        )
     job_id = uuid.uuid4().hex
     IMPORTS[job_id] = PendingImport(task=task, instance_url=url, request=body)
     return {"job_id": job_id}
@@ -747,8 +821,9 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
 @app.get("/api/import/status")
 async def import_status(job_id: str) -> Dict[str, Any]:
     """
-    Pull a flow out of the org and adopt it, so the next refinement edits it
-    rather than designing a replacement from its description.
+    Pull a Flow or Apex class out of the org and adopt it, so the next
+    refinement edits it rather than designing a replacement from its
+    description.
     """
     pending = IMPORTS.get(job_id)
     if pending is None:
@@ -758,37 +833,56 @@ async def import_status(job_id: str) -> Dict[str, Any]:
     del IMPORTS[job_id]
 
     try:
-        xml = pending.task.result()
+        source = pending.task.result()
     except (RetrieveError, TimeoutError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
     body = pending.request
     try:
-        flow = parse_flow(xml, api_name=body.api_name)
-    except UnsupportedFlow as exc:
-        # Refusing is the point: a diagram missing the parts we cannot model
-        # would describe a different flow than the one in the org.
-        raise HTTPException(422, str(exc)) from exc
-
-    try:
         provider = build_provider(body.provider, body.model, body.effort, body.api_key)
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    generator = FlowGenerator(provider)
     session_id = uuid.uuid4().hex
-    session = Session(
-        generator=generator,
-        result=generator.adopt(
-            flow, f"the flow {body.api_name} from {pending.instance_url}"
-        ),
-        # An imported flow keeps the status it already has in the org, so
-        # opening one to read it cannot quietly propose deactivating it.
-        activate=flow.status == "Active",
-        api_version=flow.api_version,
-        history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
-        imported=True,
-    )
+
+    if body.kind == "apex":
+        apex = ApexClass(
+            api_name=body.api_name, body=source, api_version=body.api_version,
+        )
+        generator = ApexClassGenerator(provider)
+        session = Session(
+            generator=generator,
+            result=generator.adopt(
+                apex, f"the Apex class {body.api_name} from {pending.instance_url}"
+            ),
+            kind="apex",
+            api_version=body.api_version,
+            history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
+            imported=True,
+        )
+    else:
+        try:
+            flow = parse_flow(source, api_name=body.api_name)
+        except UnsupportedFlow as exc:
+            # Refusing is the point: a diagram missing the parts we cannot
+            # model would describe a different flow than the one in the org.
+            raise HTTPException(422, str(exc)) from exc
+
+        generator = FlowGenerator(provider)
+        session = Session(
+            generator=generator,
+            result=generator.adopt(
+                flow, f"the flow {body.api_name} from {pending.instance_url}"
+            ),
+            kind="flow",
+            # An imported flow keeps the status it already has in the org, so
+            # opening one to read it cannot quietly propose deactivating it.
+            activate=flow.status == "Active",
+            api_version=flow.api_version,
+            history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
+            imported=True,
+        )
+
     session.apply_policy()
     SESSIONS[session_id] = session
     return {"done": True, **view(session_id, session)}
@@ -799,8 +893,9 @@ async def explain_start(body: ExplainRequest) -> Dict[str, Any]:
     session = get_session(body.session_id)
     if session.pending_explain is not None and not session.pending_explain.done():
         raise HTTPException(409, "An explain is already running for this flow.")
+    subject = session.apex if session.kind == "apex" else session.flow
     session.pending_explain = asyncio.create_task(
-        asyncio.to_thread(session.generator.explain, session.flow, body.question)
+        asyncio.to_thread(session.generator.explain, subject, body.question)
     )
     return {"started": True}
 
@@ -863,13 +958,34 @@ async def refine_status(session_id: str) -> Dict[str, Any]:
 def approve(body: ApproveRequest) -> Dict[str, Any]:
     session = get_session(body.session_id)
     # Approving by version means approving a stale graph is impossible: if the
-    # flow changed since the browser rendered it, the numbers no longer match.
+    # artifact changed since the browser rendered it, the numbers no longer match.
     if body.version != session.version:
         raise HTTPException(
-            409, "The flow changed since you looked at it. Review it again."
+            409, "This changed since you looked at it. Review it again."
         )
     session.approved_version = session.version
     return view(body.session_id, session)
+
+
+def _deploy_files(session: Session) -> "tuple[Dict[str, str], Dict[str, List[str]]]":
+    """
+    The member files and package.xml types for whatever this session holds.
+    Both artifact kinds go through the same `validate_bundle` deploy call
+    below - a bundle of one member is just the single-artifact case of the
+    multi-type plan deploy.
+    """
+    if session.kind == "apex":
+        apex = session.apex
+        body, meta = generate_apex(apex)
+        return (
+            {
+                f"classes/{apex.api_name}.cls": body,
+                f"classes/{apex.api_name}.cls-meta.xml": meta,
+            },
+            {"ApexClass": [apex.api_name]},
+        )
+    flow = session.flow
+    return {f"flows/{flow.api_name}.flow": generate_xml(flow)}, {"Flow": [flow.api_name]}
 
 
 def _start_deploy(
@@ -880,15 +996,13 @@ def _start_deploy(
     check_only: bool,
 ) -> None:
     if session.pending_deploy is not None and not session.pending_deploy.task.done():
-        raise HTTPException(409, "A validate/deploy is already running for this flow.")
+        raise HTTPException(409, "A validate/deploy is already running for this.")
     url, token = credentials(org, instance_url, access_token)
+    files, types = _deploy_files(session)
     task = asyncio.create_task(
-        validate_flow(
-            url,
-            token,
-            session.flow.api_name,
-            generate_xml(session.flow),
-            api_version=session.flow.api_version,
+        validate_bundle(
+            url, token, files, types,
+            api_version=session.api_version,
             check_only=check_only,
         )
     )
@@ -975,9 +1089,9 @@ async def deploy_status(session_id: str) -> Dict[str, Any]:
     failures = _failures(result)
     link = None
     if result.success:
-        link = await flow_builder_url(
-            pending.instance_url, pending.token, session.flow.api_name,
-            api_version=session.flow.api_version,
+        link = await component_setup_url(
+            pending.instance_url, pending.token, session.kind, session.artifact_name,
+            api_version=session.api_version,
         )
     return {
         "done": True,
@@ -1006,6 +1120,34 @@ def session_view(session_id: str) -> Dict[str, Any]:
 @app.get("/api/session/{session_id}/{artifact}")
 def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     session = get_session(session_id)
+
+    if session.kind == "apex":
+        apex = session.apex
+
+        if artifact == "report":
+            status = "approved" if session.approved else "not yet approved"
+            step = StepResult(
+                step=PlanStep(artifact_type="apex", name=apex.api_name, brief=""),
+                value=apex, repairs=0, messages=[],
+            )
+            report = render_standalone_report(
+                [step], title=f"{apex.api_name} - v{session.version}",
+                meta=f"{len(apex.body.splitlines())} line(s) - {status}",
+            )
+            return PlainTextResponse(
+                report, media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="apex-{session_id}.html"'},
+            )
+
+        bodies = {
+            "xml": (apex.body, "text/plain"),
+            "ir": (apex.model_dump_json(exclude_none=True, indent=2), "application/json"),
+        }
+        if artifact not in bodies:
+            raise HTTPException(404, f"No such artifact: {artifact}")
+        text, media_type = bodies[artifact]
+        return PlainTextResponse(text, media_type=media_type)
+
     flow = session.flow
 
     if artifact == "report":

@@ -246,6 +246,9 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 
 #openPane select { margin-bottom: 10px; }
 #openPane p { margin: 10px 0 0; }
+.open-kind { display: flex; gap: 14px; margin-bottom: 10px; font-size: 13px; color: var(--text); }
+.open-kind label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+#openApexFields { margin-bottom: 10px; }
 
 .link-btn {
   display: block;

@@ -42,6 +42,10 @@ const state = {
   planValidatedVersion: null,
 
   flows: [], // cached, alphabetically-sorted /api/flows result backing the search combo
+  apexClasses: [], // same, for the Apex picker in "Open one from the org"
+  openKind: "flow", // "flow" | "apex" - which picker the Open pane currently shows
+  kind: "flow", // "flow" | "apex" - which artifact type flowView is currently showing
+  showIrSubtab: false, // SHOW_IR_SUBTAB config var - the IR tab is a debugging aid, off by default
 };
 
 let mermaid = null;
@@ -409,6 +413,27 @@ function wireDiagramSync() {
   });
 }
 
+// Shows only the tabs that apply to this artifact type (Diagram/Documentation/
+// Test are Flow-only - Apex is plain source, nothing to draw or roundtrip
+// into a test guide) and relabels the code tab. Also re-applies the IR tab's
+// config gate, since a tab hidden by an earlier renderFlow()/renderApex()
+// call would otherwise stay hidden forever once shown.
+function updateTabsForKind(kind) {
+  state.kind = kind;
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  let firstVisible = null;
+  tabs.forEach((tab) => {
+    const kinds = (tab.dataset.kinds || "").split(" ");
+    const allowed = kinds.includes(kind) && (tab.dataset.tab !== "ir" || state.showIrSubtab);
+    tab.hidden = !allowed;
+    if (allowed && !firstVisible) firstVisible = tab.dataset.tab;
+  });
+  $("xmlTabLabel").textContent = kind === "apex" ? "Apex Code" : "Flow XML";
+  if (!tabs.some((t) => t.dataset.tab === state.tab && !t.hidden)) {
+    state.tab = firstVisible || "explain";
+  }
+}
+
 function renderTab() {
   const isDiagram = state.tab === "diagram";
   const isExplain = state.tab === "explain";
@@ -434,11 +459,14 @@ function renderGate() {
   const validatedNow = state.validatedVersion === state.version;
   deploy.disabled = !state.approved || !validatedNow;
 
+  const noun = state.kind === "apex" ? "class" : "flow";
   if (!state.approved) {
     gate.textContent =
-      "This flow has not been approved. Nothing is sent to Salesforce until you approve it.";
+      `This ${noun} has not been approved. Nothing is sent to Salesforce until you approve it.`;
   } else if (!validatedNow) {
     gate.textContent = "Approved. Validate it against the org before deploying.";
+  } else if (state.kind === "apex") {
+    gate.textContent = "Validated. Deploying replaces this class in the org immediately.";
   } else if (state.status === "Active") {
     gate.textContent =
       "Validated. Deploying will make this flow ACTIVE - it starts running on live records immediately.";
@@ -448,6 +476,15 @@ function renderGate() {
 }
 
 function renderFlow(data) {
+  // A session can hold either artifact type - refine/repair/approve all
+  // funnel back through this one render call regardless of which produced
+  // the session, so the dispatch belongs here rather than at every caller.
+  if (data.kind === "apex") {
+    renderApex(data);
+    return;
+  }
+  updateTabsForKind("flow");
+
   state.sessionId = data.session_id;
   sessionStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
   // "new" or "open" - whichever mode actually produced this session (set by
@@ -515,15 +552,76 @@ function renderFlow(data) {
     .catch(() => {});
 }
 
+// Apex counterpart to renderFlow(): no graph to draw, no test guide to
+// derive from one - just the source, an Explain tab, and the same
+// approve/validate/deploy gate. Shares the DOM (flowView, flowLabel, ...)
+// rather than a parallel view, since the actions underneath are identical.
+function renderApex(data) {
+  updateTabsForKind("apex");
+
+  state.sessionId = data.session_id;
+  sessionStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
+  sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "open");
+  state.version = data.version;
+  state.approved = data.approved;
+  state.status = data.status;
+  state.artifacts.ir = JSON.stringify(data.ir, null, 2);
+
+  $("empty").hidden = true;
+  $("flowView").hidden = false;
+  $("refineBox").hidden = false;
+
+  $("flowLabel").textContent = data.label;
+  $("flowMeta").textContent = `${data.api_name}  ·  Apex Class  ·  API ${data.api_version}`;
+  $("flowDesc").textContent = data.description || "";
+
+  const badge = $("statusBadge");
+  badge.textContent = data.status === "Active" ? "ACTIVE" : "INACTIVE";
+  badge.className = "badge " + (data.status === "Active" ? "active" : "draft");
+  $("versionBadge").textContent = "v" + data.version;
+
+  if (data.usage) state.usage = data.usage;
+  const text = usageText(state.usage);
+  if (text) $("usage").textContent = text;
+  renderLogs();
+
+  $("log").innerHTML = "";
+  data.history.forEach((entry) => {
+    const node = document.createElement("div");
+    node.className = "entry";
+    node.innerHTML = `<div class="v">v${entry.version}</div><div></div>`;
+    node.lastElementChild.textContent = entry.note;
+    $("log").appendChild(node);
+  });
+
+  $("explanation").textContent =
+    "Ask the model what this class does, or leave the box empty for a walkthrough.";
+  $("explanation").className = "explanation dim";
+
+  $("result").hidden = true;
+  $("flowReportLink").href = `api/session/${data.session_id}/report`;
+  renderTab();
+  renderGate();
+
+  fetch(`api/session/${data.session_id}/xml`)
+    .then((r) => r.text())
+    .then((text) => {
+      state.artifacts.xml = text;
+      if (state.tab === "xml") renderTab();
+    })
+    .catch(() => {});
+}
+
 function renderResult(result) {
   const box = $("result");
   box.hidden = false;
   box.className = "result " + (result.success ? "ok" : "bad");
   box.innerHTML = "";
 
+  const noun = state.kind === "apex" ? "class" : "flow";
   const title = document.createElement("h3");
   title.textContent = result.success
-    ? `${result.status} - this flow will deploy cleanly`
+    ? `${result.status} - this ${noun} will deploy cleanly`
     : `${result.status} - Salesforce rejected it`;
   box.appendChild(title);
 
@@ -533,7 +631,7 @@ function renderResult(result) {
     link.target = "_blank";
     link.rel = "noopener";
     link.className = "flow-link";
-    link.textContent = "Open it in Flow Builder";
+    link.textContent = state.kind === "apex" ? "Open it in Setup" : "Open it in Flow Builder";
     box.appendChild(link);
   }
 
@@ -914,15 +1012,78 @@ async function loadFlows() {
   }
 }
 
+function renderApexResults(query) {
+  const list = $("apexResults");
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? state.apexClasses.filter((c) => c.api_name.toLowerCase().includes(q))
+    : state.apexClasses;
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = "no matching classes";
+    list.appendChild(empty);
+  } else {
+    matches.forEach((cls) => {
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = cls.api_name;
+      row.innerHTML =
+        `<span>${escapeHtml(cls.api_name)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(cls.last_modified))}</span>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $("apexSearch").value = cls.api_name;
+        $("apexPicker").value = cls.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+async function loadApexClasses() {
+  const search = $("apexSearch");
+  const picker = $("apexPicker");
+  const list = $("apexResults");
+  state.apexClasses = [];
+  picker.value = "";
+  list.hidden = true;
+  if (!state.org && !state.sfCli) {
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
+    return;
+  }
+  search.disabled = true;
+  search.placeholder = "Loading...";
+  try {
+    const data = await api("api/apex-classes", orgCredentials());
+    state.apexClasses = data.classes
+      .slice()
+      .sort((a, b) => a.api_name.localeCompare(b.api_name, undefined, { sensitivity: "base" }));
+    search.disabled = false;
+    search.placeholder = data.classes.length ? "Search Apex classes..." : "no Apex classes in this org";
+  } catch (err) {
+    search.disabled = false;
+    search.placeholder = "could not list Apex classes";
+    showError($("openPane"), err.message);
+    logError("Load Apex classes", err.message);
+  }
+}
+
 async function importFlow() {
   const button = $("importBtn");
   showError($("openPane"), "");
-  const apiName = $("flowPicker").value;
+  const kind = state.openKind;
+  const apiName = (kind === "apex" ? $("apexPicker") : $("flowPicker")).value;
   if (!apiName) return;
   busy(button, true, "Opening...");
   try {
     const { job_id } = await api("api/import/start", {
       api_name: apiName,
+      kind,
       ...orgCredentials(),
       effort: $("effort").value,
       provider: $("provider").value || null,
@@ -1583,6 +1744,16 @@ async function restoreSession() {
     const data = await api(`api/session/${sessionId}`);
     state.validatedVersion = null;
     renderFlow(data);
+    // Keeps the Open pane's radio (and which picker/list it shows) in sync
+    // with whichever kind actually came back, in case that differs from
+    // whatever the radio defaulted to before this restore ran.
+    if (data.kind === "apex" || data.kind === "flow") {
+      $("openKindFlow").checked = data.kind === "flow";
+      $("openKindApex").checked = data.kind === "apex";
+      state.openKind = data.kind;
+      $("openFlowFields").hidden = data.kind !== "flow";
+      $("openApexFields").hidden = data.kind !== "apex";
+    }
   } catch {
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
   }
@@ -1603,6 +1774,29 @@ async function restorePlanSession() {
   }
 }
 
+// Which picker the Open pane shows (Flow or Apex Class) - loads its list
+// lazily, the first time it's actually shown, same reasoning as the old
+// flowPicker.dataset.loaded guard this replaces.
+function setOpenKind(kind) {
+  state.openKind = kind;
+  $("openFlowFields").hidden = kind !== "flow";
+  $("openApexFields").hidden = kind !== "apex";
+  showError($("openPane"), "");
+  loadOpenPaneList();
+}
+
+function loadOpenPaneList() {
+  if (state.openKind === "apex") {
+    if (!$("apexPicker").dataset.loaded) {
+      $("apexPicker").dataset.loaded = "1";
+      loadApexClasses();
+    }
+  } else if (!$("flowPicker").dataset.loaded) {
+    $("flowPicker").dataset.loaded = "1";
+    loadFlows();
+  }
+}
+
 // Switches the left pane's mode and, correspondingly, which one of {empty
 // state, a single Flow, a plan} the right panel shows - shared by the mode
 // buttons' own click handler and by restoreSessions() below, so a reload
@@ -1617,10 +1811,7 @@ function activateMode(selected) {
   // "Describe a new flow" only - "open" doesn't use it (an imported flow
   // keeps whatever status it already has), and "plan" no longer shows it.
   $("sharedOptions").hidden = selected !== "new";
-  if (selected === "open" && !$("flowPicker").dataset.loaded) {
-    $("flowPicker").dataset.loaded = "1";
-    loadFlows();
-  }
+  if (selected === "open") loadOpenPaneList();
 
   // The right panel shows exactly one of: empty state, a single Flow
   // (design/open), or a plan (several artifacts) - whichever this mode last
@@ -1694,6 +1885,7 @@ function connectManually() {
   // The Open tab may already be showing "connect to an org first" from
   // before this credential existed - now that it does, retry.
   if ($("flowPicker").dataset.loaded) loadFlows();
+  if ($("apexPicker").dataset.loaded) loadApexClasses();
 }
 
 // --------------------------------------------------------------------------
@@ -1705,6 +1897,8 @@ async function boot() {
 
   try {
     const config = await api("api/config");
+    state.showIrSubtab = !!config.show_ir_subtab;
+    $("irTab").hidden = !state.showIrSubtab;
 
     const provider = $("provider");
     const known = config.all_providers?.length ? config.all_providers : config.providers;
@@ -1804,6 +1998,18 @@ async function boot() {
   $("flowSearch").addEventListener("blur", () => {
     $("flowResults").hidden = true;
   });
+  $("apexSearch").addEventListener("input", () => {
+    $("apexPicker").value = "";
+    renderApexResults($("apexSearch").value);
+  });
+  $("apexSearch").addEventListener("focus", () => {
+    if (state.apexClasses.length) renderApexResults($("apexSearch").value);
+  });
+  $("apexSearch").addEventListener("blur", () => {
+    $("apexResults").hidden = true;
+  });
+  $("openKindFlow").onchange = () => setOpenKind("flow");
+  $("openKindApex").onchange = () => setOpenKind("apex");
   $("surveyLink").onclick = runSurvey;
   $("orgSummaryLink").onclick = runOrgSummary;
   $("orgSummaryGenerateBtn").onclick = startOrgSummaryRetrieve;
@@ -1863,9 +2069,10 @@ async function boot() {
     };
   });
 
-  // Switching org invalidates the flow list that came from the previous one.
+  // Switching org invalidates the flow/Apex list that came from the previous one.
   $("org").onchange = () => {
     if ($("flowPicker").dataset.loaded) loadFlows();
+    if ($("apexPicker").dataset.loaded) loadApexClasses();
   };
 
   $("request").addEventListener("keydown", (event) => {

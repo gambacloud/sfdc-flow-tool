@@ -101,11 +101,11 @@ def stub_validate(monkeypatch, *results):
     queue = list(results)
     calls = []
 
-    async def fake(instance_url, token, name, xml, api_version="62.0", check_only=True):
+    async def fake(instance_url, token, files, types, api_version="62.0", check_only=True):
         calls.append(check_only)
         return queue.pop(0) if queue else DeployResult("1", "Succeeded", True)
 
-    monkeypatch.setattr(server, "validate_flow", fake)
+    monkeypatch.setattr(server, "validate_bundle", fake)
     return calls
 
 

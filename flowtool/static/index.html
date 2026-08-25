@@ -139,17 +139,34 @@
     </div>
 
     <div class="pad" id="openPane" hidden>
-      <label for="flowSearch">Flows in the org</label>
-      <div class="combo">
-        <input id="flowSearch" type="text" autocomplete="off" placeholder="Loading...">
-        <input type="hidden" id="flowPicker" value="">
-        <div id="flowResults" class="combo-list" hidden></div>
+      <div class="open-kind">
+        <label><input type="radio" name="openKind" id="openKindFlow" value="flow" checked> Flow</label>
+        <label><input type="radio" name="openKind" id="openKindApex" value="apex"> Apex Class</label>
       </div>
+
+      <div id="openFlowFields">
+        <label for="flowSearch">Flows in the org</label>
+        <div class="combo">
+          <input id="flowSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="flowPicker" value="">
+          <div id="flowResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim" id="openNote">
+          Flows using screens, waits, or Apex actions are refused rather than
+          drawn approximately.
+        </p>
+      </div>
+
+      <div id="openApexFields" hidden>
+        <label for="apexSearch">Apex classes in the org</label>
+        <div class="combo">
+          <input id="apexSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="apexPicker" value="">
+          <div id="apexResults" class="combo-list" hidden></div>
+        </div>
+      </div>
+
       <button id="importBtn" class="primary">Open it</button>
-      <p class="dim" id="openNote">
-        Flows using screens, waits, or Apex actions are refused rather than
-        drawn approximately.
-      </p>
       <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
       <button id="orgSummaryLink" class="link-btn" type="button">Generate org summary</button>
       <span id="orgSummaryStatusIndicator" class="dim"></span>
@@ -212,12 +229,12 @@
       <div class="meta usage" id="usage"></div>
 
       <div class="tabs">
-        <button class="tab active" data-tab="diagram">Diagram</button>
-        <button class="tab" data-tab="explain">Explain</button>
-        <button class="tab" data-tab="markdown">Documentation</button>
-        <button class="tab" data-tab="test">Test</button>
-        <button class="tab" data-tab="xml">Flow XML</button>
-        <button class="tab" data-tab="ir">IR</button>
+        <button class="tab active" data-tab="diagram" data-kinds="flow">Diagram</button>
+        <button class="tab" data-tab="explain" data-kinds="flow apex">Explain</button>
+        <button class="tab" data-tab="markdown" data-kinds="flow">Documentation</button>
+        <button class="tab" data-tab="test" data-kinds="flow">Test</button>
+        <button class="tab" data-tab="xml" data-kinds="flow apex" id="xmlTabLabel">Flow XML</button>
+        <button class="tab" data-tab="ir" data-kinds="flow apex" id="irTab" hidden>IR</button>
       </div>
 
       <div class="diagram-tab" id="diagramTab">
