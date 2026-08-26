@@ -42,9 +42,10 @@ const state = {
   planValidatedVersion: null,
 
   flows: [], // cached, alphabetically-sorted /api/flows result backing the search combo
-  apexClasses: [], // same, for the Apex picker in "Open one from the org"
-  openKind: "flow", // "flow" | "apex" - which picker the Open pane currently shows
-  kind: "flow", // "flow" | "apex" - which artifact type flowView is currently showing
+  apexClasses: [], // same, for the Apex Class picker in "Open one from the org"
+  apexTriggers: [], // same, for the Apex Trigger picker
+  openKind: "flow", // "flow" | "apex" | "trigger" - which picker the Open pane currently shows
+  kind: "flow", // "flow" | "apex" | "trigger" - which artifact type flowView is currently showing
   showIrSubtab: false, // SHOW_IR_SUBTAB config var - the IR tab is a debugging aid, off by default
 };
 
@@ -428,7 +429,8 @@ function updateTabsForKind(kind) {
     tab.hidden = !allowed;
     if (allowed && !firstVisible) firstVisible = tab.dataset.tab;
   });
-  $("xmlTabLabel").textContent = kind === "apex" ? "Apex Code" : "Flow XML";
+  $("xmlTabLabel").textContent =
+    kind === "apex" ? "Apex Code" : kind === "trigger" ? "Trigger Code" : "Flow XML";
   if (!tabs.some((t) => t.dataset.tab === state.tab && !t.hidden)) {
     state.tab = firstVisible || "explain";
   }
@@ -459,14 +461,14 @@ function renderGate() {
   const validatedNow = state.validatedVersion === state.version;
   deploy.disabled = !state.approved || !validatedNow;
 
-  const noun = state.kind === "apex" ? "class" : "flow";
+  const noun = state.kind === "apex" ? "class" : state.kind === "trigger" ? "trigger" : "flow";
   if (!state.approved) {
     gate.textContent =
       `This ${noun} has not been approved. Nothing is sent to Salesforce until you approve it.`;
   } else if (!validatedNow) {
     gate.textContent = "Approved. Validate it against the org before deploying.";
-  } else if (state.kind === "apex") {
-    gate.textContent = "Validated. Deploying replaces this class in the org immediately.";
+  } else if (state.kind === "apex" || state.kind === "trigger") {
+    gate.textContent = `Validated. Deploying replaces this ${noun} in the org immediately.`;
   } else if (state.status === "Active") {
     gate.textContent =
       "Validated. Deploying will make this flow ACTIVE - it starts running on live records immediately.";
@@ -479,7 +481,7 @@ function renderFlow(data) {
   // A session can hold either artifact type - refine/repair/approve all
   // funnel back through this one render call regardless of which produced
   // the session, so the dispatch belongs here rather than at every caller.
-  if (data.kind === "apex") {
+  if (data.kind === "apex" || data.kind === "trigger") {
     renderApex(data);
     return;
   }
@@ -552,12 +554,14 @@ function renderFlow(data) {
     .catch(() => {});
 }
 
-// Apex counterpart to renderFlow(): no graph to draw, no test guide to
-// derive from one - just the source, an Explain tab, and the same
+// Apex/trigger counterpart to renderFlow(): no graph to draw, no test guide
+// to derive from one - just the source, an Explain tab, and the same
 // approve/validate/deploy gate. Shares the DOM (flowView, flowLabel, ...)
 // rather than a parallel view, since the actions underneath are identical.
+// Covers both "apex" and "trigger" - they differ only in a couple of labels.
 function renderApex(data) {
-  updateTabsForKind("apex");
+  updateTabsForKind(data.kind);
+  const kindLabel = data.kind === "trigger" ? "Apex Trigger" : "Apex Class";
 
   state.sessionId = data.session_id;
   sessionStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
@@ -572,7 +576,7 @@ function renderApex(data) {
   $("refineBox").hidden = false;
 
   $("flowLabel").textContent = data.label;
-  $("flowMeta").textContent = `${data.api_name}  ·  Apex Class  ·  API ${data.api_version}`;
+  $("flowMeta").textContent = `${data.api_name}  ·  ${kindLabel}  ·  API ${data.api_version}`;
   $("flowDesc").textContent = data.description || "";
 
   const badge = $("statusBadge");
@@ -595,7 +599,8 @@ function renderApex(data) {
   });
 
   $("explanation").textContent =
-    "Ask the model what this class does, or leave the box empty for a walkthrough.";
+    `Ask the model what this ${data.kind === "trigger" ? "trigger" : "class"} does, ` +
+    "or leave the box empty for a walkthrough.";
   $("explanation").className = "explanation dim";
 
   $("result").hidden = true;
@@ -618,7 +623,7 @@ function renderResult(result) {
   box.className = "result " + (result.success ? "ok" : "bad");
   box.innerHTML = "";
 
-  const noun = state.kind === "apex" ? "class" : "flow";
+  const noun = state.kind === "apex" ? "class" : state.kind === "trigger" ? "trigger" : "flow";
   const title = document.createElement("h3");
   title.textContent = result.success
     ? `${result.status} - this ${noun} will deploy cleanly`
@@ -631,7 +636,7 @@ function renderResult(result) {
     link.target = "_blank";
     link.rel = "noopener";
     link.className = "flow-link";
-    link.textContent = state.kind === "apex" ? "Open it in Setup" : "Open it in Flow Builder";
+    link.textContent = state.kind === "flow" ? "Open it in Flow Builder" : "Open it in Setup";
     box.appendChild(link);
   }
 
@@ -1073,11 +1078,75 @@ async function loadApexClasses() {
   }
 }
 
+function renderTriggerResults(query) {
+  const list = $("triggerResults");
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? state.apexTriggers.filter((t) => t.api_name.toLowerCase().includes(q))
+    : state.apexTriggers;
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = "no matching triggers";
+    list.appendChild(empty);
+  } else {
+    matches.forEach((trig) => {
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = trig.api_name;
+      row.innerHTML =
+        `<span>${escapeHtml(trig.api_name)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(trig.last_modified))}</span>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $("triggerSearch").value = trig.api_name;
+        $("triggerPicker").value = trig.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+async function loadApexTriggers() {
+  const search = $("triggerSearch");
+  const picker = $("triggerPicker");
+  const list = $("triggerResults");
+  state.apexTriggers = [];
+  picker.value = "";
+  list.hidden = true;
+  if (!state.org && !state.sfCli) {
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
+    return;
+  }
+  search.disabled = true;
+  search.placeholder = "Loading...";
+  try {
+    const data = await api("api/apex-triggers", orgCredentials());
+    state.apexTriggers = data.triggers
+      .slice()
+      .sort((a, b) => a.api_name.localeCompare(b.api_name, undefined, { sensitivity: "base" }));
+    search.disabled = false;
+    search.placeholder = data.triggers.length ? "Search Apex triggers..." : "no Apex triggers in this org";
+  } catch (err) {
+    search.disabled = false;
+    search.placeholder = "could not list Apex triggers";
+    showError($("openPane"), err.message);
+    logError("Load Apex triggers", err.message);
+  }
+}
+
+// Which hidden <input> holds the chosen api_name, per Open-pane kind.
+const OPEN_PICKER_IDS = { flow: "flowPicker", apex: "apexPicker", trigger: "triggerPicker" };
+
 async function importFlow() {
   const button = $("importBtn");
   showError($("openPane"), "");
   const kind = state.openKind;
-  const apiName = (kind === "apex" ? $("apexPicker") : $("flowPicker")).value;
+  const apiName = $(OPEN_PICKER_IDS[kind]).value;
   if (!apiName) return;
   busy(button, true, "Opening...");
   try {
@@ -1747,12 +1816,14 @@ async function restoreSession() {
     // Keeps the Open pane's radio (and which picker/list it shows) in sync
     // with whichever kind actually came back, in case that differs from
     // whatever the radio defaulted to before this restore ran.
-    if (data.kind === "apex" || data.kind === "flow") {
+    if (data.kind in OPEN_PANE_LOADERS) {
       $("openKindFlow").checked = data.kind === "flow";
       $("openKindApex").checked = data.kind === "apex";
+      $("openKindTrigger").checked = data.kind === "trigger";
       state.openKind = data.kind;
       $("openFlowFields").hidden = data.kind !== "flow";
       $("openApexFields").hidden = data.kind !== "apex";
+      $("openTriggerFields").hidden = data.kind !== "trigger";
     }
   } catch {
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -1774,27 +1845,41 @@ async function restorePlanSession() {
   }
 }
 
-// Which picker the Open pane shows (Flow or Apex Class) - loads its list
-// lazily, the first time it's actually shown, same reasoning as the old
-// flowPicker.dataset.loaded guard this replaces.
+// Which picker the Open pane shows (Flow, Apex Class or Apex Trigger) - loads
+// its list lazily, the first time it's actually shown, same reasoning as the
+// old flowPicker.dataset.loaded guard this replaces.
 function setOpenKind(kind) {
   state.openKind = kind;
   $("openFlowFields").hidden = kind !== "flow";
   $("openApexFields").hidden = kind !== "apex";
+  $("openTriggerFields").hidden = kind !== "trigger";
   showError($("openPane"), "");
   loadOpenPaneList();
 }
 
+// kind -> { picker element id, loader function } - the picker/loader pair
+// loadOpenPaneList() and the reload-on-org-change/reconnect spots below all
+// dispatch through.
+const OPEN_PANE_LOADERS = {
+  flow: { picker: "flowPicker", load: loadFlows },
+  apex: { picker: "apexPicker", load: loadApexClasses },
+  trigger: { picker: "triggerPicker", load: loadApexTriggers },
+};
+
 function loadOpenPaneList() {
-  if (state.openKind === "apex") {
-    if (!$("apexPicker").dataset.loaded) {
-      $("apexPicker").dataset.loaded = "1";
-      loadApexClasses();
-    }
-  } else if (!$("flowPicker").dataset.loaded) {
-    $("flowPicker").dataset.loaded = "1";
-    loadFlows();
+  const { picker, load } = OPEN_PANE_LOADERS[state.openKind];
+  if (!$(picker).dataset.loaded) {
+    $(picker).dataset.loaded = "1";
+    load();
   }
+}
+
+// Reloads whichever Open-pane pickers have already been shown once - used
+// when the credentials backing them change (org switch, manual connect).
+function reloadLoadedOpenPanePickers() {
+  Object.values(OPEN_PANE_LOADERS).forEach(({ picker, load }) => {
+    if ($(picker).dataset.loaded) load();
+  });
 }
 
 // Switches the left pane's mode and, correspondingly, which one of {empty
@@ -1884,8 +1969,7 @@ function connectManually() {
   $("manualBtn").setAttribute("aria-expanded", "false");
   // The Open tab may already be showing "connect to an org first" from
   // before this credential existed - now that it does, retry.
-  if ($("flowPicker").dataset.loaded) loadFlows();
-  if ($("apexPicker").dataset.loaded) loadApexClasses();
+  reloadLoadedOpenPanePickers();
 }
 
 // --------------------------------------------------------------------------
@@ -2008,8 +2092,19 @@ async function boot() {
   $("apexSearch").addEventListener("blur", () => {
     $("apexResults").hidden = true;
   });
+  $("triggerSearch").addEventListener("input", () => {
+    $("triggerPicker").value = "";
+    renderTriggerResults($("triggerSearch").value);
+  });
+  $("triggerSearch").addEventListener("focus", () => {
+    if (state.apexTriggers.length) renderTriggerResults($("triggerSearch").value);
+  });
+  $("triggerSearch").addEventListener("blur", () => {
+    $("triggerResults").hidden = true;
+  });
   $("openKindFlow").onchange = () => setOpenKind("flow");
   $("openKindApex").onchange = () => setOpenKind("apex");
+  $("openKindTrigger").onchange = () => setOpenKind("trigger");
   $("surveyLink").onclick = runSurvey;
   $("orgSummaryLink").onclick = runOrgSummary;
   $("orgSummaryGenerateBtn").onclick = startOrgSummaryRetrieve;
@@ -2070,10 +2165,7 @@ async function boot() {
   });
 
   // Switching org invalidates the flow/Apex list that came from the previous one.
-  $("org").onchange = () => {
-    if ($("flowPicker").dataset.loaded) loadFlows();
-    if ($("apexPicker").dataset.loaded) loadApexClasses();
-  };
+  $("org").onchange = () => reloadLoadedOpenPanePickers();
 
   $("request").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) design();

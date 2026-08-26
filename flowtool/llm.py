@@ -25,7 +25,7 @@ from typing import Any, Dict, Generic, List, Optional, Protocol, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from .ir import Flow
-from .ir_apex import ApexClass, heuristic_errors
+from .ir_apex import ApexClass, ApexTrigger, heuristic_errors, heuristic_trigger_errors
 from .ir_object import CustomField, CustomObject
 
 DEFAULT_MAX_REPAIRS = 3
@@ -533,6 +533,32 @@ did not name or clearly imply - a guessed API name compiles today and breaks \
 the moment it is wrong.
 - No compiler runs against this output before it is checked here - only a \
 brace-balance and class-name sanity check. Write it as if it must be correct \
+the first time.
+"""
+
+TRIGGER_SYSTEM_PROMPT = """\
+You translate a description of a change to a Salesforce Apex Trigger into an \
+ApexTrigger IR document.
+
+You produce IR only, never metadata XML - a compiler generates the deployable \
+files from your IR. Like the Apex Class IR, `body` is not structured - it is \
+the trigger source itself, written out in full, including its `trigger <Name> \
+on <Object> (<events>)` declaration.
+
+- `api_name` is the trigger name, and the trigger you declare in `body` \
+(`trigger Foo on Account (before insert) { ... }`) must use exactly that name \
+- the deployed file is named after api_name, so a mismatch fails to deploy.
+- The object and event list live only in that declaration line - there is no \
+separate field for them, so do not invent one.
+- Write complete, compilable Apex: balanced braces, a real trigger \
+declaration, no placeholders or "TODO" left where logic belongs.
+- Prefer the smallest change that does what was asked. Do not add error \
+handling, logging, or logic that was not requested.
+- Do not invent a reference to a field, object or class the request did not \
+name or clearly imply - a guessed API name compiles today and breaks the \
+moment it is wrong.
+- No compiler runs against this output before it is checked here - only a \
+brace-balance and declaration sanity check. Write it as if it must be correct \
 the first time.
 """
 
@@ -1774,6 +1800,44 @@ class ApexClassGenerator(IRGenerator[ApexClass]):
         return self.provider.complete_text(
             EXPLAIN_PROMPT,
             [Message(role="user", content=f"{ask}\n\nApex class {cls.api_name}:\n\n{cls.body}")],
+        )
+
+
+class ApexTriggerGenerator(IRGenerator[ApexTrigger]):
+    """
+    Turns a description of a change to a trigger into a validated
+    ApexTrigger - same reasoning as ApexClassGenerator, see its docstring.
+    """
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, ApexTrigger, TRIGGER_SYSTEM_PROMPT, max_repairs)
+
+    def _extra_error(self, payload: Dict[str, Any]) -> Optional[str]:
+        problems = heuristic_trigger_errors(payload.get("api_name") or "", payload.get("body") or "")
+        if not problems:
+            return None
+        return "\n".join(f"- {p}" for p in problems)
+
+    def _describe(self, trigger: ApexTrigger) -> str:
+        return f"{trigger.api_name}, {len(trigger.body.splitlines())} lines"
+
+    def generate(self, request: str) -> IRGenerationResult[ApexTrigger]:
+        return self._validated([Message(role="user", content=request)])
+
+    def explain(self, trigger: ApexTrigger, question: Optional[str] = None) -> str:
+        ask = question or (
+            "Explain what this Apex trigger does, in plain language, for a "
+            "Salesforce admin who has never seen it. Cover which object and "
+            "events it fires on, what it does on each path, and anything "
+            "about it that looks risky or surprising. Do not restate the "
+            "code line by line."
+        )
+        return self.provider.complete_text(
+            EXPLAIN_PROMPT,
+            [Message(
+                role="user",
+                content=f"{ask}\n\nApex trigger {trigger.api_name}:\n\n{trigger.body}",
+            )],
         )
 
 

@@ -369,6 +369,12 @@ class ApexClassSummary:
     last_modified: Optional[str] = None
 
 
+@dataclass
+class ApexTriggerSummary:
+    api_name: str
+    last_modified: Optional[str] = None
+
+
 class RetrieveError(RuntimeError):
     pass
 
@@ -469,9 +475,11 @@ async def component_setup_url(
         )
     if artifact_type == "flow":
         return await flow_builder_url(instance_url, session_id, api_name, api_version)
-    if artifact_type == "apex":
-        fallback = f"{base}/lightning/setup/ApexClasses/home"
-        query = f"SELECT Id FROM ApexClass WHERE Name = '{api_name}'"
+    if artifact_type in ("apex", "trigger"):
+        setup_type = "ApexClasses" if artifact_type == "apex" else "ApexTriggers"
+        object_type = "ApexClass" if artifact_type == "apex" else "ApexTrigger"
+        fallback = f"{base}/lightning/setup/{setup_type}/home"
+        query = f"SELECT Id FROM {object_type} WHERE Name = '{api_name}'"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
@@ -484,10 +492,10 @@ async def component_setup_url(
             records = resp.json().get("records", [])
             if not records:
                 return fallback
-            class_id = records[0]["Id"]
+            component_id = records[0]["Id"]
         except (httpx.HTTPError, ValueError, KeyError):
             return fallback
-        return f"{base}/lightning/setup/ApexClasses/page?address=%2F{class_id}"
+        return f"{base}/lightning/setup/{setup_type}/page?address=%2F{component_id}"
     return f"{base}/lightning/setup/SetupOneHome/home"
 
 
@@ -690,6 +698,59 @@ async def retrieve_apex_class(
     """Pull one Apex class's source out of the org via plain REST query."""
     base = _normalise(instance_url)
     query = f"SELECT Body FROM ApexClass WHERE Name = '{api_name}'"
+    url = f"{base}/services/data/v{api_version}/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(
+            fault or f"Could not retrieve {api_name} ({resp.status_code}): {resp.text[:300]}"
+        )
+    records = resp.json().get("records", [])
+    if not records:
+        raise RetrieveError(f"{api_name} was not found in the org.")
+    return records[0]["Body"]
+
+
+async def list_apex_triggers(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> List[ApexTriggerSummary]:
+    """Every Apex trigger in the org, newest first - same reasoning and same
+    plain REST /query as list_apex_classes."""
+    base = _normalise(instance_url)
+    query = "SELECT Name, LastModifiedDate FROM ApexTrigger ORDER BY LastModifiedDate DESC"
+    url = f"{base}/services/data/v{api_version}/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(
+            fault or f"Could not list Apex triggers ({resp.status_code}): {resp.text[:300]}"
+        )
+
+    return [
+        ApexTriggerSummary(
+            api_name=record["Name"],
+            last_modified=record.get("LastModifiedDate"),
+        )
+        for record in resp.json().get("records", [])
+    ]
+
+
+async def retrieve_apex_trigger(
+    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+) -> str:
+    """Pull one Apex trigger's source out of the org via plain REST query."""
+    base = _normalise(instance_url)
+    query = f"SELECT Body FROM ApexTrigger WHERE Name = '{api_name}'"
     url = f"{base}/services/data/v{api_version}/query"
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(

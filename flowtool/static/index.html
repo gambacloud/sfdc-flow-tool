@@ -142,6 +142,7 @@
       <div class="open-kind">
         <label><input type="radio" name="openKind" id="openKindFlow" value="flow" checked> Flow</label>
         <label><input type="radio" name="openKind" id="openKindApex" value="apex"> Apex Class</label>
+        <label><input type="radio" name="openKind" id="openKindTrigger" value="trigger"> Apex Trigger</label>
       </div>
 
       <div id="openFlowFields">
@@ -163,6 +164,15 @@
           <input id="apexSearch" type="text" autocomplete="off" placeholder="Loading...">
           <input type="hidden" id="apexPicker" value="">
           <div id="apexResults" class="combo-list" hidden></div>
+        </div>
+      </div>
+
+      <div id="openTriggerFields" hidden>
+        <label for="triggerSearch">Apex triggers in the org</label>
+        <div class="combo">
+          <input id="triggerSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="triggerPicker" value="">
+          <div id="triggerResults" class="combo-list" hidden></div>
         </div>
       </div>
 
@@ -230,11 +240,11 @@
 
       <div class="tabs">
         <button class="tab active" data-tab="diagram" data-kinds="flow">Diagram</button>
-        <button class="tab" data-tab="explain" data-kinds="flow apex">Explain</button>
+        <button class="tab" data-tab="explain" data-kinds="flow apex trigger">Explain</button>
         <button class="tab" data-tab="markdown" data-kinds="flow">Documentation</button>
         <button class="tab" data-tab="test" data-kinds="flow">Test</button>
-        <button class="tab" data-tab="xml" data-kinds="flow apex" id="xmlTabLabel">Flow XML</button>
-        <button class="tab" data-tab="ir" data-kinds="flow apex" id="irTab" hidden>IR</button>
+        <button class="tab" data-tab="xml" data-kinds="flow apex trigger" id="xmlTabLabel">Flow XML</button>
+        <button class="tab" data-tab="ir" data-kinds="flow apex trigger" id="irTab" hidden>IR</button>
       </div>
 
       <div class="diagram-tab" id="diagramTab">

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, List
 
 from .ir import Flow
-from .ir_apex import ApexClass
+from .ir_apex import ApexClass, ApexTrigger
 from .ir_object import CustomField, CustomObject
 from .mermaid import element_index, to_mermaid
 from .planner import StepResult
@@ -57,7 +57,7 @@ def render_html_fragment(steps: List[StepResult]) -> str:
                 f"<tr><th>On object</th><td>{_esc(value.object_api_name)}</td></tr>"
                 "</tbody></table>"
             )
-        elif isinstance(value, ApexClass):
+        elif isinstance(value, (ApexClass, ApexTrigger)):
             parts.append(f"<pre><code>{_esc(value.body)}</code></pre>")
         elif isinstance(value, Flow):
             # A live diagram, not a screenshot - <pre class="mermaid"> is the

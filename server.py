@@ -27,11 +27,12 @@ from pydantic import BaseModel
 
 from flowtool.config import load_env
 from flowtool.ir import Flow
-from flowtool.ir_apex import ApexClass
+from flowtool.ir_apex import ApexClass, ApexTrigger
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import (
     AnthropicProvider,
     ApexClassGenerator,
+    ApexTriggerGenerator,
     FlowGenerator,
     GenerationResult,
     IRGenerationResult,
@@ -52,15 +53,17 @@ from flowtool.sfdc import (
     RetrieveError,
     component_setup_url,
     list_apex_classes,
+    list_apex_triggers,
     list_flows,
     retrieve_all_flows,
     retrieve_apex_class,
+    retrieve_apex_trigger,
     retrieve_flow,
     retrieve_org_summary_zip,
     validate_bundle,
 )
 from flowtool.xmlgen import generate as generate_xml
-from flowtool.xmlgen_apex import generate_apex
+from flowtool.xmlgen_apex import generate_apex, generate_apex_trigger
 from flowtool.xmlgen_object import generate_field_delta, generate_object
 from survey import Survey, text_report
 
@@ -147,17 +150,18 @@ class PendingLLM:
 @dataclass
 class Session:
     """
-    Holds one artifact under review - a Flow (the original, larger use case) or
-    an Apex class opened from an org for editing. `kind` picks which; `result`
-    is a `GenerationResult` (`.flow`) for a Flow or an `IRGenerationResult`
-    (`.value`) for Apex - the `flow`/`apex` properties below are what the rest
-    of this module reads instead of poking at `.result` directly, so the two
-    shapes stay hidden behind one interface.
+    Holds one artifact under review - a Flow (the original, larger use case), an
+    Apex class, or an Apex trigger, opened from an org for editing. `kind`
+    picks which; `result` is a `GenerationResult` (`.flow`) for a Flow or an
+    `IRGenerationResult` (`.value`) for Apex/trigger - the `flow`/`apex`/
+    `trigger` properties below are what the rest of this module reads instead
+    of poking at `.result` directly, so the three shapes stay hidden behind
+    one interface.
     """
 
     generator: Any
     result: Any
-    kind: Literal["flow", "apex"] = "flow"
+    kind: Literal["flow", "apex", "trigger"] = "flow"
     activate: bool = False
     api_version: str = "62.0"
     # Bumped on every change; deploy compares the two.
@@ -182,8 +186,20 @@ class Session:
         return self.result.value
 
     @property
+    def trigger(self) -> ApexTrigger:
+        return self.result.value
+
+    @property
+    def artifact(self) -> Any:
+        if self.kind == "flow":
+            return self.flow
+        if self.kind == "apex":
+            return self.apex
+        return self.trigger
+
+    @property
     def artifact_name(self) -> str:
-        return self.apex.api_name if self.kind == "apex" else self.flow.api_name
+        return self.artifact.api_name
 
     @property
     def approved(self) -> bool:
@@ -197,8 +213,8 @@ class Session:
 
     def apply_policy(self) -> None:
         """Status and API version are the tool's call, never the model's."""
-        if self.kind == "apex":
-            self.apex.api_version = self.api_version
+        if self.kind != "flow":
+            self.artifact.api_version = self.api_version
             return
         self.flow.status = "Active" if self.activate else "Draft"
         self.flow.api_version = self.api_version
@@ -308,19 +324,19 @@ def get_session(session_id: str) -> Session:
 
 
 def view(session_id: str, session: Session) -> Dict[str, Any]:
-    if session.kind == "apex":
-        apex = session.apex
+    if session.kind in ("apex", "trigger"):
+        artifact = session.artifact
         return {
             "session_id": session_id,
-            "kind": "apex",
+            "kind": session.kind,
             "version": session.version,
             "approved": session.approved,
-            "api_name": apex.api_name,
-            "label": apex.api_name,
-            "description": apex.description,
-            "status": apex.status,
-            "api_version": apex.api_version,
-            "ir": apex.model_dump(exclude_none=True),
+            "api_name": artifact.api_name,
+            "label": artifact.api_name,
+            "description": artifact.description,
+            "status": artifact.status,
+            "api_version": artifact.api_version,
+            "ir": artifact.model_dump(exclude_none=True),
             "repairs": session.result.repairs,
             "usage": session.generator.provider.usage.as_dict(),
             "imported": session.imported,
@@ -466,6 +482,10 @@ class ApexClassesRequest(FlowsRequest):
     for before any session exists."""
 
 
+class ApexTriggersRequest(FlowsRequest):
+    """Same shape again - the Apex trigger picker."""
+
+
 class DeployRequest(OrgRequest):
     confirm: bool = False
 
@@ -489,7 +509,7 @@ class OrgSummaryRequest(SurveyRequest):
 
 class ImportRequest(BaseModel):
     api_name: str
-    kind: Literal["flow", "apex"] = "flow"
+    kind: Literal["flow", "apex", "trigger"] = "flow"
     org: Optional[str] = None
     instance_url: Optional[str] = None
     access_token: Optional[str] = None
@@ -686,6 +706,21 @@ async def apex_classes(body: ApexClassesRequest) -> Dict[str, Any]:
     }
 
 
+@app.post("/api/apex-triggers")
+async def apex_triggers(body: ApexTriggersRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        found = await list_apex_triggers(url, token)
+    except RetrieveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "triggers": [
+            {"api_name": trig.api_name, "last_modified": trig.last_modified}
+            for trig in found
+        ]
+    }
+
+
 async def _run_survey(url: str, token: str) -> str:
     flows = await retrieve_all_flows(url, token)
     survey = Survey()
@@ -809,6 +844,10 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
         task = asyncio.create_task(
             retrieve_apex_class(url, token, body.api_name, api_version=body.api_version)
         )
+    elif body.kind == "trigger":
+        task = asyncio.create_task(
+            retrieve_apex_trigger(url, token, body.api_name, api_version=body.api_version)
+        )
     else:
         task = asyncio.create_task(
             retrieve_flow(url, token, body.api_name, api_version=body.api_version)
@@ -818,11 +857,20 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
     return {"job_id": job_id}
 
 
+# kind -> (IR model, generator) for the two source-only artifact types, whose
+# import handling is otherwise identical - Apex vs. Flow (a real graph to
+# parse) is the shape difference that keeps them from sharing this branch too.
+_APEX_LIKE = {
+    "apex": (ApexClass, ApexClassGenerator, "Apex class"),
+    "trigger": (ApexTrigger, ApexTriggerGenerator, "Apex trigger"),
+}
+
+
 @app.get("/api/import/status")
 async def import_status(job_id: str) -> Dict[str, Any]:
     """
-    Pull a Flow or Apex class out of the org and adopt it, so the next
-    refinement edits it rather than designing a replacement from its
+    Pull a Flow, Apex class or Apex trigger out of the org and adopt it, so
+    the next refinement edits it rather than designing a replacement from its
     description.
     """
     pending = IMPORTS.get(job_id)
@@ -845,17 +893,18 @@ async def import_status(job_id: str) -> Dict[str, Any]:
 
     session_id = uuid.uuid4().hex
 
-    if body.kind == "apex":
-        apex = ApexClass(
+    if body.kind in _APEX_LIKE:
+        model_cls, generator_cls, noun = _APEX_LIKE[body.kind]
+        artifact = model_cls(
             api_name=body.api_name, body=source, api_version=body.api_version,
         )
-        generator = ApexClassGenerator(provider)
+        generator = generator_cls(provider)
         session = Session(
             generator=generator,
             result=generator.adopt(
-                apex, f"the Apex class {body.api_name} from {pending.instance_url}"
+                artifact, f"the {noun} {body.api_name} from {pending.instance_url}"
             ),
-            kind="apex",
+            kind=body.kind,
             api_version=body.api_version,
             history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
             imported=True,
@@ -893,7 +942,7 @@ async def explain_start(body: ExplainRequest) -> Dict[str, Any]:
     session = get_session(body.session_id)
     if session.pending_explain is not None and not session.pending_explain.done():
         raise HTTPException(409, "An explain is already running for this flow.")
-    subject = session.apex if session.kind == "apex" else session.flow
+    subject = session.artifact
     session.pending_explain = asyncio.create_task(
         asyncio.to_thread(session.generator.explain, subject, body.question)
     )
@@ -983,6 +1032,16 @@ def _deploy_files(session: Session) -> "tuple[Dict[str, str], Dict[str, List[str
                 f"classes/{apex.api_name}.cls-meta.xml": meta,
             },
             {"ApexClass": [apex.api_name]},
+        )
+    if session.kind == "trigger":
+        trigger = session.trigger
+        body, meta = generate_apex_trigger(trigger)
+        return (
+            {
+                f"triggers/{trigger.api_name}.trigger": body,
+                f"triggers/{trigger.api_name}.trigger-meta.xml": meta,
+            },
+            {"ApexTrigger": [trigger.api_name]},
         )
     flow = session.flow
     return {f"flows/{flow.api_name}.flow": generate_xml(flow)}, {"Flow": [flow.api_name]}
@@ -1121,27 +1180,33 @@ def session_view(session_id: str) -> Dict[str, Any]:
 def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     session = get_session(session_id)
 
-    if session.kind == "apex":
-        apex = session.apex
+    if session.kind in ("apex", "trigger"):
+        component = session.artifact
 
         if artifact == "report":
             status = "approved" if session.approved else "not yet approved"
+            # PlanStep's artifact_type only recognizes "apex" - a trigger
+            # reuses that label here since it is purely a display attribute
+            # in this report, not a dispatch key (isinstance(value, ...) is
+            # what picks the rendering below).
             step = StepResult(
-                step=PlanStep(artifact_type="apex", name=apex.api_name, brief=""),
-                value=apex, repairs=0, messages=[],
+                step=PlanStep(artifact_type="apex", name=component.api_name, brief=""),
+                value=component, repairs=0, messages=[],
             )
             report = render_standalone_report(
-                [step], title=f"{apex.api_name} - v{session.version}",
-                meta=f"{len(apex.body.splitlines())} line(s) - {status}",
+                [step], title=f"{component.api_name} - v{session.version}",
+                meta=f"{len(component.body.splitlines())} line(s) - {status}",
             )
             return PlainTextResponse(
                 report, media_type="text/html",
-                headers={"Content-Disposition": f'attachment; filename="apex-{session_id}.html"'},
+                headers={
+                    "Content-Disposition": f'attachment; filename="{session.kind}-{session_id}.html"'
+                },
             )
 
         bodies = {
-            "xml": (apex.body, "text/plain"),
-            "ir": (apex.model_dump_json(exclude_none=True, indent=2), "application/json"),
+            "xml": (component.body, "text/plain"),
+            "ir": (component.model_dump_json(exclude_none=True, indent=2), "application/json"),
         }
         if artifact not in bodies:
             raise HTTPException(404, f"No such artifact: {artifact}")
