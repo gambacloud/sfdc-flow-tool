@@ -774,6 +774,7 @@ function renderResult(result) {
 const PLAN_ARTIFACT_LABELS = {
   flow: "Flow", object: "Object", field: "Field", apex: "Apex Class",
   lwc: "Lightning Web Component",
+  mdt: "Custom Metadata Type", mdt_record: "Custom Metadata Record",
 };
 
 function planStepSummary(step) {
@@ -788,9 +789,24 @@ function planStepSummary(step) {
       return `${step.lines} line${step.lines === 1 ? "" : "s"}`;
     case "lwc":
       return `${step.lines} line${step.lines === 1 ? "" : "s"} of js`;
+    case "mdt":
+      return `${step.field_count} field${step.field_count === 1 ? "" : "s"}`;
+    case "mdt_record":
+      return step.developer_name;
     default:
       return "";
   }
+}
+
+function planStepFieldList(fields) {
+  const list = document.createElement("ul");
+  list.className = "plan-step-field-list";
+  fields.forEach((field) => {
+    const item = document.createElement("li");
+    item.textContent = `${field.api_name} (${field.type})`;
+    list.appendChild(item);
+  });
+  return list;
 }
 
 // A standalone render, unlike the pan/zoom-wired renderDiagram() above: a
@@ -931,6 +947,19 @@ function renderPlanStep(step) {
     ]));
   } else if (step.artifact_type === "lwc") {
     body.appendChild(renderLwcFiles(step));
+  } else if (step.artifact_type === "mdt") {
+    body.appendChild(planStepTable([
+      ["API name", step.api_name],
+      ["Label", step.label],
+      ["Visibility", step.visibility],
+    ]));
+    body.appendChild(planStepFieldList(step.fields));
+  } else if (step.artifact_type === "mdt_record") {
+    body.appendChild(planStepTable([
+      ["Type", step.type_api_name],
+      ["Developer name", step.developer_name],
+      ...Object.entries(step.values),
+    ]));
   }
 
   if (step.depends_on && step.depends_on.length) {

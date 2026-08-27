@@ -28,6 +28,7 @@ from .ir import Flow
 from .ir_apex import ApexClass, ApexTrigger, heuristic_errors, heuristic_trigger_errors
 from .ir_lwc import LightningComponent
 from .ir_lwc import heuristic_errors as lwc_heuristic_errors
+from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
 
 DEFAULT_MAX_REPAIRS = 3
@@ -512,6 +513,53 @@ one.
 Salesforce refuses one left blank.
 - Do not invent a target object for a Lookup/MasterDetail that the request did \
 not name or imply.
+"""
+
+
+MDT_SYSTEM_PROMPT = """\
+You translate a description of a configuration/reference structure into a \
+Salesforce Custom Metadata Type IR document.
+
+You produce IR only, never metadata XML - a compiler generates that from your IR.
+
+- `api_name` is suffixed `__mdt` automatically; write it without the suffix or \
+with it, either is fine.
+- Unlike a Custom Object, a Custom Metadata Type's fields are part of this \
+same IR (`fields`), not a separate request - include every field the \
+request needs here.
+- Each field's `api_name` is suffixed `__c` automatically. `type` is one of \
+Text, TextArea, LongTextArea, Number, Percent, Checkbox, Date, DateTime, \
+Email, Phone, URL, Picklist, MetadataRelationship - there is no Lookup, \
+MasterDetail, Formula, or Roll-Up Summary here; a "reference to another \
+metadata type" is `MetadataRelationship`, whose `reference_to` names that \
+other type's api_name (do not invent one the request did not name or imply).
+- Only set `length` on Text, `precision`/`scale` on Number/Percent, \
+`picklist_values` on Picklist, or `reference_to` on MetadataRelationship.
+- `visibility` is `Public` unless the request asks for it to stay restricted \
+to this org/package (`Protected`) or to Apex in the same package only \
+(`PackageProtected`).
+- Prefer the smallest set of fields that does what was asked - do not add \
+audit fields, flags, or notes that were not requested.
+"""
+
+
+MDT_RECORD_SYSTEM_PROMPT = """\
+You translate a description of one configuration row into a Salesforce \
+Custom Metadata record IR document.
+
+You produce IR only, never metadata XML - a compiler generates that from your IR.
+
+- `type_api_name` names the Custom Metadata Type this record belongs to \
+(suffixed `__mdt` automatically) - use the exact type the request named or \
+implied, never invent one.
+- `developer_name` is the record's own identifier, no suffix - Salesforce's \
+usual API-name rules apply (letters/digits/underscores, starts with a \
+letter).
+- `values` maps each field's api_name (with its `__c` suffix) to the value \
+as plain text, exactly as it should be stored - write "true"/"false" for a \
+checkbox field, a plain number for a numeric one. Only set a value for a \
+field the type actually has and the request actually specifies - do not \
+invent values for fields nobody mentioned.
 """
 
 
@@ -1800,6 +1848,34 @@ class CustomFieldGenerator(IRGenerator[CustomField]):
         return f"{field.api_name} ({field.type}) on {field.object_api_name}"
 
     def generate(self, request: str) -> IRGenerationResult[CustomField]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class MetadataTypeGenerator(IRGenerator[MetadataType]):
+    """Turns a description of a Custom Metadata Type (and its fields, all in
+    one IR - see MDT_SYSTEM_PROMPT) into a validated MetadataType."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, MetadataType, MDT_SYSTEM_PROMPT, max_repairs)
+
+    def _describe(self, mdt: MetadataType) -> str:
+        return f"{mdt.api_name} ({len(mdt.fields)} field(s))"
+
+    def generate(self, request: str) -> IRGenerationResult[MetadataType]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class CustomMetadataRecordGenerator(IRGenerator[CustomMetadataRecord]):
+    """Turns a description of one configuration row into a validated
+    CustomMetadataRecord."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, CustomMetadataRecord, MDT_RECORD_SYSTEM_PROMPT, max_repairs)
+
+    def _describe(self, record: CustomMetadataRecord) -> str:
+        return f"{record.type_api_name}.{record.developer_name}"
+
+    def generate(self, request: str) -> IRGenerationResult[CustomMetadataRecord]:
         return self._validated([Message(role="user", content=request)])
 
 

@@ -25,11 +25,13 @@ from pydantic import BaseModel, Field, model_validator
 
 from .ir_apex import ApexClass
 from .ir_lwc import LightningComponent
+from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
 from .ir import Flow
 from .llm import (
     ApexClassGenerator,
     CustomFieldGenerator,
+    CustomMetadataRecordGenerator,
     CustomObjectGenerator,
     DEFAULT_MAX_REPAIRS,
     FlowGenerator,
@@ -38,12 +40,13 @@ from .llm import (
     IRGenerator,
     LwcGenerator,
     Message,
+    MetadataTypeGenerator,
     Provider,
 )
 
-ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" - see PlanStep.artifact_type
+ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" - see PlanStep.artifact_type
 
-_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc"}
+_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record"}
 
 
 class PlanStep(BaseModel):
@@ -179,6 +182,12 @@ another Apex class) is also an `apex` step - always its own separate step, \
 never folded into the class it tests as extra methods on the same file.
 - `flow` - a new Flow.
 - `lwc` - a new Lightning Web Component.
+- `mdt` - a new Custom Metadata Type, **including its fields** - unlike \
+`object`/`field`, a metadata type's fields are part of this one step, never \
+a separate `field` step (a `field` step is only ever for a regular Custom \
+Object).
+- `mdt_record` - one record (row) of a Custom Metadata Type, existing or \
+created earlier in this same plan.
 
 ## Writing a brief
 
@@ -199,8 +208,13 @@ method is always two steps, `apex` then `lwc`, never one. A test class \
 depends on the class it tests, for the same reason - if the request asks for \
 tests covering a class this plan also creates, that is always a distinct \
 `apex` step naming the class-under-test's exact intended name in its brief, \
-with `depends_on` pointing at that class's step. Do not add a dependency \
-that is not actually needed - it only slows the plan down for no reason.
+with `depends_on` pointing at that class's step. An `mdt_record` step always \
+depends on its `mdt` step when that type is also being created in this plan \
+(never when the request names a type that already exists in the org - there \
+is nothing in this plan for it to depend on then). A `MetadataRelationship` \
+field on one `mdt` step that targets another `mdt` step this plan also \
+creates depends on that other step too. Do not add a dependency that is not \
+actually needed - it only slows the plan down for no reason.
 
 ## Keep the plan minimal
 
@@ -236,6 +250,8 @@ _GENERATOR_BY_TYPE: Dict[str, Type[IRGenerator]] = {
     "field": CustomFieldGenerator,
     "apex": ApexClassGenerator,
     "lwc": LwcGenerator,
+    "mdt": MetadataTypeGenerator,
+    "mdt_record": CustomMetadataRecordGenerator,
 }
 
 # A cap on how many steps in one layer run at once, not "as many as fit."
@@ -248,7 +264,10 @@ _MAX_PARALLEL_STEPS = 3
 # keeps its pre-existing GenerationResult (the .flow attribute server.py
 # already relies on); the others return the generic IRGenerationResult (.value)
 # from Phase 1. StepResult.value below normalises the two into one attribute.
-StepValue = Union[Flow, CustomObject, CustomField, ApexClass, LightningComponent]
+StepValue = Union[
+    Flow, CustomObject, CustomField, ApexClass, LightningComponent,
+    MetadataType, CustomMetadataRecord,
+]
 
 
 @dataclass
@@ -307,6 +326,17 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
             lines.append(
                 f"- Step {dep_name!r} created Lightning Web Component "
                 f"api_name={value.api_name!r}."
+            )
+        elif isinstance(value, MetadataType):
+            field_list = ", ".join(f"{f.api_name} ({f.type})" for f in value.fields)
+            lines.append(
+                f"- Step {dep_name!r} created Custom Metadata Type "
+                f"api_name={value.api_name!r} with fields: {field_list}."
+            )
+        elif isinstance(value, CustomMetadataRecord):
+            lines.append(
+                f"- Step {dep_name!r} created Custom Metadata record "
+                f"{value.type_api_name}.{value.developer_name!r}."
             )
 
     if not lines:

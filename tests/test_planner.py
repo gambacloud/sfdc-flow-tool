@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass
 from flowtool.ir_lwc import LightningComponent
+from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import APEX_SYSTEM_PROMPT, FIELD_SYSTEM_PROMPT, OBJECT_SYSTEM_PROMPT
 from flowtool.planner import (
@@ -21,6 +22,7 @@ from flowtool.planner import (
 )
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_lwc_generator import VALID as VALID_LWC
+from tests.test_ir_mdt_generator import VALID_MDT, VALID_RECORD
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider, TypedScriptedProvider
 
@@ -177,6 +179,47 @@ class TestExecutePlan:
         brief = lwc_calls[0][1][0].content
         assert VALID_APEX["api_name"] in brief
         assert VALID_APEX["body"] in brief
+
+    def test_mdt_step_runs_the_mdt_generator(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="mdt", name="FeatureFlag", brief="a feature flag type"),
+        ])
+        provider = ScriptedProvider(VALID_MDT)
+        results = execute_plan(provider, plan)
+
+        assert len(results) == 1
+        assert isinstance(results[0].value, MetadataType)
+        assert results[0].value.api_name == "Feature_Flag__mdt"
+
+    def test_mdt_dependency_gives_the_record_step_the_real_field_names(self):
+        # Same reasoning as the apex->lwc case above: the record step's brief
+        # is written before the mdt step has actually run, so it needs the
+        # real field api_names injected once the type is actually generated.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="mdt", name="Type", brief="a feature flag type"),
+            PlanStep(artifact_type="mdt_record", name="Record", brief="a New UI record",
+                      depends_on=["Type"]),
+        ])
+        provider = TypedScriptedProvider(mdt=VALID_MDT, mdt_record=VALID_RECORD)
+        execute_plan(provider, plan)
+
+        record_calls = [c for c in provider.calls if c[0] == "mdt_record"]
+        assert len(record_calls) == 1
+        brief = record_calls[0][1][0].content
+        assert VALID_MDT["api_name"] in brief
+        assert "Enabled__c" in brief
+
+    def test_mdt_record_step_with_no_mdt_dependency_runs_unmodified(self):
+        # A record targeting a type that already exists in the org - no mdt
+        # step in this plan, so no dependency facts to inject.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="mdt_record", name="Record", brief="a New UI record"),
+        ])
+        provider = TypedScriptedProvider(mdt_record=VALID_RECORD)
+        results = execute_plan(provider, plan)
+
+        assert isinstance(results[0].value, CustomMetadataRecord)
+        assert results[0].value.developer_name == "New_UI"
 
     def test_dependent_step_is_told_the_dependency_s_actual_name(self):
         # The planner writes every brief before any step has actually run, so

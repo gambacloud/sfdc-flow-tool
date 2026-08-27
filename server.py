@@ -29,6 +29,7 @@ from flowtool.config import load_env
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass, ApexTrigger
 from flowtool.ir_lwc import LightningComponent
+from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import (
     AnthropicProvider,
@@ -69,6 +70,7 @@ from flowtool.sfdc import (
 from flowtool.xmlgen import generate as generate_xml
 from flowtool.xmlgen_apex import generate_apex, generate_apex_trigger
 from flowtool.xmlgen_lwc import generate_lwc
+from flowtool.xmlgen_mdt import generate_mdt_record, generate_mdt_type
 from flowtool.xmlgen_object import generate_field_delta, generate_object
 from survey import Survey, text_report
 
@@ -1594,6 +1596,20 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "is_exposed": value.is_exposed,
             "targets": value.targets,
         })
+    elif isinstance(value, MetadataType):
+        entry.update({
+            "api_name": value.api_name,
+            "label": value.label,
+            "visibility": value.visibility,
+            "field_count": len(value.fields),
+            "fields": [{"api_name": f.api_name, "type": f.type} for f in value.fields],
+        })
+    elif isinstance(value, CustomMetadataRecord):
+        entry.update({
+            "type_api_name": value.type_api_name,
+            "developer_name": value.developer_name,
+            "values": value.values,
+        })
     return entry
 
 
@@ -1628,6 +1644,7 @@ def _bundle_files_and_types(
     """
     objects: Dict[str, CustomObject] = {}
     fields_by_object: Dict[str, List[CustomField]] = {}
+    mdt_types: Dict[str, MetadataType] = {}
     other_steps: List[StepResult] = []
 
     for result in steps:
@@ -1636,6 +1653,8 @@ def _bundle_files_and_types(
             objects[value.api_name] = value
         elif isinstance(value, CustomField):
             fields_by_object.setdefault(value.object_api_name, []).append(value)
+        elif isinstance(value, MetadataType):
+            mdt_types[value.api_name] = value
         else:
             other_steps.append(result)
 
@@ -1657,6 +1676,15 @@ def _bundle_files_and_types(
                 f"{object_api_name}.{field.api_name}"
             )
 
+    for api_name, mdt in mdt_types.items():
+        # A __mdt type deploys under the same package.xml member type as a
+        # regular Custom Object - confirmed against Salesforce's own
+        # Metadata API reference, not assumed. Its fields are always embedded
+        # (generate_mdt_type), never split into a delta the way CustomField
+        # can be - a __mdt has no "add a field later" step in this tool.
+        files[f"objects/{api_name}.object"] = generate_mdt_type(mdt)
+        types.setdefault("CustomObject", []).append(api_name)
+
     for result in other_steps:
         value = result.value
         if isinstance(value, Flow):
@@ -1670,6 +1698,14 @@ def _bundle_files_and_types(
         elif isinstance(value, LightningComponent):
             files.update(generate_lwc(value))
             types.setdefault("LightningComponentBundle", []).append(value.api_name)
+        elif isinstance(value, CustomMetadataRecord):
+            mdt_type = mdt_types.get(value.type_api_name)
+            files[f"customMetadata/{value.type_api_name}.{value.developer_name}.md"] = (
+                generate_mdt_record(value, mdt_type)
+            )
+            types.setdefault("CustomMetadata", []).append(
+                f"{value.type_api_name}.{value.developer_name}"
+            )
 
     return files, types
 

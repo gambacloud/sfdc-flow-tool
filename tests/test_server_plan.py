@@ -11,6 +11,7 @@ import server
 from flowtool.sfdc import ComponentProblem, DeployResult
 from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_lwc_generator import VALID as VALID_LWC
+from tests.test_ir_mdt_generator import VALID_MDT, VALID_RECORD
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import ScriptedProvider, TypedScriptedProvider, VALID as VALID_FLOW
 
@@ -37,6 +38,16 @@ LWC_PLAN = {
         {"artifact_type": "apex", "name": "Controller", "brief": "a controller class"},
         {"artifact_type": "lwc", "name": "Card", "brief": "a card using the controller",
          "depends_on": ["Controller"]},
+    ]
+}
+
+# A Custom Metadata Type + one record of it - the shape the user asked for:
+# type, its fields, and pushing records, all as planner steps.
+MDT_PLAN = {
+    "steps": [
+        {"artifact_type": "mdt", "name": "Type", "brief": "a feature flag type"},
+        {"artifact_type": "mdt_record", "name": "Record", "brief": "a New UI record",
+         "depends_on": ["Type"]},
     ]
 }
 
@@ -164,6 +175,19 @@ class TestPlanExecute:
         assert by_name["Card"]["api_name"] == "contactCard"
         assert "export default class" in by_name["Card"]["js"]
         assert "<template>" in by_name["Card"]["html"]
+
+    def test_mdt_plan_carries_type_fields_and_record_values(self, client, typed_scripted):
+        typed_scripted(plan=MDT_PLAN, mdt=VALID_MDT, mdt_record=VALID_RECORD)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+
+        by_name = {s["name"]: s for s in session["steps"]}
+        assert by_name["Type"]["artifact_type"] == "mdt"
+        assert by_name["Type"]["api_name"] == "Feature_Flag__mdt"
+        assert by_name["Type"]["fields"] == [{"api_name": "Enabled__c", "type": "Checkbox"}]
+        assert by_name["Record"]["artifact_type"] == "mdt_record"
+        assert by_name["Record"]["developer_name"] == "New_UI"
+        assert by_name["Record"]["values"] == {"Enabled__c": "true"}
 
     def test_single_flow_step_carries_a_diagram(self, client, scripted):
         session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
@@ -325,6 +349,42 @@ class TestPlanDeploy:
         assert "lwc/contactCard/contactCard.js" in seen_files
         assert "lwc/contactCard/contactCard.html" in seen_files
         assert "lwc/contactCard/contactCard.js-meta.xml" in seen_files
+
+    def test_confirmed_deploy_bundles_mdt_type_and_its_record(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        typed_scripted(plan=MDT_PLAN, mdt=VALID_MDT, mdt_record=VALID_RECORD)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        seen_types = {}
+        seen_files = {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen_types.update(types)
+            seen_files.update(files)
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        started = client.post(
+            "/api/plan/deploy/start", json={"session_id": sid, "confirm": True}
+        )
+        assert started.status_code == 200, started.text
+        result = poll(client, "/api/plan/deploy/status", session_id=sid)
+        assert result.json()["success"] is True
+        # The __mdt type deploys under the same package.xml member type as a
+        # regular Custom Object - see server.py's _bundle_files_and_types.
+        assert set(seen_types) == {"CustomObject", "CustomMetadata"}
+        assert seen_types["CustomObject"] == ["Feature_Flag__mdt"]
+        assert seen_types["CustomMetadata"] == ["Feature_Flag__mdt.New_UI"]
+        object_file = seen_files["objects/Feature_Flag__mdt.object"]
+        assert "<visibility>" in object_file
+        assert "<sharingModel>" not in object_file
+        record_file = seen_files["customMetadata/Feature_Flag__mdt.New_UI.md"]
+        assert 'xsi:type="xsd:boolean"' in record_file
 
     def test_successful_deploy_returns_a_setup_link_per_step(
         self, client, typed_scripted, monkeypatch,
