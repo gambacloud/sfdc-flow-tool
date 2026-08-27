@@ -13,9 +13,11 @@ import io
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
+from .ir_lwc import LightningComponent
 
 METADATA_NS = "http://soap.sforce.com/2006/04/metadata"
 SOAP_NS = {
@@ -375,6 +377,12 @@ class ApexTriggerSummary:
     last_modified: Optional[str] = None
 
 
+@dataclass
+class LwcSummary:
+    api_name: str
+    last_modified: Optional[str] = None
+
+
 class RetrieveError(RuntimeError):
     pass
 
@@ -496,6 +504,25 @@ async def component_setup_url(
         except (httpx.HTTPError, ValueError, KeyError):
             return fallback
         return f"{base}/lightning/setup/{setup_type}/page?address=%2F{component_id}"
+    if artifact_type == "lwc":
+        fallback = f"{base}/lightning/setup/LightningComponentBundles/home"
+        query = f"SELECT Id FROM LightningComponentBundle WHERE DeveloperName = '{api_name}'"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{base}/services/data/v{api_version}/tooling/query",
+                    params={"q": query},
+                    headers={"Authorization": f"Bearer {session_id}"},
+                )
+            if resp.status_code != 200:
+                return fallback
+            records = resp.json().get("records", [])
+            if not records:
+                return fallback
+            component_id = records[0]["Id"]
+        except (httpx.HTTPError, ValueError, KeyError):
+            return fallback
+        return f"{base}/lightning/setup/LightningComponentBundles/page?address=%2F{component_id}"
     return f"{base}/lightning/setup/SetupOneHome/home"
 
 
@@ -714,6 +741,96 @@ async def retrieve_apex_class(
     if not records:
         raise RetrieveError(f"{api_name} was not found in the org.")
     return records[0]["Body"]
+
+
+async def list_lwc_components(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> List[LwcSummary]:
+    """
+    Every Lightning Web Component bundle in the org, newest first - Tooling
+    API query, same pattern list_flows uses for FlowDefinition (a bundle has
+    no queryable field via plain REST the way ApexClass/ApexTrigger do).
+    """
+    base = _normalise(instance_url)
+    query = (
+        "SELECT DeveloperName, LastModifiedDate FROM LightningComponentBundle "
+        "ORDER BY LastModifiedDate DESC"
+    )
+    url = f"{base}/services/data/v{api_version}/tooling/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(
+            fault or f"Could not list Lightning Web Components ({resp.status_code}): {resp.text[:300]}"
+        )
+
+    return [
+        LwcSummary(
+            api_name=record["DeveloperName"],
+            last_modified=record.get("LastModifiedDate"),
+        )
+        for record in resp.json().get("records", [])
+    ]
+
+
+def _parse_lwc_meta(meta_xml: str) -> Tuple[bool, List[str], Optional[str]]:
+    """(is_exposed, targets, api_version) out of a retrieved .js-meta.xml -
+    the inverse of xmlgen_lwc.py's _meta_xml. An empty/missing sidecar (should
+    not happen for a real component, but retrieval is otherwise best-effort)
+    falls back to the IR's own defaults."""
+    if not meta_xml.strip():
+        return False, [], None
+    root = ET.fromstring(meta_xml)
+    ns = {"m": METADATA_NS}
+    is_exposed = (root.findtext("m:isExposed", "false", ns) or "false").lower() == "true"
+    targets = [t.text for t in root.findall("m:targets/m:target", ns) if t.text]
+    api_version = root.findtext("m:apiVersion", None, ns)
+    return is_exposed, targets, api_version
+
+
+async def retrieve_lwc_component(
+    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+) -> LightningComponent:
+    """
+    Pull one Lightning Web Component bundle out of the org. Unlike Apex's
+    single queryable Body field, a bundle is several member files with no
+    flat row to select from, so this uses the same Metadata-API
+    retrieve-job-and-unzip flow retrieve_flow does, just against
+    LightningComponentBundle instead of Flow.
+    """
+    async with MetadataClient(instance_url, session_id, api_version) as client:
+        job_id = await client.start_retrieve_types({"LightningComponentBundle": [api_name]})
+        zip_bytes = await client.wait_for_retrieve(job_id)
+
+    base_path = f"lwc/{api_name}/{api_name}"
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        names = set(archive.namelist())
+        js_path, html_path = f"{base_path}.js", f"{base_path}.html"
+        if js_path not in names or html_path not in names:
+            # Salesforce returns an empty package rather than an error when the
+            # component does not exist, so say that plainly.
+            raise RetrieveError(
+                f"{api_name} was not in the retrieved package. "
+                "Check the API name, or that the component has a saved version."
+            )
+        js = archive.read(js_path).decode("utf-8")
+        html = archive.read(html_path).decode("utf-8")
+        css_path = f"{base_path}.css"
+        css = archive.read(css_path).decode("utf-8") if css_path in names else None
+        meta_path = f"{base_path}.js-meta.xml"
+        meta_xml = archive.read(meta_path).decode("utf-8") if meta_path in names else ""
+
+    is_exposed, targets, retrieved_version = _parse_lwc_meta(meta_xml)
+    return LightningComponent(
+        api_name=api_name, js=js, html=html, css=css,
+        is_exposed=is_exposed, targets=targets,
+        api_version=retrieved_version or api_version,
+    )
 
 
 async def list_apex_triggers(

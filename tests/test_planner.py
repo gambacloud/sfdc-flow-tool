@@ -13,12 +13,14 @@ from pydantic import ValidationError
 
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass
+from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import APEX_SYSTEM_PROMPT, FIELD_SYSTEM_PROMPT, OBJECT_SYSTEM_PROMPT
 from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, execute_plan, refine_step, repair_step,
 )
 from tests.test_ir_apex_generator import VALID as VALID_APEX
+from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider, TypedScriptedProvider
 
@@ -144,6 +146,37 @@ class TestExecutePlan:
         assert isinstance(by_name["Apex"].value, ApexClass)
         # Returned in the plan's original order, not execution order.
         assert [r.step.name for r in results] == ["Object", "Field", "Apex"]
+
+    def test_lwc_step_runs_the_lwc_generator(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="lwc", name="Card", brief="a contact card"),
+        ])
+        provider = ScriptedProvider(VALID_LWC)
+        results = execute_plan(provider, plan)
+
+        assert len(results) == 1
+        assert isinstance(results[0].value, LightningComponent)
+        assert results[0].value.api_name == "contactCard"
+
+    def test_apex_dependency_gives_the_lwc_step_the_real_apex_source(self):
+        # Mirrors test_dependent_step_is_told_the_dependency_s_actual_name,
+        # for the case this feature is actually about: an LWC step that needs
+        # a new Apex controller. _dependency_facts must inject the apex
+        # step's real body (not just its api_name) so the LWC's @wire/import
+        # can call an @InvocableMethod/@AuraEnabled method that really exists.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="apex", name="Controller", brief="a controller class"),
+            PlanStep(artifact_type="lwc", name="Card", brief="a card using the controller",
+                      depends_on=["Controller"]),
+        ])
+        provider = TypedScriptedProvider(apex=VALID_APEX, lwc=VALID_LWC)
+        execute_plan(provider, plan)
+
+        lwc_calls = [c for c in provider.calls if c[0] == "lwc"]
+        assert len(lwc_calls) == 1
+        brief = lwc_calls[0][1][0].content
+        assert VALID_APEX["api_name"] in brief
+        assert VALID_APEX["body"] in brief
 
     def test_dependent_step_is_told_the_dependency_s_actual_name(self):
         # The planner writes every brief before any step has actually run, so

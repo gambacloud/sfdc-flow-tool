@@ -143,6 +143,7 @@
         <label><input type="radio" name="openKind" id="openKindFlow" value="flow" checked> Flow</label>
         <label><input type="radio" name="openKind" id="openKindApex" value="apex"> Apex Class</label>
         <label><input type="radio" name="openKind" id="openKindTrigger" value="trigger"> Apex Trigger</label>
+        <label><input type="radio" name="openKind" id="openKindLwc" value="lwc"> Lightning Web Component</label>
       </div>
 
       <div id="openFlowFields">
@@ -176,6 +177,15 @@
         </div>
       </div>
 
+      <div id="openLwcFields" hidden>
+        <label for="lwcSearch">Lightning Web Components in the org</label>
+        <div class="combo">
+          <input id="lwcSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="lwcPicker" value="">
+          <div id="lwcResults" class="combo-list" hidden></div>
+        </div>
+      </div>
+
       <button id="importBtn" class="primary">Open it</button>
       <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
       <button id="orgSummaryLink" class="link-btn" type="button">Generate org summary</button>
@@ -183,7 +193,12 @@
     </div>
 
     <div class="pad" id="newPane">
-      <label for="request">What should the flow do?</label>
+      <div class="open-kind">
+        <label><input type="radio" name="newKind" id="newKindFlow" value="flow" checked> Flow</label>
+        <label><input type="radio" name="newKind" id="newKindLwc" value="lwc"> Lightning Web Component</label>
+      </div>
+
+      <label for="request" id="requestLabel">What should the flow do?</label>
       <textarea id="request" rows="4"
         placeholder="When an opportunity is won, mark its account as Hot"></textarea>
 
@@ -240,11 +255,11 @@
 
       <div class="tabs">
         <button class="tab active" data-tab="diagram" data-kinds="flow">Diagram</button>
-        <button class="tab" data-tab="explain" data-kinds="flow apex trigger">Explain</button>
+        <button class="tab" data-tab="explain" data-kinds="flow apex trigger lwc">Explain</button>
         <button class="tab" data-tab="markdown" data-kinds="flow">Documentation</button>
         <button class="tab" data-tab="test" data-kinds="flow">Test</button>
-        <button class="tab" data-tab="xml" data-kinds="flow apex trigger" id="xmlTabLabel">Flow XML</button>
-        <button class="tab" data-tab="ir" data-kinds="flow apex trigger" id="irTab" hidden>IR</button>
+        <button class="tab" data-tab="xml" data-kinds="flow apex trigger lwc" id="xmlTabLabel">Flow XML</button>
+        <button class="tab" data-tab="ir" data-kinds="flow apex trigger lwc" id="irTab" hidden>IR</button>
       </div>
 
       <div class="diagram-tab" id="diagramTab">
@@ -253,6 +268,11 @@
           <div id="diagram"></div>
         </div>
         <div class="element-index" id="elementIndex"></div>
+      </div>
+      <div class="lwc-file-tabs" id="lwcFileTabs" hidden>
+        <button type="button" class="lwc-file-tab active" data-file="js">JS</button>
+        <button type="button" class="lwc-file-tab" data-file="html">HTML</button>
+        <button type="button" class="lwc-file-tab" data-file="css" id="lwcCssTab" hidden>CSS</button>
       </div>
       <pre id="code" hidden></pre>
 

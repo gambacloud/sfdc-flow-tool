@@ -44,8 +44,10 @@ const state = {
   flows: [], // cached, alphabetically-sorted /api/flows result backing the search combo
   apexClasses: [], // same, for the Apex Class picker in "Open one from the org"
   apexTriggers: [], // same, for the Apex Trigger picker
-  openKind: "flow", // "flow" | "apex" | "trigger" - which picker the Open pane currently shows
-  kind: "flow", // "flow" | "apex" | "trigger" - which artifact type flowView is currently showing
+  lwcComponents: [], // same, for the Lightning Web Component picker
+  openKind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which picker the Open pane currently shows
+  newKind: "flow", // "flow" | "lwc" - which single-artifact kind "Describe a new..." creates
+  kind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which artifact type flowView is currently showing
   showIrSubtab: false, // SHOW_IR_SUBTAB config var - the IR tab is a debugging aid, off by default
 };
 
@@ -430,7 +432,8 @@ function updateTabsForKind(kind) {
     if (allowed && !firstVisible) firstVisible = tab.dataset.tab;
   });
   $("xmlTabLabel").textContent =
-    kind === "apex" ? "Apex Code" : kind === "trigger" ? "Trigger Code" : "Flow XML";
+    kind === "apex" ? "Apex Code" : kind === "trigger" ? "Trigger Code" :
+    kind === "lwc" ? "LWC Files" : "Flow XML";
   if (!tabs.some((t) => t.dataset.tab === state.tab && !t.hidden)) {
     state.tab = firstVisible || "explain";
   }
@@ -442,6 +445,9 @@ function renderTab() {
   $("diagramTab").hidden = !isDiagram;
   $("explainPane").hidden = !isExplain;
   $("code").hidden = isDiagram || isExplain;
+  // The per-file switcher only makes sense on the code tab of an LWC session
+  // - the IR tab shows the whole component as one JSON document instead.
+  $("lwcFileTabs").hidden = !(state.kind === "lwc" && state.tab === "xml");
   if (!isDiagram && !isExplain) $("code").textContent = state.artifacts[state.tab] ?? "";
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.tab === state.tab);
@@ -461,13 +467,14 @@ function renderGate() {
   const validatedNow = state.validatedVersion === state.version;
   deploy.disabled = !state.approved || !validatedNow;
 
-  const noun = state.kind === "apex" ? "class" : state.kind === "trigger" ? "trigger" : "flow";
+  const noun = state.kind === "apex" ? "class" : state.kind === "trigger" ? "trigger" :
+    state.kind === "lwc" ? "component" : "flow";
   if (!state.approved) {
     gate.textContent =
       `This ${noun} has not been approved. Nothing is sent to Salesforce until you approve it.`;
   } else if (!validatedNow) {
     gate.textContent = "Approved. Validate it against the org before deploying.";
-  } else if (state.kind === "apex" || state.kind === "trigger") {
+  } else if (state.kind === "apex" || state.kind === "trigger" || state.kind === "lwc") {
     gate.textContent = `Validated. Deploying replaces this ${noun} in the org immediately.`;
   } else if (state.status === "Active") {
     gate.textContent =
@@ -483,6 +490,10 @@ function renderFlow(data) {
   // the session, so the dispatch belongs here rather than at every caller.
   if (data.kind === "apex" || data.kind === "trigger") {
     renderApex(data);
+    return;
+  }
+  if (data.kind === "lwc") {
+    renderLwc(data);
     return;
   }
   updateTabsForKind("flow");
@@ -617,13 +628,94 @@ function renderApex(data) {
     .catch(() => {});
 }
 
+// Fetches whichever LWC file is currently selected and drops it into
+// state.artifacts.xml - the same slot the code tab already reads for every
+// other kind, so the per-file switcher below rides the existing tab/fetch
+// machinery instead of needing its own.
+function loadLwcFile(sessionId, file) {
+  fetch(`api/session/${sessionId}/${file}`)
+    .then((r) => r.text())
+    .then((text) => {
+      state.artifacts.xml = text;
+      if (state.tab === "xml") renderTab();
+    })
+    .catch(() => {});
+}
+
+function setLwcFile(file) {
+  state.lwcFile = file;
+  document.querySelectorAll("#lwcFileTabs .lwc-file-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.file === file);
+  });
+  loadLwcFile(state.sessionId, file);
+}
+
+// LWC counterpart to renderApex(): no graph, no test guide - source files
+// (js/html/optional css) behind the per-file switcher, plus the same
+// Explain tab and approve/validate/deploy gate every other kind shares.
+function renderLwc(data) {
+  updateTabsForKind("lwc");
+
+  state.sessionId = data.session_id;
+  sessionStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
+  // Unlike Apex/trigger, an LWC CAN be designed fresh (not only opened from
+  // the org) - same "new" vs "open" distinction renderFlow's Flow branch
+  // keeps, not a hardcoded "open".
+  sessionStorage.setItem(LAST_MODE_STORAGE_KEY, state.lastFlowMode || "new");
+  state.version = data.version;
+  state.approved = data.approved;
+  state.artifacts.ir = JSON.stringify(data.ir, null, 2);
+
+  $("empty").hidden = true;
+  $("flowView").hidden = false;
+  $("refineBox").hidden = false;
+
+  $("flowLabel").textContent = data.label;
+  $("flowMeta").textContent =
+    `${data.api_name}  ·  Lightning Web Component  ·  API ${data.api_version}`;
+  $("flowDesc").textContent = data.description || "";
+
+  const badge = $("statusBadge");
+  badge.textContent = data.is_exposed ? "EXPOSED" : "NOT EXPOSED";
+  badge.className = "badge " + (data.is_exposed ? "active" : "draft");
+  $("versionBadge").textContent = "v" + data.version;
+
+  if (data.usage) state.usage = data.usage;
+  const text = usageText(state.usage);
+  if (text) $("usage").textContent = text;
+  renderLogs();
+
+  $("log").innerHTML = "";
+  data.history.forEach((entry) => {
+    const node = document.createElement("div");
+    node.className = "entry";
+    node.innerHTML = `<div class="v">v${entry.version}</div><div></div>`;
+    node.lastElementChild.textContent = entry.note;
+    $("log").appendChild(node);
+  });
+
+  $("explanation").textContent =
+    "Ask the model what this component does, or leave the box empty for a walkthrough.";
+  $("explanation").className = "explanation dim";
+
+  $("result").hidden = true;
+  $("flowReportLink").href = `api/session/${data.session_id}/report`;
+
+  $("lwcCssTab").hidden = !data.has_css;
+  setLwcFile(data.has_css && state.lwcFile === "css" ? "css" : "js");
+
+  renderTab();
+  renderGate();
+}
+
 function renderResult(result) {
   const box = $("result");
   box.hidden = false;
   box.className = "result " + (result.success ? "ok" : "bad");
   box.innerHTML = "";
 
-  const noun = state.kind === "apex" ? "class" : state.kind === "trigger" ? "trigger" : "flow";
+  const noun = state.kind === "apex" ? "class" : state.kind === "trigger" ? "trigger" :
+    state.kind === "lwc" ? "component" : "flow";
   const title = document.createElement("h3");
   title.textContent = result.success
     ? `${result.status} - this ${noun} will deploy cleanly`
@@ -660,7 +752,10 @@ function renderResult(result) {
 // Plans ("build multiple things" mode - Object/Field/Apex/Flow, one request)
 // --------------------------------------------------------------------------
 
-const PLAN_ARTIFACT_LABELS = { flow: "Flow", object: "Object", field: "Field", apex: "Apex Class" };
+const PLAN_ARTIFACT_LABELS = {
+  flow: "Flow", object: "Object", field: "Field", apex: "Apex Class",
+  lwc: "Lightning Web Component",
+};
 
 function planStepSummary(step) {
   switch (step.artifact_type) {
@@ -672,6 +767,8 @@ function planStepSummary(step) {
       return `${step.field_type} on ${step.object_api_name}`;
     case "apex":
       return `${step.lines} line${step.lines === 1 ? "" : "s"}`;
+    case "lwc":
+      return `${step.lines} line${step.lines === 1 ? "" : "s"} of js`;
     default:
       return "";
   }
@@ -712,6 +809,46 @@ function planStepTable(rows) {
     table.appendChild(row);
   });
   return table;
+}
+
+// LWC has no single "body" - a small file switcher (JS | HTML | CSS) over
+// one shared <pre>, reused by both the planner step card (here) and the
+// single-artifact flowView's code tab (renderLwc, below).
+function renderLwcFiles(step) {
+  const wrap = document.createElement("div");
+  wrap.className = "lwc-files";
+
+  const files = { js: step.js, html: step.html };
+  if (step.css) files.css = step.css;
+
+  const tabs = document.createElement("div");
+  tabs.className = "lwc-file-tabs";
+  const pre = document.createElement("pre");
+  pre.className = "lwc-file-content";
+
+  const labels = { js: "JS", html: "HTML", css: "CSS" };
+  let active = "js";
+  const show = (key) => {
+    active = key;
+    pre.textContent = files[key] ?? "";
+    Array.from(tabs.children).forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.file === key);
+    });
+  };
+
+  Object.keys(files).forEach((key) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "lwc-file-tab";
+    btn.dataset.file = key;
+    btn.textContent = labels[key];
+    btn.onclick = () => show(key);
+    tabs.appendChild(btn);
+  });
+
+  wrap.append(tabs, pre);
+  show(active);
+  return wrap;
 }
 
 function setAllPlanStepsOpen(open) {
@@ -762,6 +899,8 @@ function renderPlanStep(step) {
       ["On object", step.object_api_name],
       ["Type", step.field_type],
     ]));
+  } else if (step.artifact_type === "lwc") {
+    body.appendChild(renderLwcFiles(step));
   }
 
   if (step.depends_on && step.depends_on.length) {
@@ -910,6 +1049,8 @@ function renderPlanResult(result) {
 // --------------------------------------------------------------------------
 
 async function design() {
+  if (state.newKind === "lwc") return designLwc();
+
   const button = $("designBtn");
   showError(button.parentElement, "");
   busy(button, true, "Designing...");
@@ -933,6 +1074,44 @@ async function design() {
   } finally {
     busy(button, false);
   }
+}
+
+async function designLwc() {
+  const button = $("designBtn");
+  showError(button.parentElement, "");
+  busy(button, true, "Designing...");
+  try {
+    const { job_id } = await api("api/lwc/start", {
+      request: $("request").value,
+      provider: $("provider").value || null,
+      effort: $("effort").value,
+      api_version: $("apiVersion").value.trim() || "62.0",
+      api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
+    });
+    const data = await poll("api/lwc/status", { job_id });
+    state.validatedVersion = null;
+    state.lastFlowMode = "new";
+    renderFlow(data);
+  } catch (err) {
+    showError(button.parentElement, err.message);
+    logError("Design", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+function setNewKind(kind) {
+  state.newKind = kind;
+  const isLwc = kind === "lwc";
+  $("requestLabel").textContent = isLwc
+    ? "What should the component do?"
+    : "What should the flow do?";
+  $("request").placeholder = isLwc
+    ? "Show the current record's Name and Phone in a small card"
+    : "When an opportunity is won, mark its account as Hot";
+  $("designBtn").textContent = isLwc ? "Design the component" : "Design the flow";
+  $("activate").closest("label").hidden = isLwc;
 }
 
 function formatLastMod(iso) {
@@ -1139,8 +1318,71 @@ async function loadApexTriggers() {
   }
 }
 
+function renderLwcResults(query) {
+  const list = $("lwcResults");
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? state.lwcComponents.filter((c) => c.api_name.toLowerCase().includes(q))
+    : state.lwcComponents;
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = "no matching components";
+    list.appendChild(empty);
+  } else {
+    matches.forEach((comp) => {
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = comp.api_name;
+      row.innerHTML =
+        `<span>${escapeHtml(comp.api_name)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(comp.last_modified))}</span>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $("lwcSearch").value = comp.api_name;
+        $("lwcPicker").value = comp.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+async function loadLwcComponents() {
+  const search = $("lwcSearch");
+  const picker = $("lwcPicker");
+  const list = $("lwcResults");
+  state.lwcComponents = [];
+  picker.value = "";
+  list.hidden = true;
+  if (!state.org && !state.sfCli) {
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
+    return;
+  }
+  search.disabled = true;
+  search.placeholder = "Loading...";
+  try {
+    const data = await api("api/lwc-components", orgCredentials());
+    state.lwcComponents = data.components
+      .slice()
+      .sort((a, b) => a.api_name.localeCompare(b.api_name, undefined, { sensitivity: "base" }));
+    search.disabled = false;
+    search.placeholder = data.components.length ? "Search components..." : "no LWCs in this org";
+  } catch (err) {
+    search.disabled = false;
+    search.placeholder = "could not list components";
+    showError($("openPane"), err.message);
+    logError("Load LWCs", err.message);
+  }
+}
+
 // Which hidden <input> holds the chosen api_name, per Open-pane kind.
-const OPEN_PICKER_IDS = { flow: "flowPicker", apex: "apexPicker", trigger: "triggerPicker" };
+const OPEN_PICKER_IDS = {
+  flow: "flowPicker", apex: "apexPicker", trigger: "triggerPicker", lwc: "lwcPicker",
+};
 
 async function importFlow() {
   const button = $("importBtn");
@@ -1820,10 +2062,19 @@ async function restoreSession() {
       $("openKindFlow").checked = data.kind === "flow";
       $("openKindApex").checked = data.kind === "apex";
       $("openKindTrigger").checked = data.kind === "trigger";
+      $("openKindLwc").checked = data.kind === "lwc";
       state.openKind = data.kind;
       $("openFlowFields").hidden = data.kind !== "flow";
       $("openApexFields").hidden = data.kind !== "apex";
       $("openTriggerFields").hidden = data.kind !== "trigger";
+      $("openLwcFields").hidden = data.kind !== "lwc";
+    }
+    // Same idea for the "new" pane's kind radio - a restored LWC session
+    // designed fresh should not silently show "Flow" as selected there.
+    if (data.kind === "flow" || data.kind === "lwc") {
+      $("newKindFlow").checked = data.kind === "flow";
+      $("newKindLwc").checked = data.kind === "lwc";
+      setNewKind(data.kind);
     }
   } catch {
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -1853,6 +2104,7 @@ function setOpenKind(kind) {
   $("openFlowFields").hidden = kind !== "flow";
   $("openApexFields").hidden = kind !== "apex";
   $("openTriggerFields").hidden = kind !== "trigger";
+  $("openLwcFields").hidden = kind !== "lwc";
   showError($("openPane"), "");
   loadOpenPaneList();
 }
@@ -1864,6 +2116,7 @@ const OPEN_PANE_LOADERS = {
   flow: { picker: "flowPicker", load: loadFlows },
   apex: { picker: "apexPicker", load: loadApexClasses },
   trigger: { picker: "triggerPicker", load: loadApexTriggers },
+  lwc: { picker: "lwcPicker", load: loadLwcComponents },
 };
 
 function loadOpenPaneList() {
@@ -2102,9 +2355,25 @@ async function boot() {
   $("triggerSearch").addEventListener("blur", () => {
     $("triggerResults").hidden = true;
   });
+  $("lwcSearch").addEventListener("input", () => {
+    $("lwcPicker").value = "";
+    renderLwcResults($("lwcSearch").value);
+  });
+  $("lwcSearch").addEventListener("focus", () => {
+    if (state.lwcComponents.length) renderLwcResults($("lwcSearch").value);
+  });
+  $("lwcSearch").addEventListener("blur", () => {
+    $("lwcResults").hidden = true;
+  });
   $("openKindFlow").onchange = () => setOpenKind("flow");
   $("openKindApex").onchange = () => setOpenKind("apex");
   $("openKindTrigger").onchange = () => setOpenKind("trigger");
+  $("openKindLwc").onchange = () => setOpenKind("lwc");
+  $("newKindFlow").onchange = () => setNewKind("flow");
+  $("newKindLwc").onchange = () => setNewKind("lwc");
+  document.querySelectorAll("#lwcFileTabs .lwc-file-tab").forEach((btn) => {
+    btn.onclick = () => setLwcFile(btn.dataset.file);
+  });
   $("surveyLink").onclick = runSurvey;
   $("orgSummaryLink").onclick = runOrgSummary;
   $("orgSummaryGenerateBtn").onclick = startOrgSummaryRetrieve;

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from flowtool.config import load_env
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass, ApexTrigger
+from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.llm import (
     AnthropicProvider,
@@ -38,6 +39,7 @@ from flowtool.llm import (
     IRGenerationResult,
     KB_CHAT_PROMPT,
     LLMError,
+    LwcGenerator,
     Message,
     Provider,
 )
@@ -55,15 +57,18 @@ from flowtool.sfdc import (
     list_apex_classes,
     list_apex_triggers,
     list_flows,
+    list_lwc_components,
     retrieve_all_flows,
     retrieve_apex_class,
     retrieve_apex_trigger,
     retrieve_flow,
+    retrieve_lwc_component,
     retrieve_org_summary_zip,
     validate_bundle,
 )
 from flowtool.xmlgen import generate as generate_xml
 from flowtool.xmlgen_apex import generate_apex, generate_apex_trigger
+from flowtool.xmlgen_lwc import generate_lwc
 from flowtool.xmlgen_object import generate_field_delta, generate_object
 from survey import Survey, text_report
 
@@ -151,17 +156,18 @@ class PendingLLM:
 class Session:
     """
     Holds one artifact under review - a Flow (the original, larger use case), an
-    Apex class, or an Apex trigger, opened from an org for editing. `kind`
-    picks which; `result` is a `GenerationResult` (`.flow`) for a Flow or an
-    `IRGenerationResult` (`.value`) for Apex/trigger - the `flow`/`apex`/
-    `trigger` properties below are what the rest of this module reads instead
-    of poking at `.result` directly, so the three shapes stay hidden behind
-    one interface.
+    Apex class, an Apex trigger, or a Lightning Web Component, opened from an
+    org for editing or designed from scratch. `kind` picks which; `result` is
+    a `GenerationResult` (`.flow`) for a Flow or an `IRGenerationResult`
+    (`.value`) for anything else - the `flow`/`apex`/`trigger`/`lwc`
+    properties below are what the rest of this module reads instead of
+    poking at `.result` directly, so the shapes stay hidden behind one
+    interface.
     """
 
     generator: Any
     result: Any
-    kind: Literal["flow", "apex", "trigger"] = "flow"
+    kind: Literal["flow", "apex", "trigger", "lwc"] = "flow"
     activate: bool = False
     api_version: str = "62.0"
     # Bumped on every change; deploy compares the two.
@@ -190,11 +196,17 @@ class Session:
         return self.result.value
 
     @property
+    def lwc(self) -> LightningComponent:
+        return self.result.value
+
+    @property
     def artifact(self) -> Any:
         if self.kind == "flow":
             return self.flow
         if self.kind == "apex":
             return self.apex
+        if self.kind == "lwc":
+            return self.lwc
         return self.trigger
 
     @property
@@ -249,6 +261,22 @@ class PendingDesign:
 
 
 DESIGN_JOBS: Dict[str, PendingDesign] = {}
+
+
+@dataclass
+class PendingLwcDesign:
+    """PendingDesign's counterpart for the dedicated single-LWC create path -
+    a separate dataclass (not reused) because its generator returns the
+    generic IRGenerationResult, not Flow's own GenerationResult, and there is
+    no `activate` flag to carry (an LWC has no Draft/Active concept)."""
+
+    task: "asyncio.Task"
+    generator: LwcGenerator
+    request: str
+    api_version: str
+
+
+LWC_DESIGN_JOBS: Dict[str, PendingLwcDesign] = {}
 
 
 @dataclass
@@ -337,6 +365,27 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
             "status": artifact.status,
             "api_version": artifact.api_version,
             "ir": artifact.model_dump(exclude_none=True),
+            "repairs": session.result.repairs,
+            "usage": session.generator.provider.usage.as_dict(),
+            "imported": session.imported,
+            "history": session.history,
+        }
+
+    if session.kind == "lwc":
+        component = session.lwc
+        return {
+            "session_id": session_id,
+            "kind": "lwc",
+            "version": session.version,
+            "approved": session.approved,
+            "api_name": component.api_name,
+            "label": component.api_name,
+            "description": component.description,
+            "api_version": component.api_version,
+            "is_exposed": component.is_exposed,
+            "targets": component.targets,
+            "has_css": component.css is not None,
+            "ir": component.model_dump(exclude_none=True),
             "repairs": session.result.repairs,
             "usage": session.generator.provider.usage.as_dict(),
             "imported": session.imported,
@@ -448,6 +497,18 @@ class DesignRequest(BaseModel):
     api_key: Optional[str] = None
 
 
+class LwcDesignRequest(BaseModel):
+    """Same shape as DesignRequest, minus `activate` - an LWC has no Draft/
+    Active concept the way a Flow does."""
+
+    request: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: Literal["medium", "high"] = "medium"
+    api_version: str = "62.0"
+    api_key: Optional[str] = None
+
+
 class RefineRequest(BaseModel):
     session_id: str
     instruction: str
@@ -486,6 +547,10 @@ class ApexTriggersRequest(FlowsRequest):
     """Same shape again - the Apex trigger picker."""
 
 
+class LwcComponentsRequest(FlowsRequest):
+    """Same shape again - the Lightning Web Component picker."""
+
+
 class DeployRequest(OrgRequest):
     confirm: bool = False
 
@@ -509,7 +574,7 @@ class OrgSummaryRequest(SurveyRequest):
 
 class ImportRequest(BaseModel):
     api_name: str
-    kind: Literal["flow", "apex", "trigger"] = "flow"
+    kind: Literal["flow", "apex", "trigger", "lwc"] = "flow"
     org: Optional[str] = None
     instance_url: Optional[str] = None
     access_token: Optional[str] = None
@@ -670,6 +735,50 @@ async def design_status(job_id: str) -> Dict[str, Any]:
     return {"done": True, **view(session_id, session)}
 
 
+@app.post("/api/lwc/start")
+async def lwc_start(body: LwcDesignRequest) -> Dict[str, Any]:
+    """Design a new Lightning Web Component from a description - the LWC
+    counterpart to /api/design/start, same background-job-and-poll shape."""
+    if not body.request.strip():
+        raise HTTPException(400, "Describe what the component should do.")
+    try:
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    generator = LwcGenerator(provider)
+    task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
+    job_id = uuid.uuid4().hex
+    LWC_DESIGN_JOBS[job_id] = PendingLwcDesign(
+        task=task, generator=generator, request=body.request, api_version=body.api_version,
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/lwc/status")
+async def lwc_status(job_id: str) -> Dict[str, Any]:
+    pending = LWC_DESIGN_JOBS.get(job_id)
+    if pending is None:
+        raise HTTPException(404, "Unknown lwc design job.")
+    if not pending.task.done():
+        return waiting(pending.generator.provider)
+    del LWC_DESIGN_JOBS[job_id]
+
+    result = llm_result(pending.task)
+
+    session_id = uuid.uuid4().hex
+    session = Session(
+        generator=pending.generator,
+        result=result,
+        kind="lwc",
+        api_version=pending.api_version,
+        history=[{"note": pending.request, "version": "1"}],
+    )
+    session.apply_policy()
+    SESSIONS[session_id] = session
+    return {"done": True, **view(session_id, session)}
+
+
 @app.post("/api/flows")
 async def flows(body: FlowsRequest) -> Dict[str, Any]:
     url, token = credentials(body.org, body.instance_url, body.access_token)
@@ -717,6 +826,21 @@ async def apex_triggers(body: ApexTriggersRequest) -> Dict[str, Any]:
         "triggers": [
             {"api_name": trig.api_name, "last_modified": trig.last_modified}
             for trig in found
+        ]
+    }
+
+
+@app.post("/api/lwc-components")
+async def lwc_components(body: LwcComponentsRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        found = await list_lwc_components(url, token)
+    except RetrieveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "components": [
+            {"api_name": comp.api_name, "last_modified": comp.last_modified}
+            for comp in found
         ]
     }
 
@@ -848,6 +972,10 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
         task = asyncio.create_task(
             retrieve_apex_trigger(url, token, body.api_name, api_version=body.api_version)
         )
+    elif body.kind == "lwc":
+        task = asyncio.create_task(
+            retrieve_lwc_component(url, token, body.api_name, api_version=body.api_version)
+        )
     else:
         task = asyncio.create_task(
             retrieve_flow(url, token, body.api_name, api_version=body.api_version)
@@ -906,6 +1034,24 @@ async def import_status(job_id: str) -> Dict[str, Any]:
             ),
             kind=body.kind,
             api_version=body.api_version,
+            history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
+            imported=True,
+        )
+    elif body.kind == "lwc":
+        # retrieve_lwc_component already returns the fully-parsed
+        # LightningComponent (js/html/css/meta unpacked from the bundle),
+        # unlike the _APEX_LIKE branch above which builds the IR from a raw
+        # source string - a bundle has no single "body" to hand a generic
+        # model_cls(...) constructor.
+        component: LightningComponent = source
+        generator = LwcGenerator(provider)
+        session = Session(
+            generator=generator,
+            result=generator.adopt(
+                component, f"the Lightning Web Component {body.api_name} from {pending.instance_url}"
+            ),
+            kind="lwc",
+            api_version=component.api_version,
             history=[{"note": f"Imported {body.api_name} from the org", "version": "1"}],
             imported=True,
         )
@@ -1043,6 +1189,9 @@ def _deploy_files(session: Session) -> "tuple[Dict[str, str], Dict[str, List[str
             },
             {"ApexTrigger": [trigger.api_name]},
         )
+    if session.kind == "lwc":
+        component = session.lwc
+        return generate_lwc(component), {"LightningComponentBundle": [component.api_name]}
     flow = session.flow
     return {f"flows/{flow.api_name}.flow": generate_xml(flow)}, {"Flow": [flow.api_name]}
 
@@ -1208,6 +1357,41 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
             "xml": (component.body, "text/plain"),
             "ir": (component.model_dump_json(exclude_none=True, indent=2), "application/json"),
         }
+        if artifact not in bodies:
+            raise HTTPException(404, f"No such artifact: {artifact}")
+        text, media_type = bodies[artifact]
+        return PlainTextResponse(text, media_type=media_type)
+
+    if session.kind == "lwc":
+        component = session.lwc
+
+        if artifact == "report":
+            status = "approved" if session.approved else "not yet approved"
+            step = StepResult(
+                step=PlanStep(artifact_type="lwc", name=component.api_name, brief=""),
+                value=component, repairs=0, messages=[],
+            )
+            report = render_standalone_report(
+                [step], title=f"{component.api_name} - v{session.version}",
+                meta=f"{len(component.js.splitlines())} line(s) of js - {status}",
+            )
+            return PlainTextResponse(
+                report, media_type="text/html",
+                headers={
+                    "Content-Disposition": f'attachment; filename="lwc-{session_id}.html"'
+                },
+            )
+
+        # Per-file artifact keys, not the single "xml" key Apex/trigger use -
+        # a bundle has no one body to hand back.
+        bodies = {
+            "js": (component.js, "text/plain"),
+            "html": (component.html, "text/plain"),
+            "meta": (generate_lwc(component)[f"lwc/{component.api_name}/{component.api_name}.js-meta.xml"], "application/xml"),
+            "ir": (component.model_dump_json(exclude_none=True, indent=2), "application/json"),
+        }
+        if component.css is not None:
+            bodies["css"] = (component.css, "text/plain")
         if artifact not in bodies:
             raise HTTPException(404, f"No such artifact: {artifact}")
         text, media_type = bodies[artifact]
@@ -1400,6 +1584,16 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "lines": len(value.body.splitlines()),
             "body": value.body,
         })
+    elif isinstance(value, LightningComponent):
+        entry.update({
+            "api_name": value.api_name,
+            "lines": len(value.js.splitlines()),
+            "js": value.js,
+            "html": value.html,
+            "css": value.css,
+            "is_exposed": value.is_exposed,
+            "targets": value.targets,
+        })
     return entry
 
 
@@ -1473,6 +1667,9 @@ def _bundle_files_and_types(
             files[f"classes/{value.api_name}.cls"] = body
             files[f"classes/{value.api_name}.cls-meta.xml"] = meta
             types.setdefault("ApexClass", []).append(value.api_name)
+        elif isinstance(value, LightningComponent):
+            files.update(generate_lwc(value))
+            types.setdefault("LightningComponentBundle", []).append(value.api_name)
 
     return files, types
 
@@ -1685,6 +1882,11 @@ async def _plan_component_urls(
         elif isinstance(value, Flow):
             url = await component_setup_url(
                 instance_url, token, "flow", value.api_name,
+                api_version=session.api_version,
+            )
+        elif isinstance(value, LightningComponent):
+            url = await component_setup_url(
+                instance_url, token, "lwc", value.api_name,
                 api_version=session.api_version,
             )
         else:

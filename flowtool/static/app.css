@@ -431,6 +431,27 @@ pre#code {
 .plan-type-badge.object { border-color: var(--ok); color: var(--ok); }
 .plan-type-badge.field { border-color: var(--warn); color: var(--warn); }
 .plan-type-badge.apex { border-color: var(--accent); color: var(--accent); }
+.plan-type-badge.lwc { border-color: var(--accent); color: var(--accent); }
+
+.lwc-files { margin-top: 4px; }
+.lwc-file-tabs { display: flex; gap: 4px; }
+.lwc-file-tab {
+  font-size: 12px; padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--line); color: var(--dim); background: none; cursor: pointer;
+  font-family: var(--mono);
+}
+.lwc-file-tab.active { border-color: var(--accent); color: var(--accent); }
+pre.lwc-file-content {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  margin: 8px 0 0;
+  max-height: 50vh;
+}
 
 .plan-overview { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
 .plan-chip {

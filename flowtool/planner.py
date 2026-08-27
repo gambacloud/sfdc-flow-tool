@@ -24,6 +24,7 @@ from typing import Dict, List, Type, Union
 from pydantic import BaseModel, Field, model_validator
 
 from .ir_apex import ApexClass
+from .ir_lwc import LightningComponent
 from .ir_object import CustomField, CustomObject
 from .ir import Flow
 from .llm import (
@@ -35,13 +36,14 @@ from .llm import (
     GenerationResult,
     IRGenerationResult,
     IRGenerator,
+    LwcGenerator,
     Message,
     Provider,
 )
 
-ArtifactType = str  # "object" | "field" | "apex" | "flow" - see PlanStep.artifact_type
+ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" - see PlanStep.artifact_type
 
-_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow"}
+_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc"}
 
 
 class PlanStep(BaseModel):
@@ -174,6 +176,7 @@ specialised generator afterward, and that generator sees only the step's own \
 another step.
 - `apex` - a new Apex Class.
 - `flow` - a new Flow.
+- `lwc` - a new Lightning Web Component.
 
 ## Writing a brief
 
@@ -187,9 +190,12 @@ another step creates.
 ## Ordering and dependencies
 
 `depends_on` lists the names of steps that must be generated first. An object \
-always precedes a field added to it. A field a Flow or Apex class references \
-precedes that step. Do not add a dependency that is not actually needed - it \
-only slows the plan down for no reason.
+always precedes a field added to it. A field a Flow, Apex class, or LWC \
+references precedes that step. An Apex class an LWC calls (via `@wire` or an \
+imperative import) precedes that LWC step - an LWC needing a new controller \
+method is always two steps, `apex` then `lwc`, never one. Do not add a \
+dependency that is not actually needed - it only slows the plan down for no \
+reason.
 
 ## Keep the plan minimal
 
@@ -224,6 +230,7 @@ _GENERATOR_BY_TYPE: Dict[str, Type[IRGenerator]] = {
     "object": CustomObjectGenerator,
     "field": CustomFieldGenerator,
     "apex": ApexClassGenerator,
+    "lwc": LwcGenerator,
 }
 
 # A cap on how many steps in one layer run at once, not "as many as fit."
@@ -236,7 +243,7 @@ _MAX_PARALLEL_STEPS = 3
 # keeps its pre-existing GenerationResult (the .flow attribute server.py
 # already relies on); the others return the generic IRGenerationResult (.value)
 # from Phase 1. StepResult.value below normalises the two into one attribute.
-StepValue = Union[Flow, CustomObject, CustomField, ApexClass]
+StepValue = Union[Flow, CustomObject, CustomField, ApexClass, LightningComponent]
 
 
 @dataclass
@@ -291,6 +298,11 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
             )
         elif isinstance(value, Flow):
             lines.append(f"- Step {dep_name!r} created Flow api_name={value.api_name!r}.")
+        elif isinstance(value, LightningComponent):
+            lines.append(
+                f"- Step {dep_name!r} created Lightning Web Component "
+                f"api_name={value.api_name!r}."
+            )
 
     if not lines:
         return step.brief

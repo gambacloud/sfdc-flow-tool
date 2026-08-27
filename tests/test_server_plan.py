@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import server
 from flowtool.sfdc import ComponentProblem, DeployResult
 from tests.test_ir_apex_generator import VALID as VALID_APEX
+from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_llm import ScriptedProvider, TypedScriptedProvider, VALID as VALID_FLOW
 
@@ -25,6 +26,17 @@ BUNDLE_PLAN = {
         {"artifact_type": "field", "name": "Field", "brief": "an Amount field",
          "depends_on": ["Object"]},
         {"artifact_type": "apex", "name": "Apex", "brief": "a helper class"},
+    ]
+}
+
+# An LWC + the new Apex controller it calls - the shape the user actually
+# cares about: several related Apex classes for one component, deployed
+# together in one transaction.
+LWC_PLAN = {
+    "steps": [
+        {"artifact_type": "apex", "name": "Controller", "brief": "a controller class"},
+        {"artifact_type": "lwc", "name": "Card", "brief": "a card using the controller",
+         "depends_on": ["Controller"]},
     ]
 }
 
@@ -140,6 +152,18 @@ class TestPlanExecute:
         assert by_name["Field"]["object_api_name"] == "Invoice__c"
         assert by_name["Apex"]["artifact_type"] == "apex"
         assert "class" in by_name["Apex"]["body"]
+
+    def test_lwc_plan_carries_apex_and_lwc_files(self, client, typed_scripted):
+        typed_scripted(plan=LWC_PLAN, apex=VALID_APEX, lwc=VALID_LWC)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+
+        by_name = {s["name"]: s for s in session["steps"]}
+        assert by_name["Controller"]["artifact_type"] == "apex"
+        assert by_name["Card"]["artifact_type"] == "lwc"
+        assert by_name["Card"]["api_name"] == "contactCard"
+        assert "export default class" in by_name["Card"]["js"]
+        assert "<template>" in by_name["Card"]["html"]
 
     def test_single_flow_step_carries_a_diagram(self, client, scripted):
         session = full_session(client, scripted, ONE_STEP_PLAN, VALID_FLOW)
@@ -271,6 +295,36 @@ class TestPlanDeploy:
         # server.py's _bundle_files_and_types for why.
         assert set(seen_types) == {"CustomObject", "ApexClass"}
         assert "<fields>" in next(v for k, v in seen_files.items() if k.endswith(".object"))
+
+    def test_confirmed_deploy_bundles_lwc_and_its_apex_controller(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        typed_scripted(plan=LWC_PLAN, apex=VALID_APEX, lwc=VALID_LWC)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        seen_types = {}
+        seen_files = {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen_types.update(types)
+            seen_files.update(files)
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        started = client.post(
+            "/api/plan/deploy/start", json={"session_id": sid, "confirm": True}
+        )
+        assert started.status_code == 200, started.text
+        result = poll(client, "/api/plan/deploy/status", session_id=sid)
+        assert result.json()["success"] is True
+        assert set(seen_types) == {"ApexClass", "LightningComponentBundle"}
+        assert "lwc/contactCard/contactCard.js" in seen_files
+        assert "lwc/contactCard/contactCard.html" in seen_files
+        assert "lwc/contactCard/contactCard.js-meta.xml" in seen_files
 
     def test_successful_deploy_returns_a_setup_link_per_step(
         self, client, typed_scripted, monkeypatch,

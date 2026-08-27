@@ -10,6 +10,7 @@ import zipfile
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     _is_unmanaged,
+    _parse_lwc_meta,
     build_deploy_package,
     build_multi_type_package,
     build_package,
@@ -133,3 +134,53 @@ class TestIsUnmanaged:
     def test_beta_and_editable_states_are_excluded_too(self):
         for state in ("beta", "deprecatedEditable", "installedEditable", "released"):
             assert not _is_unmanaged({"namespace_prefix": None, "manageable_state": state})
+
+
+class TestParseLwcMeta:
+    """The inverse of xmlgen_lwc.py's _meta_xml - what retrieve_lwc_component
+    reconstructs the IR's structured fields from."""
+
+    def test_empty_sidecar_falls_back_to_defaults(self):
+        assert _parse_lwc_meta("") == (False, [], None)
+
+    def test_exposed_with_targets_and_version(self):
+        meta = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">\n'
+            "    <apiVersion>60.0</apiVersion>\n"
+            "    <isExposed>true</isExposed>\n"
+            "    <targets>\n"
+            "        <target>lightning__RecordPage</target>\n"
+            "        <target>lightning__AppPage</target>\n"
+            "    </targets>\n"
+            "</LightningComponentBundle>\n"
+        )
+        assert _parse_lwc_meta(meta) == (True, ["lightning__RecordPage", "lightning__AppPage"], "60.0")
+
+    def test_not_exposed_with_no_targets(self):
+        meta = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">\n'
+            "    <apiVersion>60.0</apiVersion>\n"
+            "    <isExposed>false</isExposed>\n"
+            "</LightningComponentBundle>\n"
+        )
+        assert _parse_lwc_meta(meta) == (False, [], "60.0")
+
+    def test_round_trips_through_the_real_generator(self):
+        # Not a hand-built fixture: generate_lwc's own output, fed back in -
+        # pins down that the two halves actually agree with each other.
+        from flowtool.ir_lwc import LightningComponent
+        from flowtool.xmlgen_lwc import generate_lwc
+
+        component = LightningComponent(
+            api_name="foo",
+            js="export default class Foo extends LightningElement {}",
+            html="<template></template>",
+            api_version="61.0",
+            is_exposed=True,
+            targets=["lightning__HomePage"],
+        )
+        files = generate_lwc(component)
+        is_exposed, targets, api_version = _parse_lwc_meta(files["lwc/foo/foo.js-meta.xml"])
+        assert (is_exposed, targets, api_version) == (True, ["lightning__HomePage"], "61.0")

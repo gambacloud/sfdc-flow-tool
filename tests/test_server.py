@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import server
 from flowtool.llm import FlowGenerator, Usage
 from flowtool.sfdc import ComponentProblem, DeployResult, RetrieveError
+from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_llm import VALID, ScriptedProvider
 
 ACTIVE = dict(VALID, status="Active", api_version="60.0")
@@ -66,6 +67,15 @@ def design(client, **body):
     assert started.status_code == 200, started.text
     job_id = started.json()["job_id"]
     response = poll(client, "/api/design/status", job_id=job_id)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def lwc_design(client, **body):
+    started = client.post("/api/lwc/start", json={"request": "a contact card", **body})
+    assert started.status_code == 200, started.text
+    job_id = started.json()["job_id"]
+    response = poll(client, "/api/lwc/status", job_id=job_id)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -617,3 +627,131 @@ class TestProviderDefault:
         config = client.get("/api/config").json()
         assert config["default_provider"] is None
         assert config["providers"] == []
+
+
+def stub_lwc_org(monkeypatch, component=None):
+    from flowtool.ir_lwc import LightningComponent
+
+    async def fake_retrieve(instance_url, token, api_name, api_version="62.0"):
+        return component or LightningComponent(**VALID_LWC)
+
+    async def fake_list(instance_url, token, api_version="62.0"):
+        from flowtool.sfdc import LwcSummary
+
+        return [LwcSummary("contactCard", "2026-01-01")]
+
+    monkeypatch.setattr(server, "retrieve_lwc_component", fake_retrieve)
+    monkeypatch.setattr(server, "list_lwc_components", fake_list)
+
+
+class TestLwc:
+    def test_design_returns_the_files_and_ir(self, client, scripted):
+        scripted(VALID_LWC)
+        data = lwc_design(client)
+        assert data["kind"] == "lwc"
+        assert data["version"] == 1
+        assert data["approved"] is False
+        assert data["api_name"] == "contactCard"
+        assert data["ir"]["js"] == VALID_LWC["js"]
+
+    def test_empty_request_is_rejected(self, client, scripted):
+        scripted(VALID_LWC)
+        assert client.post("/api/lwc/start", json={"request": "  "}).status_code == 400
+
+    def test_api_version_comes_from_the_request(self, client, scripted):
+        scripted(VALID_LWC)
+        assert lwc_design(client, api_version="60.0")["api_version"] == "60.0"
+
+    def test_artifacts_are_downloadable_per_file(self, client, scripted):
+        scripted(VALID_LWC)
+        session_id = lwc_design(client)["session_id"]
+
+        js = client.get(f"/api/session/{session_id}/js")
+        assert js.status_code == 200
+        assert js.text == VALID_LWC["js"]
+
+        html = client.get(f"/api/session/{session_id}/html")
+        assert html.status_code == 200
+        assert html.text == VALID_LWC["html"]
+
+        meta = client.get(f"/api/session/{session_id}/meta")
+        assert meta.status_code == 200
+        assert "LightningComponentBundle" in meta.text
+
+        assert client.get(f"/api/session/{session_id}/css").status_code == 404
+        assert client.get(f"/api/session/{session_id}/nope").status_code == 404
+
+    def test_report_is_a_downloadable_standalone_html_document(self, client, scripted):
+        scripted(VALID_LWC)
+        session_id = lwc_design(client)["session_id"]
+
+        response = client.get(f"/api/session/{session_id}/report")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "attachment" in response.headers["content-disposition"]
+        assert "contactCard" in response.text
+
+    def test_lists_components(self, client, monkeypatch):
+        stub_lwc_org(monkeypatch)
+        data = client.post("/api/lwc-components", json={}).json()
+        assert data["components"][0]["api_name"] == "contactCard"
+
+    def test_imports_a_component(self, client, scripted, monkeypatch):
+        scripted(VALID_LWC)
+        stub_lwc_org(monkeypatch)
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "contactCard", "kind": "lwc"}
+        ).json()["job_id"]
+        data = poll(client, "/api/import/status", job_id=job_id).json()
+
+        assert data["kind"] == "lwc"
+        assert data["imported"] is True
+        assert data["api_name"] == "contactCard"
+        assert data["approved"] is False
+
+    def test_import_does_not_call_the_model(self, client, scripted, monkeypatch):
+        provider = scripted()  # no payloads queued: any call would IndexError
+        stub_lwc_org(monkeypatch)
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "contactCard", "kind": "lwc"}
+        ).json()["job_id"]
+        poll(client, "/api/import/status", job_id=job_id)
+        assert provider.calls == [], "importing should be pure retrieval, no model call"
+
+    def test_an_imported_component_can_be_refined(self, client, scripted, monkeypatch):
+        provider = scripted(VALID_LWC)
+        stub_lwc_org(monkeypatch)
+        job_id = client.post(
+            "/api/import/start", json={"api_name": "contactCard", "kind": "lwc"}
+        ).json()["job_id"]
+        session_id = poll(client, "/api/import/status", job_id=job_id).json()["session_id"]
+
+        refined = refine(client, session_id, "add a phone field").json()
+        assert refined["version"] == 2
+
+        conversation = provider.calls[0]
+        assert "contactCard" in conversation[0].content
+        assert "Keep everything about it the same" in conversation[0].content
+        assert conversation[-1].content == "add a phone field"
+
+    def test_deploy_bundles_the_right_files_and_type(self, client, scripted, monkeypatch):
+        scripted(VALID_LWC)
+        calls = stub_validate(monkeypatch, OK)
+        seen = {}
+
+        async def fake(instance_url, token, files, types, api_version="62.0", check_only=True):
+            seen["files"] = files
+            seen["types"] = types
+            return OK
+
+        monkeypatch.setattr(server, "validate_bundle", fake)
+        session_id = lwc_design(client)["session_id"]
+        client.post("/api/approve", json={"session_id": session_id, "version": 1})
+        client.post("/api/validate/start", json={"session_id": session_id})
+        poll(client, "/api/validate/status", session_id=session_id)
+
+        assert seen["types"] == {"LightningComponentBundle": ["contactCard"]}
+        assert "lwc/contactCard/contactCard.js" in seen["files"]
+        assert "lwc/contactCard/contactCard.html" in seen["files"]
+        assert "lwc/contactCard/contactCard.js-meta.xml" in seen["files"]

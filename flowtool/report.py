@@ -18,6 +18,7 @@ from typing import Any, List
 
 from .ir import Flow
 from .ir_apex import ApexClass, ApexTrigger
+from .ir_lwc import LightningComponent
 from .ir_object import CustomField, CustomObject
 from .mermaid import element_index, to_mermaid
 from .planner import StepResult
@@ -59,6 +60,11 @@ def render_html_fragment(steps: List[StepResult]) -> str:
             )
         elif isinstance(value, (ApexClass, ApexTrigger)):
             parts.append(f"<pre><code>{_esc(value.body)}</code></pre>")
+        elif isinstance(value, LightningComponent):
+            parts.append(f"<h4>js</h4><pre><code>{_esc(value.js)}</code></pre>")
+            parts.append(f"<h4>html</h4><pre><code>{_esc(value.html)}</code></pre>")
+            if value.css:
+                parts.append(f"<h4>css</h4><pre><code>{_esc(value.css)}</code></pre>")
         elif isinstance(value, Flow):
             # A live diagram, not a screenshot - <pre class="mermaid"> is the
             # same convention Claude's own Artifact viewer renders natively,

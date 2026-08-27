@@ -16,6 +16,7 @@ from flowtool.llm import (
     FlowGenerator,
     GeminiProvider,
     LLMError,
+    LWC_SYSTEM_PROMPT,
     Message,
     OBJECT_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -129,12 +130,13 @@ class TypedScriptedProvider:
         OBJECT_SYSTEM_PROMPT: "object",
         FIELD_SYSTEM_PROMPT: "field",
         APEX_SYSTEM_PROMPT: "apex",
+        LWC_SYSTEM_PROMPT: "lwc",
     }
 
     def __init__(self, **payloads_by_type):
-        """Each kwarg (plan=..., flow=..., object=..., field=..., apex=...)
-        is either one payload or a list of payloads served in order to that
-        type's calls."""
+        """Each kwarg (plan=..., flow=..., object=..., field=..., apex=...,
+        lwc=...) is either one payload or a list of payloads served in order
+        to that type's calls."""
         prompt_to_type = dict(self._PROMPT_TO_TYPE)
         if "plan" in payloads_by_type:
             from flowtool.planner import PLANNER_SYSTEM_PROMPT

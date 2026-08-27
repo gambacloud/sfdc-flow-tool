@@ -26,6 +26,8 @@ from pydantic import BaseModel, ValidationError
 
 from .ir import Flow
 from .ir_apex import ApexClass, ApexTrigger, heuristic_errors, heuristic_trigger_errors
+from .ir_lwc import LightningComponent
+from .ir_lwc import heuristic_errors as lwc_heuristic_errors
 from .ir_object import CustomField, CustomObject
 
 DEFAULT_MAX_REPAIRS = 3
@@ -560,6 +562,46 @@ moment it is wrong.
 - No compiler runs against this output before it is checked here - only a \
 brace-balance and declaration sanity check. Write it as if it must be correct \
 the first time.
+"""
+
+
+LWC_SYSTEM_PROMPT = """\
+You translate a description of a UI component into a Salesforce Lightning Web \
+Component IR document.
+
+You produce IR only, never a .js-meta.xml file - a compiler generates the \
+deployable files (including the meta.xml sidecar) from your IR's structured \
+`is_exposed`/`targets`/`api_version` fields. `js` and `html` are not \
+structured, though - they are the component's source files themselves, \
+written out in full, the same way ApexClass's `body` is.
+
+- `api_name` is the component name in camelCase (e.g. `contactCard`), \
+starting with a lowercase letter, letters and digits only - no underscores or \
+spaces. It doubles as both the file/folder name and the HTML tag \
+(`myComponent` -> `<c-my-component>`), so get the case right.
+- `js` must `export default class <PascalCase api_name> extends \
+LightningElement { ... }` (import `LightningElement` from `lwc`, along with \
+`api`/`track`/`wire` as needed) - the class name must be the exact PascalCase \
+of `api_name`.
+- `html` must be a single root `<template> ... </template>` containing the \
+component's markup.
+- `css` is optional - only write it if the component needs styling beyond \
+Salesforce's base styling.
+- Set `is_exposed: true` and list the relevant entries in `targets` (e.g. \
+`lightning__RecordPage`, `lightning__AppPage`, `lightning__HomePage`) only if \
+the request implies the component should be placed via App Builder/Flow \
+Builder; a component meant to be used only from other components' markup \
+should stay unexposed with no targets.
+- If the component calls into Apex (`@wire`/imperative `import someMethod \
+from '@salesforce/apex/SomeClass.someMethod'`), only reference a class and \
+method the request actually named or implied - never invent one.
+- Write complete, working code: balanced braces/tags, no placeholders or \
+"TODO" left where logic belongs. Prefer the smallest component that does what \
+was asked - do not add error handling, loading states, or styling that were \
+not requested.
+- No compiler runs against this output before it is checked here - only a \
+brace/tag-balance and name-matching sanity check. Write it as if it must be \
+correct the first time.
 """
 
 
@@ -1837,6 +1879,53 @@ class ApexTriggerGenerator(IRGenerator[ApexTrigger]):
             [Message(
                 role="user",
                 content=f"{ask}\n\nApex trigger {trigger.api_name}:\n\n{trigger.body}",
+            )],
+        )
+
+
+class LwcGenerator(IRGenerator[LightningComponent]):
+    """
+    Turns a description of a UI component into a validated
+    LightningComponent - same reasoning as ApexClassGenerator: no compiler
+    behind this, so `_extra_error` (brace balance on js, a matching exported
+    class name, a well-formed <template> root on html) does most of the real
+    catching, on the raw payload before Pydantic even sees it.
+    """
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, LightningComponent, LWC_SYSTEM_PROMPT, max_repairs)
+
+    def _extra_error(self, payload: Dict[str, Any]) -> Optional[str]:
+        problems = lwc_heuristic_errors(
+            payload.get("api_name") or "", payload.get("js") or "", payload.get("html") or ""
+        )
+        if not problems:
+            return None
+        return "\n".join(f"- {p}" for p in problems)
+
+    def _describe(self, component: LightningComponent) -> str:
+        return f"{component.api_name}, {len(component.js.splitlines())} lines of js"
+
+    def generate(self, request: str) -> IRGenerationResult[LightningComponent]:
+        return self._validated([Message(role="user", content=request)])
+
+    def explain(self, component: LightningComponent, question: Optional[str] = None) -> str:
+        ask = question or (
+            "Explain what this Lightning Web Component does, in plain "
+            "language, for a Salesforce admin who has never seen it. Cover "
+            "what it displays/does, any Apex it calls, and anything about it "
+            "that looks risky or surprising. Do not restate the code line by "
+            "line."
+        )
+        source = (
+            f"js:\n{component.js}\n\nhtml:\n{component.html}"
+            + (f"\n\ncss:\n{component.css}" if component.css else "")
+        )
+        return self.provider.complete_text(
+            EXPLAIN_PROMPT,
+            [Message(
+                role="user",
+                content=f"{ask}\n\nLightning Web Component {component.api_name}:\n\n{source}",
             )],
         )
 
