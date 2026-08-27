@@ -6,6 +6,7 @@
 <title>SFDC Flow Tool</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230176D3'/%3E%3Ccircle cx='8' cy='9' r='3.4' fill='white'/%3E%3Ccircle cx='24' cy='9' r='3.4' fill='white'/%3E%3Ccircle cx='16' cy='23' r='3.4' fill='white'/%3E%3Cpath d='M8 12.4 L16 19.6 M24 12.4 L16 19.6' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="static/app.css">
+<link rel="stylesheet" href="static/vendor/slds-subset.css">
 </head>
 <body>
 
@@ -273,8 +274,10 @@
         <button type="button" class="lwc-file-tab active" data-file="js">JS</button>
         <button type="button" class="lwc-file-tab" data-file="html">HTML</button>
         <button type="button" class="lwc-file-tab" data-file="css" id="lwcCssTab" hidden>CSS</button>
+        <button type="button" class="lwc-file-tab" data-file="preview">Preview</button>
       </div>
       <pre id="code" hidden></pre>
+      <div id="lwcPreview" class="lwc-preview" hidden></div>
 
       <div id="explainPane" hidden>
         <div class="row">
@@ -389,6 +392,7 @@
 </dialog>
 
 <script src="static/vendor/mermaid.min.js"></script>
+<script src="static/lwc-preview.js"></script>
 <script src="static/app.js"></script>
 <script src="static/contact-widget.js" defer></script>
 </body>

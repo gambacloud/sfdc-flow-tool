@@ -47,6 +47,7 @@ const state = {
   lwcComponents: [], // same, for the Lightning Web Component picker
   openKind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which picker the Open pane currently shows
   newKind: "flow", // "flow" | "lwc" - which single-artifact kind "Describe a new..." creates
+  lwcHtml: null, // the current LWC session's raw html - kept for the Preview pill, no extra fetch needed
   kind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which artifact type flowView is currently showing
   showIrSubtab: false, // SHOW_IR_SUBTAB config var - the IR tab is a debugging aid, off by default
 };
@@ -442,13 +443,16 @@ function updateTabsForKind(kind) {
 function renderTab() {
   const isDiagram = state.tab === "diagram";
   const isExplain = state.tab === "explain";
+  const isLwcCode = state.kind === "lwc" && state.tab === "xml";
+  const isLwcPreview = isLwcCode && state.lwcFile === "preview";
   $("diagramTab").hidden = !isDiagram;
   $("explainPane").hidden = !isExplain;
-  $("code").hidden = isDiagram || isExplain;
+  $("code").hidden = isDiagram || isExplain || isLwcPreview;
+  $("lwcPreview").hidden = !isLwcPreview;
   // The per-file switcher only makes sense on the code tab of an LWC session
   // - the IR tab shows the whole component as one JSON document instead.
-  $("lwcFileTabs").hidden = !(state.kind === "lwc" && state.tab === "xml");
-  if (!isDiagram && !isExplain) $("code").textContent = state.artifacts[state.tab] ?? "";
+  $("lwcFileTabs").hidden = !isLwcCode;
+  if (!isDiagram && !isExplain && !isLwcPreview) $("code").textContent = state.artifacts[state.tab] ?? "";
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.tab === state.tab);
   });
@@ -647,6 +651,14 @@ function setLwcFile(file) {
   document.querySelectorAll("#lwcFileTabs .lwc-file-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.file === file);
   });
+  if (file === "preview") {
+    // No fetch needed - the html is already in hand from renderLwc()'s own
+    // response, and the mapper (lwc-preview.js) never executes it, just
+    // reads its structure.
+    renderLwcPreview($("lwcPreview"), state.lwcHtml || "");
+    renderTab();
+    return;
+  }
   loadLwcFile(state.sessionId, file);
 }
 
@@ -665,6 +677,7 @@ function renderLwc(data) {
   state.version = data.version;
   state.approved = data.approved;
   state.artifacts.ir = JSON.stringify(data.ir, null, 2);
+  state.lwcHtml = data.ir.html;
 
   $("empty").hidden = true;
   $("flowView").hidden = false;
@@ -825,18 +838,29 @@ function renderLwcFiles(step) {
   tabs.className = "lwc-file-tabs";
   const pre = document.createElement("pre");
   pre.className = "lwc-file-content";
+  const preview = document.createElement("div");
+  preview.className = "lwc-preview";
+  preview.hidden = true;
 
-  const labels = { js: "JS", html: "HTML", css: "CSS" };
+  const labels = { js: "JS", html: "HTML", css: "CSS", preview: "Preview" };
   let active = "js";
   const show = (key) => {
     active = key;
-    pre.textContent = files[key] ?? "";
+    if (key === "preview") {
+      pre.hidden = true;
+      preview.hidden = false;
+      renderLwcPreview(preview, step.html || "");
+    } else {
+      pre.hidden = false;
+      preview.hidden = true;
+      pre.textContent = files[key] ?? "";
+    }
     Array.from(tabs.children).forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.file === key);
     });
   };
 
-  Object.keys(files).forEach((key) => {
+  Object.keys(files).concat(["preview"]).forEach((key) => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "lwc-file-tab";
@@ -846,7 +870,7 @@ function renderLwcFiles(step) {
     tabs.appendChild(btn);
   });
 
-  wrap.append(tabs, pre);
+  wrap.append(tabs, pre, preview);
   show(active);
   return wrap;
 }
