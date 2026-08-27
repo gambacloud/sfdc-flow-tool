@@ -224,15 +224,16 @@ button.danger:not(:disabled):hover { background: var(--danger); color: #fff; }
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 .combo-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  display: block;
   padding: 7px 10px;
   cursor: pointer;
   font-size: 13px;
 }
 .combo-item:hover, .combo-item.active { background: var(--line); }
+.combo-item-row { display: flex; justify-content: space-between; gap: 10px; }
 .combo-item .combo-mod { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.combo-item .combo-desc { color: var(--dim); font-size: 11px; margin-top: 2px; }
+.combo-item mark { background: var(--accent); color: #fff; border-radius: 2px; padding: 0 1px; }
 .combo-empty { padding: 7px 10px; font-size: 13px; color: var(--dim); }
 
 details#options { margin-top: 12px; }

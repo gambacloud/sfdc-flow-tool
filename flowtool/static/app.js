@@ -1184,7 +1184,10 @@ function renderFlowResults(query) {
   const q = query.trim().toLowerCase();
   const matches = q
     ? state.flows.filter(
-        (f) => f.label.toLowerCase().includes(q) || f.api_name.toLowerCase().includes(q)
+        (f) =>
+          f.label.toLowerCase().includes(q) ||
+          f.api_name.toLowerCase().includes(q) ||
+          (f.description || "").toLowerCase().includes(q)
       )
     : state.flows;
   list.innerHTML = "";
@@ -1199,9 +1202,17 @@ function renderFlowResults(query) {
       const row = document.createElement("div");
       row.className = "combo-item";
       row.dataset.apiName = flow.api_name;
-      row.innerHTML =
-        `<span>${escapeHtml(flow.label + mark)}</span>` +
-        `<span class="combo-mod">${escapeHtml(formatLastMod(flow.last_modified))}</span>`;
+      const nameLine =
+        `<div class="combo-item-row"><span>${highlightMatch(flow.label + mark, query)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(flow.last_modified))}</span></div>`;
+      // The description isn't shown when the row isn't a search hit through
+      // it - only surfaced (highlighted) when that's actually why it matched,
+      // so a description-less scan of the full list doesn't grow noisier.
+      const descHit = q && (flow.description || "").toLowerCase().includes(q);
+      const descLine = descHit
+        ? `<div class="combo-desc">${highlightMatch(flow.description, query)}</div>`
+        : "";
+      row.innerHTML = nameLine + descLine;
       row.addEventListener("mousedown", (evt) => {
         evt.preventDefault();
         $("flowSearch").value = flow.label + mark;
@@ -1218,6 +1229,27 @@ function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s;
   return div.innerHTML;
+}
+
+// Wraps every case-insensitive occurrence of `query` in `text` with <mark>,
+// escaping everything else - each raw segment goes through escapeHtml before
+// the <mark> tags (ours, not data) are added around it, so this stays safe
+// to drop straight into innerHTML the same way escapeHtml(...) alone was.
+function highlightMatch(text, query) {
+  const q = query.trim();
+  if (!q) return escapeHtml(text);
+  const lower = text.toLowerCase();
+  const needle = q.toLowerCase();
+  let out = "";
+  let i = 0;
+  let at;
+  while ((at = lower.indexOf(needle, i)) !== -1) {
+    out += escapeHtml(text.slice(i, at));
+    out += "<mark>" + escapeHtml(text.slice(at, at + needle.length)) + "</mark>";
+    i = at + needle.length;
+  }
+  out += escapeHtml(text.slice(i));
+  return out;
 }
 
 async function loadFlows() {
@@ -1273,8 +1305,8 @@ function renderApexResults(query) {
       row.className = "combo-item";
       row.dataset.apiName = cls.api_name;
       row.innerHTML =
-        `<span>${escapeHtml(cls.api_name)}</span>` +
-        `<span class="combo-mod">${escapeHtml(formatLastMod(cls.last_modified))}</span>`;
+        `<div class="combo-item-row"><span>${highlightMatch(cls.api_name, query)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(cls.last_modified))}</span></div>`;
       row.addEventListener("mousedown", (evt) => {
         evt.preventDefault();
         $("apexSearch").value = cls.api_name;
@@ -1334,8 +1366,8 @@ function renderTriggerResults(query) {
       row.className = "combo-item";
       row.dataset.apiName = trig.api_name;
       row.innerHTML =
-        `<span>${escapeHtml(trig.api_name)}</span>` +
-        `<span class="combo-mod">${escapeHtml(formatLastMod(trig.last_modified))}</span>`;
+        `<div class="combo-item-row"><span>${highlightMatch(trig.api_name, query)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(trig.last_modified))}</span></div>`;
       row.addEventListener("mousedown", (evt) => {
         evt.preventDefault();
         $("triggerSearch").value = trig.api_name;
@@ -1395,8 +1427,8 @@ function renderLwcResults(query) {
       row.className = "combo-item";
       row.dataset.apiName = comp.api_name;
       row.innerHTML =
-        `<span>${escapeHtml(comp.api_name)}</span>` +
-        `<span class="combo-mod">${escapeHtml(formatLastMod(comp.last_modified))}</span>`;
+        `<div class="combo-item-row"><span>${highlightMatch(comp.api_name, query)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(comp.last_modified))}</span></div>`;
       row.addEventListener("mousedown", (evt) => {
         evt.preventDefault();
         $("lwcSearch").value = comp.api_name;
