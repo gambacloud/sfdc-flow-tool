@@ -8,6 +8,12 @@ const $ = (id) => document.getElementById(id);
 // and forgotten it.
 const SESSION_STORAGE_KEY = "flowtool.sessionId";
 const PLAN_SESSION_STORAGE_KEY = "flowtool.planSessionId";
+// The typed-but-not-yet-submitted "What should be built?" text - separate
+// from PLAN_SESSION_STORAGE_KEY above, which only covers a plan that's
+// already been generated. Without this, a reload while still composing the
+// request silently wiped it, same class of bug the comment on
+// restorePlanSession() below describes for the generated session itself.
+const PLAN_REQUEST_STORAGE_KEY = "flowtool.planRequestText";
 // Which mode ("new" | "open" | "plan") a reload should land back on, when a
 // single-Flow session and a plan session happen to both be stored at once
 // (the user used more than one mode in this tab) - whichever actually
@@ -2120,6 +2126,31 @@ async function restorePlanSession() {
   }
 }
 
+// Restores whatever was typed into "What should be built?" before a reload,
+// even if it was never submitted into an actual plan (see
+// PLAN_REQUEST_STORAGE_KEY above).
+function restorePlanRequestText() {
+  const text = sessionStorage.getItem(PLAN_REQUEST_STORAGE_KEY);
+  if (text) $("planRequest").value = text;
+}
+
+// Clears the "What should be built?" box and drops any plan currently on
+// screen, so starting over doesn't require a reload (which - before this -
+// was the only way, and itself used to silently lose the typed text; see
+// PLAN_REQUEST_STORAGE_KEY above).
+function resetPlan() {
+  $("planRequest").value = "";
+  sessionStorage.removeItem(PLAN_REQUEST_STORAGE_KEY);
+  state.planSessionId = null;
+  state.planVersion = 0;
+  state.planApproved = false;
+  state.planValidatedVersion = null;
+  sessionStorage.removeItem(PLAN_SESSION_STORAGE_KEY);
+  $("planView").hidden = true;
+  $("empty").hidden = false;
+  showError($("planPane"), "");
+}
+
 // Which picker the Open pane shows (Flow, Apex Class or Apex Trigger) - loads
 // its list lazily, the first time it's actually shown, same reasoning as the
 // old flowPicker.dataset.loaded guard this replaces.
@@ -2321,6 +2352,7 @@ async function boot() {
     restoreOAuthFromFragment();
     restoreSessionFromUrlParam();
     renderOAuthStatus();
+    restorePlanRequestText();
     await restoreSessions();
 
     const bits = [];
@@ -2444,6 +2476,10 @@ async function boot() {
   $("deployBtn").onclick = deploy;
 
   $("planBtn").onclick = planAndBuild;
+  $("planResetBtn").onclick = resetPlan;
+  $("planRequest").addEventListener("input", () => {
+    sessionStorage.setItem(PLAN_REQUEST_STORAGE_KEY, $("planRequest").value);
+  });
   $("planApproveBtn").onclick = planApprove;
   $("planValidateBtn").onclick = planValidate;
   $("planDeployBtn").onclick = planDeploy;

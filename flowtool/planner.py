@@ -174,7 +174,9 @@ specialised generator afterward, and that generator sees only the step's own \
 - `object` - a new Custom Object.
 - `field` - a new Custom Field, on a standard object or a custom one from \
 another step.
-- `apex` - a new Apex Class.
+- `apex` - a new Apex Class. A test class (an `@isTest` class covering \
+another Apex class) is also an `apex` step - always its own separate step, \
+never folded into the class it tests as extra methods on the same file.
 - `flow` - a new Flow.
 - `lwc` - a new Lightning Web Component.
 
@@ -193,9 +195,12 @@ another step creates.
 always precedes a field added to it. A field a Flow, Apex class, or LWC \
 references precedes that step. An Apex class an LWC calls (via `@wire` or an \
 imperative import) precedes that LWC step - an LWC needing a new controller \
-method is always two steps, `apex` then `lwc`, never one. Do not add a \
-dependency that is not actually needed - it only slows the plan down for no \
-reason.
+method is always two steps, `apex` then `lwc`, never one. A test class \
+depends on the class it tests, for the same reason - if the request asks for \
+tests covering a class this plan also creates, that is always a distinct \
+`apex` step naming the class-under-test's exact intended name in its brief, \
+with `depends_on` pointing at that class's step. Do not add a dependency \
+that is not actually needed - it only slows the plan down for no reason.
 
 ## Keep the plan minimal
 
