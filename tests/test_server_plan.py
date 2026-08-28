@@ -105,9 +105,9 @@ def poll(client, url, **params):
     raise AssertionError(f"{url} never completed")
 
 
-def make_plan(client, *payloads, request="build it"):
+def make_plan(client, *payloads, request="build it", **extra):
     """Drive /api/plan/start + status, returning the plan_id and steps."""
-    started = client.post("/api/plan/start", json={"request": request})
+    started = client.post("/api/plan/start", json={"request": request, **extra})
     assert started.status_code == 200, started.text
     job_id = started.json()["job_id"]
     response = poll(client, "/api/plan/status", job_id=job_id)
@@ -124,10 +124,10 @@ def execute(client, plan_id):
     return response.json()
 
 
-def full_session(client, scripted, *payloads, request="build it"):
+def full_session(client, scripted, *payloads, request="build it", **extra):
     """One-step convenience: plan -> execute, in one scripted provider."""
     scripted(*payloads)
-    plan = make_plan(client, request=request)
+    plan = make_plan(client, request=request, **extra)
     return execute(client, plan["plan_id"])
 
 
@@ -604,3 +604,104 @@ class TestPlanStepRevise:
         assert started.status_code == 200, started.text
         revised = poll(client, "/api/plan/step/revise/status", session_id=sid)
         assert revised.status_code == 200, revised.text
+
+
+class TestPlanPermissionSet:
+    """The opt-in Access Grant - not a PlanStep (see ir_permset.py's module
+    docstring for why), so it's driven by fields on the /api/plan/start
+    request rather than a step in BUNDLE_PLAN, and shows up as its own
+    `permission_set` key in the session view, not among `steps`."""
+
+    def test_no_grant_configured_means_no_preview(self, client, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        assert session["permission_set"] is None
+
+    def test_new_grant_preview_lists_the_field_and_object(self, client, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(
+            client, grant_permission_set="new", permission_set_label="Invoice_Access",
+        )
+        session = execute(client, plan["plan_id"])
+
+        grant = session["permission_set"]
+        assert grant["mode"] == "new"
+        assert grant["target"] == "Invoice_Access"
+        assert grant["object_grants"] == [{"object_api_name": "Invoice__c"}]
+        assert len(grant["field_grants"]) == 1
+        assert grant["field_grants"][0]["field_api_name"] == "Amount__c"
+        assert grant["field_grants"][0]["object_api_name"] == "Invoice__c"
+        assert grant["field_grants"][0]["editable"] is True
+
+    def test_new_grant_deploys_a_permission_set_member(self, client, typed_scripted, monkeypatch):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(
+            client, grant_permission_set="new", permission_set_label="Invoice_Access",
+        )
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        seen = {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen["files"] = files
+            seen["types"] = types
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/validate/start", json={"session_id": sid})
+        poll(client, "/api/plan/validate/status", session_id=sid)
+
+        assert seen["types"]["PermissionSet"] == ["Invoice_Access"]
+        xml = seen["files"]["permissionsets/Invoice_Access.permissionset"]
+        assert "Invoice__c.Amount__c" in xml
+        assert "<object>Invoice__c</object>" in xml
+
+    def test_existing_grant_merges_into_the_retrieved_document(
+        self, client, typed_scripted, monkeypatch
+    ):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(
+            client, grant_permission_set="existing", permission_set_api_name="Existing_Set",
+        )
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        assert session["permission_set"]["mode"] == "existing"
+        assert session["permission_set"]["target"] == "Existing_Set"
+
+        existing_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">\n'
+            "    <label>Existing Set</label>\n"
+            "    <fieldPermissions>\n"
+            "        <editable>false</editable>\n"
+            "        <field>Account.SomeOtherField__c</field>\n"
+            "        <readable>true</readable>\n"
+            "    </fieldPermissions>\n"
+            "</PermissionSet>\n"
+        )
+
+        async def fake_retrieve(instance_url, token, api_name, api_version="62.0"):
+            assert api_name == "Existing_Set"
+            return existing_xml
+
+        seen = {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen["files"] = files
+            seen["types"] = types
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "retrieve_permission_set", fake_retrieve)
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/validate/start", json={"session_id": sid})
+        poll(client, "/api/plan/validate/status", session_id=sid)
+
+        assert seen["types"]["PermissionSet"] == ["Existing_Set"]
+        xml = seen["files"]["permissionsets/Existing_Set.permissionset"]
+        assert "Account.SomeOtherField__c" in xml, "must keep what was already there"
+        assert "Invoice__c.Amount__c" in xml, "must add the new grant"

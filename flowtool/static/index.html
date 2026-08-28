@@ -217,6 +217,33 @@
         then each piece is generated on its own.
       </p>
 
+      <label class="check">
+        <input type="checkbox" id="planPermSetToggle">
+        Grant access on a Permission Set
+        <span class="dim">(Edit access on any new fields, Read/Create/Edit on any new objects)</span>
+      </label>
+
+      <div id="planPermSetFields" hidden>
+        <div class="open-kind">
+          <label><input type="radio" name="planPermSetMode" id="planPermSetModeNew" value="new" checked> Create new</label>
+          <label><input type="radio" name="planPermSetMode" id="planPermSetModeExisting" value="existing"> Add to existing</label>
+        </div>
+
+        <div id="planPermSetNewFields">
+          <label for="planPermSetLabel">New Permission Set name</label>
+          <input id="planPermSetLabel" type="text" placeholder="Invoice_Access">
+        </div>
+
+        <div id="planPermSetExistingFields" hidden>
+          <label for="planPermSetSearch">Permission Sets in the org</label>
+          <div class="combo">
+            <input id="planPermSetSearch" type="text" autocomplete="off" placeholder="Loading...">
+            <input type="hidden" id="planPermSetPicker" value="">
+            <div id="planPermSetResults" class="combo-list" hidden></div>
+          </div>
+        </div>
+      </div>
+
       <button id="planBtn" class="primary">Plan and build</button>
       <button id="planResetBtn" type="button" class="link-btn">Reset</button>
     </div>
@@ -319,6 +346,7 @@
         <button id="planCollapseAllBtn" class="link-button" type="button">Collapse all</button>
       </div>
       <div class="plan-steps" id="planSteps"></div>
+      <div class="plan-permset" id="planPermSetGrant" hidden></div>
 
       <div class="actions">
         <div class="row">

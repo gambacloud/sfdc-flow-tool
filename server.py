@@ -31,6 +31,7 @@ from flowtool.ir_apex import ApexClass, ApexTrigger
 from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
+from flowtool.ir_permset import PermissionSetGrant, build_grant_from_steps
 from flowtool.llm import (
     AnthropicProvider,
     ApexClassGenerator,
@@ -59,12 +60,14 @@ from flowtool.sfdc import (
     list_apex_triggers,
     list_flows,
     list_lwc_components,
+    list_permission_sets,
     retrieve_all_flows,
     retrieve_apex_class,
     retrieve_apex_trigger,
     retrieve_flow,
     retrieve_lwc_component,
     retrieve_org_summary_zip,
+    retrieve_permission_set,
     validate_bundle,
 )
 from flowtool.xmlgen import generate as generate_xml
@@ -72,6 +75,7 @@ from flowtool.xmlgen_apex import generate_apex, generate_apex_trigger
 from flowtool.xmlgen_lwc import generate_lwc
 from flowtool.xmlgen_mdt import generate_mdt_record, generate_mdt_type
 from flowtool.xmlgen_object import generate_field_delta, generate_object
+from flowtool.xmlgen_permset import generate_permission_set, merge_permission_set_xml
 from survey import Survey, text_report
 
 ROOT = Path(__file__).parent
@@ -553,6 +557,11 @@ class LwcComponentsRequest(FlowsRequest):
     """Same shape again - the Lightning Web Component picker."""
 
 
+class PermissionSetsRequest(FlowsRequest):
+    """Same shape again - the Permission Set picker (the "add to an
+    existing one" case, asked for before any plan session exists)."""
+
+
 class DeployRequest(OrgRequest):
     confirm: bool = False
 
@@ -843,6 +852,21 @@ async def lwc_components(body: LwcComponentsRequest) -> Dict[str, Any]:
         "components": [
             {"api_name": comp.api_name, "last_modified": comp.last_modified}
             for comp in found
+        ]
+    }
+
+
+@app.post("/api/permission-sets")
+async def permission_sets(body: PermissionSetsRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        found = await list_permission_sets(url, token)
+    except RetrieveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "permission_sets": [
+            {"api_name": ps.api_name, "label": ps.label, "last_modified": ps.last_modified}
+            for ps in found
         ]
     }
 
@@ -1455,6 +1479,12 @@ class PlanRequest(BaseModel):
     effort: Literal["medium", "high"] = "medium"
     api_version: str = "62.0"
     api_key: Optional[str] = None
+    # Opt-in Permission Set grant for whatever object/field steps this plan
+    # produces - "new" creates one, "existing" merges into
+    # permission_set_api_name. None (the default) means no grant at all.
+    grant_permission_set: Optional[Literal["new", "existing"]] = None
+    permission_set_label: Optional[str] = None
+    permission_set_api_name: Optional[str] = None
 
 
 class PlanExecuteRequest(BaseModel):
@@ -1471,6 +1501,18 @@ class PlanStepReviseRequest(BaseModel):
 
 
 @dataclass
+class PermissionSetConfig:
+    """The opt-in Permission Set grant a plan can carry, threaded through
+    PendingPlan -> StoredPlan -> PendingPlanExecution -> PlanSession the same
+    way api_version already is end to end. Not a PlanStep - see
+    ir_permset.py's module docstring for why."""
+
+    mode: Literal["new", "existing"]
+    label: Optional[str] = None
+    api_name: Optional[str] = None
+
+
+@dataclass
 class PendingPlan:
     """A planning call running in the background - same shape as PendingDesign,
     one level up: this produces a Plan, not yet any generated metadata."""
@@ -1478,6 +1520,7 @@ class PendingPlan:
     task: "asyncio.Task"
     provider: Provider
     api_version: str
+    permission_set_config: Optional[PermissionSetConfig] = None
 
 
 PLAN_JOBS: Dict[str, PendingPlan] = {}
@@ -1495,6 +1538,7 @@ class StoredPlan:
     provider: Provider
     plan: Plan
     api_version: str
+    permission_set_config: Optional[PermissionSetConfig] = None
 
 
 PLANS: Dict[str, StoredPlan] = {}
@@ -1506,6 +1550,7 @@ class PendingPlanExecution:
     provider: Provider
     plan: Plan
     api_version: str
+    permission_set_config: Optional[PermissionSetConfig] = None
 
 
 PLAN_EXECUTIONS: Dict[str, PendingPlanExecution] = {}
@@ -1520,6 +1565,7 @@ class PlanSession:
     api_version: str = "62.0"
     version: int = 1
     approved_version: int = 0
+    permission_set_config: Optional[PermissionSetConfig] = None
     pending_deploy: Optional[PendingDeploy] = None
     pending_llm: Optional[PendingLLM] = None
     # What the org said last time validate failed. `last_failures` is the
@@ -1613,12 +1659,36 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
     return entry
 
 
+def _permission_set_view(session: PlanSession) -> Optional[Dict[str, Any]]:
+    """The Access Grant preview - pure data already in hand (no org contact),
+    so it's available the instant execute finishes, well before deploy is
+    the one place that needs org creds (to retrieve an existing Permission
+    Set for merging - see _add_permission_set_files)."""
+    config = session.permission_set_config
+    if config is None:
+        return None
+    grant = build_grant_from_steps(session.steps, config.label or config.api_name or "Generated Access")
+    return {
+        "mode": config.mode,
+        "target": config.label if config.mode == "new" else config.api_name,
+        "field_grants": [
+            {"field_api_name": fg.field_api_name, "object_api_name": fg.object_api_name,
+             "editable": fg.editable}
+            for fg in grant.field_grants
+        ],
+        "object_grants": [
+            {"object_api_name": og.object_api_name} for og in grant.object_grants
+        ],
+    }
+
+
 def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "version": session.version,
         "approved": session.approved,
         "steps": [_step_view(r) for r in session.steps],
+        "permission_set": _permission_set_view(session),
         "usage": session.provider.usage.as_dict(),
     }
 
@@ -1721,10 +1791,23 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    permission_set_config = (
+        PermissionSetConfig(
+            mode=body.grant_permission_set,
+            label=body.permission_set_label,
+            api_name=body.permission_set_api_name,
+        )
+        if body.grant_permission_set is not None
+        else None
+    )
+
     generator = PlannerGenerator(provider)
     task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
     job_id = uuid.uuid4().hex
-    PLAN_JOBS[job_id] = PendingPlan(task=task, provider=provider, api_version=body.api_version)
+    PLAN_JOBS[job_id] = PendingPlan(
+        task=task, provider=provider, api_version=body.api_version,
+        permission_set_config=permission_set_config,
+    )
     return {"job_id": job_id}
 
 
@@ -1740,7 +1823,8 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
     result = llm_result(pending.task)
     plan_id = uuid.uuid4().hex
     PLANS[plan_id] = StoredPlan(
-        provider=pending.provider, plan=result.value, api_version=pending.api_version
+        provider=pending.provider, plan=result.value, api_version=pending.api_version,
+        permission_set_config=pending.permission_set_config,
     )
     steps = [
         {"name": s.name, "artifact_type": s.artifact_type, "brief": s.brief,
@@ -1769,6 +1853,7 @@ async def plan_execute_start(body: PlanExecuteRequest) -> Dict[str, Any]:
     job_id = uuid.uuid4().hex
     PLAN_EXECUTIONS[job_id] = PendingPlanExecution(
         task=task, provider=stored.provider, plan=stored.plan, api_version=stored.api_version,
+        permission_set_config=stored.permission_set_config,
     )
     return {"job_id": job_id}
 
@@ -1787,6 +1872,7 @@ async def plan_execute_status(job_id: str) -> Dict[str, Any]:
     session = PlanSession(
         provider=pending.provider, plan=pending.plan, steps=steps,
         api_version=pending.api_version,
+        permission_set_config=pending.permission_set_config,
     )
     session.apply_policy()
     PLAN_SESSIONS[session_id] = session
@@ -1804,6 +1890,50 @@ def plan_approve(body: ApproveRequest) -> Dict[str, Any]:
     return plan_view(body.session_id, session)
 
 
+async def _add_permission_set_files(
+    config: PermissionSetConfig,
+    steps: List[StepResult],
+    url: str,
+    token: str,
+    api_version: str,
+    files: Dict[str, str],
+    types: Dict[str, List[str]],
+) -> None:
+    """
+    Renders the opt-in Permission Set grant and folds it into `files`/`types`
+    in place - "new" needs no org contact (a fresh document); "existing"
+    retrieves the current .permissionset XML first and merges into it. Kept
+    separate from _bundle_files_and_types (which stays sync/org-free) since
+    this is the one part of a plan's deploy that can need an org round trip
+    before the bundle is complete.
+    """
+    grant = build_grant_from_steps(steps, config.label or config.api_name or "Generated Access")
+    if config.mode == "new":
+        api_name = config.label or "Generated_Access"
+        xml = generate_permission_set(grant, api_name=api_name)
+    else:
+        existing_xml = await retrieve_permission_set(url, token, config.api_name, api_version=api_version)
+        xml = merge_permission_set_xml(existing_xml, grant)
+        api_name = config.api_name
+
+    files[f"permissionsets/{api_name}.permissionset"] = xml
+    types.setdefault("PermissionSet", []).append(api_name)
+
+
+async def _deploy_plan_bundle(
+    session: PlanSession, url: str, token: str, check_only: bool,
+) -> Any:
+    files, types = _bundle_files_and_types(session.steps)
+    if session.permission_set_config is not None:
+        await _add_permission_set_files(
+            session.permission_set_config, session.steps, url, token,
+            session.api_version, files, types,
+        )
+    return await validate_bundle(
+        url, token, files, types, api_version=session.api_version, check_only=check_only,
+    )
+
+
 def _start_plan_deploy(
     session: PlanSession,
     org: Optional[str],
@@ -1814,13 +1944,7 @@ def _start_plan_deploy(
     if session.pending_deploy is not None and not session.pending_deploy.task.done():
         raise HTTPException(409, "A validate/deploy is already running for this plan.")
     url, token = credentials(org, instance_url, access_token)
-    files, types = _bundle_files_and_types(session.steps)
-    task = asyncio.create_task(
-        validate_bundle(
-            url, token, files, types,
-            api_version=session.api_version, check_only=check_only,
-        )
-    )
+    task = asyncio.create_task(_deploy_plan_bundle(session, url, token, check_only))
     session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
 
 

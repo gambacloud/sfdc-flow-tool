@@ -51,6 +51,7 @@ const state = {
   apexClasses: [], // same, for the Apex Class picker in "Open one from the org"
   apexTriggers: [], // same, for the Apex Trigger picker
   lwcComponents: [], // same, for the Lightning Web Component picker
+  permissionSets: [], // same, for the "add to existing" Permission Set picker in "Build multiple things"
   openKind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which picker the Open pane currently shows
   newKind: "flow", // "flow" | "lwc" - which single-artifact kind "Describe a new..." creates
   lwcHtml: null, // the current LWC session's raw html - kept for the Preview pill, no extra fetch needed
@@ -1027,6 +1028,7 @@ function renderPlan(data) {
   steps.forEach((step) => container.appendChild(renderPlanStep(step)));
 
   $("planReportLink").href = `api/plan/session/${data.session_id}/report`;
+  renderPermissionSetGrant(data.permission_set);
 
   if (data.usage) state.usage = data.usage;
   renderLogs();
@@ -1470,6 +1472,131 @@ async function loadLwcComponents() {
   }
 }
 
+function renderPermissionSetResults(query) {
+  const list = $("planPermSetResults");
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? state.permissionSets.filter(
+        (p) => p.api_name.toLowerCase().includes(q) || (p.label || "").toLowerCase().includes(q)
+      )
+    : state.permissionSets;
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = "no matching Permission Sets";
+    list.appendChild(empty);
+  } else {
+    matches.forEach((ps) => {
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = ps.api_name;
+      row.innerHTML =
+        `<div class="combo-item-row"><span>${highlightMatch(ps.label || ps.api_name, query)}</span>` +
+        `<span class="combo-mod">${escapeHtml(formatLastMod(ps.last_modified))}</span></div>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $("planPermSetSearch").value = ps.label || ps.api_name;
+        $("planPermSetPicker").value = ps.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+async function loadPermissionSets() {
+  const search = $("planPermSetSearch");
+  const picker = $("planPermSetPicker");
+  const list = $("planPermSetResults");
+  state.permissionSets = [];
+  picker.value = "";
+  list.hidden = true;
+  if (!state.org && !state.sfCli) {
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
+    return;
+  }
+  search.disabled = true;
+  search.placeholder = "Loading...";
+  try {
+    const data = await api("api/permission-sets", orgCredentials());
+    state.permissionSets = data.permission_sets
+      .slice()
+      .sort((a, b) => (a.label || a.api_name).localeCompare(b.label || b.api_name, undefined, { sensitivity: "base" }));
+    search.disabled = false;
+    search.placeholder = data.permission_sets.length ? "Search Permission Sets..." : "no Permission Sets in this org";
+  } catch (err) {
+    search.disabled = false;
+    search.placeholder = "could not list Permission Sets";
+    showError($("planPane"), err.message);
+    logError("Load Permission Sets", err.message);
+  }
+}
+
+// Toggles the whole Access Grant sub-form and lazily loads the existing-set
+// picker the first time "existing" is actually selected - same guard
+// loadOpenPaneList() uses for the Open-pane pickers.
+function setPlanPermSetVisible(visible) {
+  $("planPermSetFields").hidden = !visible;
+}
+
+function setPlanPermSetMode(mode) {
+  $("planPermSetNewFields").hidden = mode !== "new";
+  $("planPermSetExistingFields").hidden = mode !== "existing";
+  if (mode === "existing" && !$("planPermSetPicker").dataset.loaded) {
+    $("planPermSetPicker").dataset.loaded = "1";
+    loadPermissionSets();
+  }
+}
+
+// The grant_permission_set/permission_set_label/permission_set_api_name
+// fields planAndBuild() adds to its /api/plan/start POST - null (the
+// server's "no grant" default) when the checkbox is off.
+function planPermSetRequestFields() {
+  if (!$("planPermSetToggle").checked) return { grant_permission_set: null };
+  const mode = $("planPermSetModeExisting").checked ? "existing" : "new";
+  return {
+    grant_permission_set: mode,
+    permission_set_label: mode === "new" ? $("planPermSetLabel").value.trim() || null : null,
+    permission_set_api_name: mode === "existing" ? $("planPermSetPicker").value || null : null,
+  };
+}
+
+function renderPermissionSetGrant(grant) {
+  const box = $("planPermSetGrant");
+  if (!grant) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = "";
+
+  const title = document.createElement("h3");
+  title.textContent = grant.mode === "existing"
+    ? `Access Grant - merging into "${grant.target}"`
+    : `Access Grant - new Permission Set "${grant.target}"`;
+  box.appendChild(title);
+
+  if (grant.object_grants.length) {
+    const p = document.createElement("p");
+    p.className = "dim";
+    p.textContent = "Objects (Read/Create/Edit): " +
+      grant.object_grants.map((og) => og.object_api_name).join(", ");
+    box.appendChild(p);
+  }
+  if (grant.field_grants.length) {
+    const p = document.createElement("p");
+    p.className = "dim";
+    p.textContent = "Fields: " + grant.field_grants
+      .map((fg) => `${fg.object_api_name}.${fg.field_api_name} (${fg.editable ? "Edit" : "Read"})`)
+      .join(", ");
+    box.appendChild(p);
+  }
+}
+
 // Which hidden <input> holds the chosen api_name, per Open-pane kind.
 const OPEN_PICKER_IDS = {
   flow: "flowPicker", apex: "apexPicker", trigger: "triggerPicker", lwc: "lwcPicker",
@@ -1896,6 +2023,7 @@ async function planAndBuild() {
       api_version: $("apiVersion").value.trim() || "62.0",
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
+      ...planPermSetRequestFields(),
     });
     const planned = await poll("api/plan/status", { job_id });
     // Not another busy(button, true, ...) call: it stashes the *current*
@@ -2210,6 +2338,14 @@ function resetPlan() {
   $("planView").hidden = true;
   $("empty").hidden = false;
   showError($("planPane"), "");
+
+  $("planPermSetToggle").checked = false;
+  setPlanPermSetVisible(false);
+  $("planPermSetModeNew").checked = true;
+  setPlanPermSetMode("new");
+  $("planPermSetLabel").value = "";
+  $("planPermSetSearch").value = "";
+  $("planPermSetPicker").value = "";
 }
 
 // Which picker the Open pane shows (Flow, Apex Class or Apex Trigger) - loads
@@ -2245,10 +2381,14 @@ function loadOpenPaneList() {
 
 // Reloads whichever Open-pane pickers have already been shown once - used
 // when the credentials backing them change (org switch, manual connect).
+// Also covers the plan pane's own Permission Set picker, which isn't part
+// of OPEN_PANE_LOADERS (that dict is keyed to the Open-pane's openKind, a
+// different left-pane mode) but follows the exact same lazy-load-once guard.
 function reloadLoadedOpenPanePickers() {
   Object.values(OPEN_PANE_LOADERS).forEach(({ picker, load }) => {
     if ($(picker).dataset.loaded) load();
   });
+  if ($("planPermSetPicker").dataset.loaded) loadPermissionSets();
 }
 
 // Switches the left pane's mode and, correspondingly, which one of {empty
@@ -2540,6 +2680,19 @@ async function boot() {
   $("planResetBtn").onclick = resetPlan;
   $("planRequest").addEventListener("input", () => {
     sessionStorage.setItem(PLAN_REQUEST_STORAGE_KEY, $("planRequest").value);
+  });
+  $("planPermSetToggle").onchange = () => setPlanPermSetVisible($("planPermSetToggle").checked);
+  $("planPermSetModeNew").onchange = () => setPlanPermSetMode("new");
+  $("planPermSetModeExisting").onchange = () => setPlanPermSetMode("existing");
+  $("planPermSetSearch").addEventListener("input", () => {
+    $("planPermSetPicker").value = "";
+    renderPermissionSetResults($("planPermSetSearch").value);
+  });
+  $("planPermSetSearch").addEventListener("focus", () => {
+    if (state.permissionSets.length) renderPermissionSetResults($("planPermSetSearch").value);
+  });
+  $("planPermSetSearch").addEventListener("blur", () => {
+    $("planPermSetResults").hidden = true;
   });
   $("planApproveBtn").onclick = planApprove;
   $("planValidateBtn").onclick = planValidate;

@@ -833,6 +833,74 @@ async def retrieve_lwc_component(
     )
 
 
+@dataclass
+class PermissionSetSummary:
+    api_name: str
+    label: Optional[str] = None
+    last_modified: Optional[str] = None
+
+
+async def list_permission_sets(
+    instance_url: str, session_id: str, api_version: str = "62.0"
+) -> List[PermissionSetSummary]:
+    """
+    Every Permission Set in the org a person could actually pick as a merge
+    target, newest first - Tooling API query, same reasoning list_flows/
+    list_lwc_components use (a Permission Set has no queryable body either).
+    IsOwnedByProfile excludes the shadow permission set every Profile
+    carries internally - not something anyone picks from a list like this.
+    """
+    base = _normalise(instance_url)
+    query = (
+        "SELECT Name, Label, LastModifiedDate FROM PermissionSet "
+        "WHERE IsOwnedByProfile = false ORDER BY LastModifiedDate DESC"
+    )
+    url = f"{base}/services/data/v{api_version}/tooling/query"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            url,
+            params={"q": query},
+            headers={"Authorization": f"Bearer {session_id}"},
+        )
+    if resp.status_code != 200:
+        fault = _fault_string(resp.text)
+        raise RetrieveError(
+            fault or f"Could not list Permission Sets ({resp.status_code}): {resp.text[:300]}"
+        )
+
+    return [
+        PermissionSetSummary(
+            api_name=record["Name"],
+            label=record.get("Label"),
+            last_modified=record.get("LastModifiedDate"),
+        )
+        for record in resp.json().get("records", [])
+    ]
+
+
+async def retrieve_permission_set(
+    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+) -> str:
+    """
+    Pull one Permission Set's current .permissionset XML out of the org, for
+    merging new grants into it. Like Flow/LWC and unlike Apex, a Permission
+    Set has no single queryable body field - fieldPermissions/
+    objectPermissions/etc. are all sub-elements - so this is the same
+    Metadata-API retrieve-job-and-unzip flow retrieve_lwc_component uses.
+    """
+    async with MetadataClient(instance_url, session_id, api_version) as client:
+        job_id = await client.start_retrieve_types({"PermissionSet": [api_name]})
+        zip_bytes = await client.wait_for_retrieve(job_id)
+
+    wanted = f"permissionsets/{api_name}.permissionset"
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        if wanted not in archive.namelist():
+            raise RetrieveError(
+                f"{api_name} was not in the retrieved package. Check the API name."
+            )
+        return archive.read(wanted).decode("utf-8")
+
+
 async def list_apex_triggers(
     instance_url: str, session_id: str, api_version: str = "62.0"
 ) -> List[ApexTriggerSummary]:
