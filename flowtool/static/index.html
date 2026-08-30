@@ -207,15 +207,11 @@
     </div>
 
     <div class="pad" id="planPane" hidden>
-      <label for="planRequest">What should be built?</label>
+      <label for="planRequest">What should be built?
+        <span class="info-icon" tabindex="0" title="Can be one thing or several - any mix of Custom Objects, Custom Fields, Apex Classes, Flows, and Lightning Web Components. A model first decides how many pieces the request needs and in what order, then each piece is generated on its own.">&#9432;</span>
+      </label>
       <textarea id="planRequest" rows="4"
         placeholder="An Invoice object with an Amount field, and a flow that marks it Paid when the amount is settled"></textarea>
-      <p class="dim">
-        Can be one thing or several - any mix of Custom Objects, Custom
-        Fields, Apex Classes, Flows, and Lightning Web Components. A model
-        first decides how many pieces the request needs and in what order,
-        then each piece is generated on its own.
-      </p>
 
       <label class="check">
         <input type="checkbox" id="planPermSetToggle">

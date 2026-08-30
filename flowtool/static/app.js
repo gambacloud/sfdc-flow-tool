@@ -57,6 +57,7 @@ const state = {
   lwcHtml: null, // the current LWC session's raw html - kept for the Preview pill, no extra fetch needed
   kind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which artifact type flowView is currently showing
   showIrSubtab: false, // SHOW_IR_SUBTAB config var - the IR tab is a debugging aid, off by default
+  highlightPlanMode: false, // HIGHLIGHT_PLAN_MODE config var - hides "new", moves Options into the Builder pane
 };
 
 let mermaid = null;
@@ -2402,16 +2403,27 @@ function reloadLoadedOpenPanePickers() {
 }
 
 // Gated by the HIGHLIGHT_PLAN_MODE config var (server.py's /api/config) -
-// moves "Build multiple things" to the front of the mode buttons and marks
-// it visually, without changing which mode is selected by default. Purely a
-// DOM reorder + class toggle, so it composes with activateMode()/
-// restoreSessions() below unmodified - neither cares about button order.
+// moves "Build multiple things" to the front of the mode buttons, marks it
+// visually, and hides "Describe a new flow" entirely (its job - a single
+// artifact - is still reachable as a one-step plan through "Build multiple
+// things", so nothing is actually lost). Options moves into the Builder
+// pane to match (see activateMode() below), since "new" was its only home
+// before. Left as two visible modes: Open, and the featured Builder.
 function highlightPlanMode() {
   const planBtn = document.querySelector('.mode[data-mode="plan"]');
+  const newBtn = document.querySelector('.mode[data-mode="new"]');
   const modes = planBtn?.parentElement;
   if (!planBtn || !modes) return;
   modes.insertBefore(planBtn, modes.firstChild);
   planBtn.classList.add("featured");
+  state.highlightPlanMode = true;
+  if (newBtn) newBtn.hidden = true;
+  // No mode has been explicitly activated yet at this point in boot() -
+  // restoreSessions() (called right after) will override this with
+  // whichever mode a stored session actually belongs to, so this is only
+  // the fresh-visit default, replacing the "new" mode a fresh visit used
+  // to land on.
+  activateMode("plan");
 }
 
 // Switches the left pane's mode and, correspondingly, which one of {empty
@@ -2419,15 +2431,22 @@ function highlightPlanMode() {
 // buttons' own click handler and by restoreSessions() below, so a reload
 // lands on whichever mode was actually last in use, not always "new".
 function activateMode(selected) {
+  // "new" may still be requested by a stale sessionStorage lastMode value
+  // saved before HIGHLIGHT_PLAN_MODE was turned on - its button is hidden
+  // now, so land on the Builder instead of a mode nothing points at.
+  if (state.highlightPlanMode && selected === "new") selected = "plan";
   document.querySelectorAll(".mode").forEach((btn) =>
     btn.classList.toggle("active", btn.dataset.mode === selected)
   );
   $("openPane").hidden = selected !== "open";
   $("newPane").hidden = selected !== "new";
   $("planPane").hidden = selected !== "plan";
-  // "Describe a new flow" only - "open" doesn't use it (an imported flow
-  // keeps whatever status it already has), and "plan" no longer shows it.
-  $("sharedOptions").hidden = selected !== "new";
+  // Normally "Describe a new flow" only - "open" doesn't use it (an
+  // imported flow keeps whatever status it already has), and "plan"
+  // doesn't either. HIGHLIGHT_PLAN_MODE flips that: "new" is hidden, so
+  // Options moves into the Builder pane, its only remaining need for it
+  // (provider/model/effort/api key/parallel toggle all still apply there).
+  $("sharedOptions").hidden = state.highlightPlanMode ? selected !== "plan" : selected !== "new";
   if (selected === "open") loadOpenPaneList();
 
   // The right panel shows exactly one of: empty state, a single Flow

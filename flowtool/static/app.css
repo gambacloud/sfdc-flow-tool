@@ -179,6 +179,16 @@ main {
 
 label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
 label.check { display: flex; align-items: center; gap: 6px; color: var(--text); }
+/* A hover/focus tooltip (native `title`) standing in for a paragraph of
+   explanatory text, so the pane above the request box stays uncluttered. */
+.info-icon {
+  display: inline-block;
+  cursor: help;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+}
+.info-icon:hover, .info-icon:focus { color: var(--accent); }
 
 textarea, input, select {
   width: 100%;
