@@ -27,6 +27,7 @@ from .ir_apex import ApexClass
 from .ir_lwc import LightningComponent
 from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
+from .ir_platform_event import PlatformEvent
 from .ir import Flow
 from .llm import (
     ApexClassGenerator,
@@ -41,12 +42,13 @@ from .llm import (
     LwcGenerator,
     Message,
     MetadataTypeGenerator,
+    PlatformEventGenerator,
     Provider,
 )
 
-ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" - see PlanStep.artifact_type
+ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" - see PlanStep.artifact_type
 
-_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record"}
+_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record", "platform_event"}
 
 
 class PlanStep(BaseModel):
@@ -188,6 +190,11 @@ a separate `field` step (a `field` step is only ever for a regular Custom \
 Object).
 - `mdt_record` - one record (row) of a Custom Metadata Type, existing or \
 created earlier in this same plan.
+- `platform_event` - a new Platform Event, **including its fields** - same \
+reasoning as `mdt`: a platform event's fields are part of this one step, \
+never a separate `field` step. A platform event's fields only support Text, \
+Number, Checkbox, Date, DateTime, LongTextArea - never Picklist, Lookup, or \
+Master-Detail.
 
 ## Writing a brief
 
@@ -213,8 +220,13 @@ depends on its `mdt` step when that type is also being created in this plan \
 (never when the request names a type that already exists in the org - there \
 is nothing in this plan for it to depend on then). A `MetadataRelationship` \
 field on one `mdt` step that targets another `mdt` step this plan also \
-creates depends on that other step too. Do not add a dependency that is not \
-actually needed - it only slows the plan down for no reason.
+creates depends on that other step too. A Flow step that listens for a \
+platform event (`trigger_type` PlatformEvent) or publishes one (creates a \
+record of it) depends on that event's `platform_event` step when this plan \
+also creates it, for the same reason an LWC step depends on the Apex \
+controller it calls - the Flow needs the event's exact generated api_name. \
+Do not add a dependency that is not actually needed - it only slows the plan \
+down for no reason.
 
 ## Keep the plan minimal
 
@@ -252,6 +264,7 @@ _GENERATOR_BY_TYPE: Dict[str, Type[IRGenerator]] = {
     "lwc": LwcGenerator,
     "mdt": MetadataTypeGenerator,
     "mdt_record": CustomMetadataRecordGenerator,
+    "platform_event": PlatformEventGenerator,
 }
 
 # A cap on how many steps in one layer run at once, not "as many as fit."
@@ -266,7 +279,7 @@ _MAX_PARALLEL_STEPS = 3
 # from Phase 1. StepResult.value below normalises the two into one attribute.
 StepValue = Union[
     Flow, CustomObject, CustomField, ApexClass, LightningComponent,
-    MetadataType, CustomMetadataRecord,
+    MetadataType, CustomMetadataRecord, PlatformEvent,
 ]
 
 
@@ -337,6 +350,14 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
             lines.append(
                 f"- Step {dep_name!r} created Custom Metadata record "
                 f"{value.type_api_name}.{value.developer_name!r}."
+            )
+        elif isinstance(value, PlatformEvent):
+            field_list = ", ".join(f"{f.api_name} ({f.type})" for f in value.fields)
+            lines.append(
+                f"- Step {dep_name!r} created Platform Event api_name={value.api_name!r} "
+                f"with fields: {field_list}. To listen for it in a Flow, set "
+                f"trigger_type to PlatformEvent and object to {value.api_name!r}. To "
+                f"publish it, create a record of {value.api_name!r}."
             )
 
     if not lines:

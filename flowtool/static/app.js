@@ -776,6 +776,7 @@ const PLAN_ARTIFACT_LABELS = {
   flow: "Flow", object: "Object", field: "Field", apex: "Apex Class",
   lwc: "Lightning Web Component",
   mdt: "Custom Metadata Type", mdt_record: "Custom Metadata Record",
+  platform_event: "Platform Event",
 };
 
 function planStepSummary(step) {
@@ -794,6 +795,8 @@ function planStepSummary(step) {
       return `${step.field_count} field${step.field_count === 1 ? "" : "s"}`;
     case "mdt_record":
       return step.developer_name;
+    case "platform_event":
+      return `${step.field_count} field${step.field_count === 1 ? "" : "s"}`;
     default:
       return "";
   }
@@ -961,6 +964,13 @@ function renderPlanStep(step) {
       ["Developer name", step.developer_name],
       ...Object.entries(step.values),
     ]));
+  } else if (step.artifact_type === "platform_event") {
+    body.appendChild(planStepTable([
+      ["API name", step.api_name],
+      ["Label", step.label],
+      ["Publish behavior", step.publish_behavior],
+    ]));
+    body.appendChild(planStepFieldList(step.fields));
   }
 
   if (step.depends_on && step.depends_on.length) {

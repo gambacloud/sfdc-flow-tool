@@ -13,6 +13,7 @@ from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_ir_mdt_generator import VALID_MDT, VALID_RECORD
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
+from tests.test_ir_platform_event_generator import VALID_EVENT as VALID_PLATFORM_EVENT
 from tests.test_llm import ScriptedProvider, TypedScriptedProvider, VALID as VALID_FLOW
 
 ONE_STEP_PLAN = {
@@ -48,6 +49,16 @@ MDT_PLAN = {
         {"artifact_type": "mdt", "name": "Type", "brief": "a feature flag type"},
         {"artifact_type": "mdt_record", "name": "Record", "brief": "a New UI record",
          "depends_on": ["Type"]},
+    ]
+}
+
+# A Platform Event + a Flow that listens for it - the shape the user asked
+# for: define the event once, react to it in the same transaction it deploys.
+PLATFORM_EVENT_PLAN = {
+    "steps": [
+        {"artifact_type": "platform_event", "name": "Event", "brief": "an order placed event"},
+        {"artifact_type": "flow", "name": "Listener", "brief": "a flow that listens for it",
+         "depends_on": ["Event"]},
     ]
 }
 
@@ -385,6 +396,40 @@ class TestPlanDeploy:
         assert "<sharingModel>" not in object_file
         record_file = seen_files["customMetadata/Feature_Flag__mdt.New_UI.md"]
         assert 'xsi:type="xsd:boolean"' in record_file
+
+    def test_confirmed_deploy_bundles_platform_event_and_its_listener_flow(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        typed_scripted(plan=PLATFORM_EVENT_PLAN, platform_event=VALID_PLATFORM_EVENT, flow=VALID_FLOW)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        seen_types = {}
+        seen_files = {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen_types.update(types)
+            seen_files.update(files)
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        started = client.post(
+            "/api/plan/deploy/start", json={"session_id": sid, "confirm": True}
+        )
+        assert started.status_code == 200, started.text
+        result = poll(client, "/api/plan/deploy/status", session_id=sid)
+        assert result.json()["success"] is True
+        # A platform event deploys under the same package.xml member type as
+        # a regular Custom Object too - see server.py's _bundle_files_and_types.
+        assert set(seen_types) == {"CustomObject", "Flow"}
+        assert seen_types["CustomObject"] == ["Order_Placed__e"]
+        object_file = seen_files["objects/Order_Placed__e.object"]
+        assert "<eventType>HighVolume</eventType>" in object_file
+        assert "<publishBehavior>" in object_file
+        assert "<sharingModel>" not in object_file
 
     def test_successful_deploy_returns_a_setup_link_per_step(
         self, client, typed_scripted, monkeypatch,

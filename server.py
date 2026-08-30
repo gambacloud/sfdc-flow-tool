@@ -31,6 +31,7 @@ from flowtool.ir_apex import ApexClass, ApexTrigger
 from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
+from flowtool.ir_platform_event import PlatformEvent
 from flowtool.ir_permset import PermissionSetGrant, build_grant_from_steps
 from flowtool.llm import (
     AnthropicProvider,
@@ -75,6 +76,7 @@ from flowtool.xmlgen_apex import generate_apex, generate_apex_trigger
 from flowtool.xmlgen_lwc import generate_lwc
 from flowtool.xmlgen_mdt import generate_mdt_record, generate_mdt_type
 from flowtool.xmlgen_object import generate_field_delta, generate_object
+from flowtool.xmlgen_platform_event import generate_platform_event
 from flowtool.xmlgen_permset import generate_permission_set, merge_permission_set_xml
 from survey import Survey, text_report
 
@@ -1656,6 +1658,14 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "developer_name": value.developer_name,
             "values": value.values,
         })
+    elif isinstance(value, PlatformEvent):
+        entry.update({
+            "api_name": value.api_name,
+            "label": value.label,
+            "publish_behavior": value.publish_behavior,
+            "field_count": len(value.fields),
+            "fields": [{"api_name": f.api_name, "type": f.type} for f in value.fields],
+        })
     return entry
 
 
@@ -1715,6 +1725,7 @@ def _bundle_files_and_types(
     objects: Dict[str, CustomObject] = {}
     fields_by_object: Dict[str, List[CustomField]] = {}
     mdt_types: Dict[str, MetadataType] = {}
+    platform_events: Dict[str, PlatformEvent] = {}
     other_steps: List[StepResult] = []
 
     for result in steps:
@@ -1725,6 +1736,8 @@ def _bundle_files_and_types(
             fields_by_object.setdefault(value.object_api_name, []).append(value)
         elif isinstance(value, MetadataType):
             mdt_types[value.api_name] = value
+        elif isinstance(value, PlatformEvent):
+            platform_events[value.api_name] = value
         else:
             other_steps.append(result)
 
@@ -1753,6 +1766,15 @@ def _bundle_files_and_types(
         # (generate_mdt_type), never split into a delta the way CustomField
         # can be - a __mdt has no "add a field later" step in this tool.
         files[f"objects/{api_name}.object"] = generate_mdt_type(mdt)
+        types.setdefault("CustomObject", []).append(api_name)
+
+    for api_name, event in platform_events.items():
+        # A platform event deploys under the same package.xml member type as
+        # a regular Custom Object too - confirmed against Salesforce's own
+        # Metadata API and Platform Events documentation, not assumed. Its
+        # fields are always embedded (generate_platform_event), same reason
+        # a __mdt type's are: no "add a field later" step exists for either.
+        files[f"objects/{api_name}.object"] = generate_platform_event(event)
         types.setdefault("CustomObject", []).append(api_name)
 
     for result in other_steps:

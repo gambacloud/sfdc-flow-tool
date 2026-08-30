@@ -16,6 +16,7 @@ from flowtool.ir_apex import ApexClass
 from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
+from flowtool.ir_platform_event import PlatformEvent
 from flowtool.llm import APEX_SYSTEM_PROMPT, FIELD_SYSTEM_PROMPT, OBJECT_SYSTEM_PROMPT
 from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, execute_plan, refine_step, repair_step,
@@ -24,6 +25,7 @@ from tests.test_ir_apex_generator import VALID as VALID_APEX
 from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_ir_mdt_generator import VALID_MDT, VALID_RECORD
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
+from tests.test_ir_platform_event_generator import VALID_EVENT as VALID_PLATFORM_EVENT
 from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider, TypedScriptedProvider
 
 
@@ -220,6 +222,37 @@ class TestExecutePlan:
 
         assert isinstance(results[0].value, CustomMetadataRecord)
         assert results[0].value.developer_name == "New_UI"
+
+    def test_platform_event_step_runs_the_platform_event_generator(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="platform_event", name="Order Placed", brief="an order placed event"),
+        ])
+        provider = ScriptedProvider(VALID_PLATFORM_EVENT)
+        results = execute_plan(provider, plan)
+
+        assert len(results) == 1
+        assert isinstance(results[0].value, PlatformEvent)
+        assert results[0].value.api_name == "Order_Placed__e"
+
+    def test_platform_event_dependency_gives_the_flow_step_the_real_api_name(self):
+        # Same reasoning as the apex->lwc case above: the Flow step's brief
+        # is written before the platform_event step has actually run, so it
+        # needs the real generated __e api_name (and field names) injected
+        # once the event is actually generated - Start.object has to be
+        # exactly right for the Flow to actually listen for the real event.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="platform_event", name="Event", brief="an order placed event"),
+            PlanStep(artifact_type="flow", name="Listener", brief="a flow that listens for it",
+                      depends_on=["Event"]),
+        ])
+        provider = TypedScriptedProvider(platform_event=VALID_PLATFORM_EVENT, flow=VALID_FLOW)
+        execute_plan(provider, plan)
+
+        flow_calls = [c for c in provider.calls if c[0] == "flow"]
+        assert len(flow_calls) == 1
+        brief = flow_calls[0][1][0].content
+        assert VALID_PLATFORM_EVENT["api_name"] + "__e" in brief
+        assert "AccountId__c" in brief
 
     def test_dependent_step_is_told_the_dependency_s_actual_name(self):
         # The planner writes every brief before any step has actually run, so

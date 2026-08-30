@@ -30,6 +30,7 @@ from .ir_lwc import LightningComponent
 from .ir_lwc import heuristic_errors as lwc_heuristic_errors
 from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
+from .ir_platform_event import PlatformEvent
 
 DEFAULT_MAX_REPAIRS = 3
 
@@ -560,6 +561,37 @@ as plain text, exactly as it should be stored - write "true"/"false" for a \
 checkbox field, a plain number for a numeric one. Only set a value for a \
 field the type actually has and the request actually specifies - do not \
 invent values for fields nobody mentioned.
+"""
+
+
+PLATFORM_EVENT_SYSTEM_PROMPT = """\
+You translate a description of an event a Salesforce org should be able to \
+publish and subscribe to into a Salesforce Platform Event IR document.
+
+You produce IR only, never metadata XML - a compiler generates that from your IR.
+
+- `api_name` is suffixed `__e` automatically; write it without the suffix or \
+with it, either is fine.
+- Like a Custom Metadata Type, a platform event's fields are part of this \
+same IR (`fields`), not a separate request - include every field the \
+request needs here.
+- Each field's `api_name` is suffixed `__c` automatically. `type` is one of \
+Text, Number, Checkbox, Date, DateTime, LongTextArea - Salesforce allows no \
+other type on a platform event field: there is no Picklist, Lookup, \
+Master-Detail, Currency, or Time here, however natural one might otherwise \
+seem for the request.
+- Only set `length` on Text or LongTextArea, `visible_lines` on LongTextArea, \
+or `precision`/`scale` on Number. Leave `default_value` unset unless the \
+request specifically wants a Checkbox field to default true, and leave \
+`visible_lines` unset unless the request specifies how many lines a \
+LongTextArea should show - both fill in automatically otherwise.
+- `publish_behavior` is `PublishAfterCommit` (the default - the event only \
+publishes once the publishing transaction actually commits) unless the \
+request specifically wants the event to fire immediately regardless of \
+whether the surrounding transaction succeeds, in which case use \
+`PublishImmediately`.
+- Prefer the smallest set of fields that does what was asked - do not add \
+audit fields, flags, or notes that were not requested.
 """
 
 
@@ -1862,6 +1894,20 @@ class MetadataTypeGenerator(IRGenerator[MetadataType]):
         return f"{mdt.api_name} ({len(mdt.fields)} field(s))"
 
     def generate(self, request: str) -> IRGenerationResult[MetadataType]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class PlatformEventGenerator(IRGenerator[PlatformEvent]):
+    """Turns a description of an event (and its fields, all in one IR - see
+    PLATFORM_EVENT_SYSTEM_PROMPT) into a validated PlatformEvent."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, PlatformEvent, PLATFORM_EVENT_SYSTEM_PROMPT, max_repairs)
+
+    def _describe(self, event: PlatformEvent) -> str:
+        return f"{event.api_name} ({len(event.fields)} field(s))"
+
+    def generate(self, request: str) -> IRGenerationResult[PlatformEvent]:
         return self._validated([Message(role="user", content=request)])
 
 
