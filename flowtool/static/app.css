@@ -244,6 +244,11 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .modes { display: flex; gap: 4px; }
 .mode { flex: 1; font-size: 13px; padding: 6px 8px; }
 .mode.active { border-color: var(--accent); color: var(--accent); }
+/* HIGHLIGHT_PLAN_MODE config var (see server.py /api/config) - gives "Build
+   multiple things" a standing accent border and weight so it reads as the
+   featured mode even before it's selected, not just once .active applies. */
+.mode.featured { border-color: var(--accent); font-weight: 700; }
+.mode.featured.active { background: var(--accent); color: var(--bg); }
 
 #openPane select { margin-bottom: 10px; }
 #openPane p { margin: 10px 0 0; }

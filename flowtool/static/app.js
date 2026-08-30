@@ -2401,6 +2401,19 @@ function reloadLoadedOpenPanePickers() {
   if ($("planPermSetPicker").dataset.loaded) loadPermissionSets();
 }
 
+// Gated by the HIGHLIGHT_PLAN_MODE config var (server.py's /api/config) -
+// moves "Build multiple things" to the front of the mode buttons and marks
+// it visually, without changing which mode is selected by default. Purely a
+// DOM reorder + class toggle, so it composes with activateMode()/
+// restoreSessions() below unmodified - neither cares about button order.
+function highlightPlanMode() {
+  const planBtn = document.querySelector('.mode[data-mode="plan"]');
+  const modes = planBtn?.parentElement;
+  if (!planBtn || !modes) return;
+  modes.insertBefore(planBtn, modes.firstChild);
+  planBtn.classList.add("featured");
+}
+
 // Switches the left pane's mode and, correspondingly, which one of {empty
 // state, a single Flow, a plan} the right panel shows - shared by the mode
 // buttons' own click handler and by restoreSessions() below, so a reload
@@ -2502,6 +2515,7 @@ async function boot() {
     const config = await api("api/config");
     state.showIrSubtab = !!config.show_ir_subtab;
     $("irTab").hidden = !state.showIrSubtab;
+    if (config.highlight_plan_mode) highlightPlanMode();
 
     const provider = $("provider");
     const known = config.all_providers?.length ? config.all_providers : config.providers;

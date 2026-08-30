@@ -668,6 +668,11 @@ def config() -> Dict[str, Any]:
         # it on, so it stays out of the way for everyone but this repo's own
         # maintainer(s).
         "show_ir_subtab": os.environ.get("SHOW_IR_SUBTAB", "").strip().lower() == "true",
+        # Reorders "Build multiple things" to the front of the mode buttons
+        # and visually highlights it - off by default so this stays a staged
+        # rollout, gated the same way SHOW_IR_SUBTAB is, rather than a
+        # behavior change that ships live to everyone at once.
+        "highlight_plan_mode": os.environ.get("HIGHLIGHT_PLAN_MODE", "").strip().lower() == "true",
     }
 
 
