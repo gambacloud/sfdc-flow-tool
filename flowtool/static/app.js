@@ -1000,6 +1000,13 @@ function renderPlanStep(step) {
   const body = document.createElement("div");
   body.className = "plan-step-body";
 
+  if (step.description) {
+    const desc = document.createElement("p");
+    desc.className = "desc plan-step-desc";
+    desc.textContent = step.description;
+    body.appendChild(desc);
+  }
+
   if (step.artifact_type === "flow") {
     const diagram = document.createElement("div");
     diagram.className = "plan-step-diagram";

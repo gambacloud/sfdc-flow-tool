@@ -102,43 +102,6 @@
       </div>
     </div>
 
-    <div class="pad" id="sharedOptions">
-      <details id="options">
-        <summary>Options</summary>
-        <div class="options">
-          <label>Provider
-            <select id="provider"></select>
-          </label>
-          <label>API key <span class="dim">(only if not set on the server)</span>
-            <input id="apiKey" type="password" autocomplete="off"
-              placeholder="sk-ant-... or AIza...">
-          </label>
-          <label>Model
-            <select id="model">
-              <option value="">provider default</option>
-            </select>
-          </label>
-          <label>Effort
-            <select id="effort">
-              <option selected>medium</option><option>high</option>
-            </select>
-          </label>
-          <label>API version
-            <input id="apiVersion" value="62.0" size="6">
-          </label>
-          <label class="check">
-            <input type="checkbox" id="activate">
-            Deploy Active <span class="warn-inline">(runs on live records)</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="planParallel">
-            Run independent steps in parallel
-            <span class="dim">(Build multiple things only - faster, but can trip rate limits more and cost more retries; off by default)</span>
-          </label>
-        </div>
-      </details>
-    </div>
-
     <div class="pad" id="openPane" hidden>
       <div class="open-kind">
         <label><input type="radio" name="openKind" id="openKindFlow" value="flow" checked> Flow</label>
@@ -243,6 +206,43 @@
       <button id="planBtn" class="primary">Plan and build</button>
       <button id="planExamplesBtn" type="button" class="link-btn">Examples</button>
       <button id="planResetBtn" type="button" class="link-btn">Reset</button>
+    </div>
+
+    <div class="pad" id="sharedOptions">
+      <details id="options">
+        <summary>Options</summary>
+        <div class="options">
+          <label>Provider
+            <select id="provider"></select>
+          </label>
+          <label>API key <span class="dim">(only if not set on the server)</span>
+            <input id="apiKey" type="password" autocomplete="off"
+              placeholder="sk-ant-... or AIza...">
+          </label>
+          <label>Model
+            <select id="model">
+              <option value="">provider default</option>
+            </select>
+          </label>
+          <label>Effort
+            <select id="effort">
+              <option selected>medium</option><option>high</option>
+            </select>
+          </label>
+          <label>API version
+            <input id="apiVersion" value="62.0" size="6">
+          </label>
+          <label class="check">
+            <input type="checkbox" id="activate">
+            Deploy Active <span class="warn-inline">(runs on live records)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="planParallel">
+            Run independent steps in parallel
+            <span class="dim">(Build multiple things only - faster, but can trip rate limits more and cost more retries; off by default)</span>
+          </label>
+        </div>
+      </details>
     </div>
 
     <div class="log" id="log"></div>

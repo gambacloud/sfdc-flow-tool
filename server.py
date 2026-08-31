@@ -1613,6 +1613,7 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
         "artifact_type": result.step.artifact_type,
         "depends_on": result.step.depends_on,
         "repairs": result.repairs,
+        "description": getattr(value, "description", None),
     }
     if isinstance(value, Flow):
         entry.update({
