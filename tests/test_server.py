@@ -326,7 +326,7 @@ def stub_org(monkeypatch, xml=SAMPLE_XML, flows=None):
 class TestBrowseTheOrg:
     def test_lists_flows(self, client, monkeypatch):
         stub_org(monkeypatch)
-        data = client.get("/api/flows").json()
+        data = client.post("/api/flows", json={}).json()
         assert data["flows"][0]["api_name"] == "Existing_Flow"
         assert data["flows"][0]["active"] is True
 
