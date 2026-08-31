@@ -32,7 +32,7 @@ from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.ir_platform_event import PlatformEvent
-from flowtool.ir_permset import PermissionSetGrant, build_grant_from_steps
+from flowtool.ir_permset import PermissionSetGrant, build_grant_from_steps, sanitize_api_name
 from flowtool.llm import (
     AnthropicProvider,
     ApexClassGenerator,
@@ -1687,7 +1687,7 @@ def _permission_set_view(session: PlanSession) -> Optional[Dict[str, Any]]:
     grant = build_grant_from_steps(session.steps, config.label or config.api_name or "Generated Access")
     return {
         "mode": config.mode,
-        "target": config.label if config.mode == "new" else config.api_name,
+        "target": config.api_name,
         "field_grants": [
             {"field_api_name": fg.field_api_name, "object_api_name": fg.object_api_name,
              "editable": fg.editable}
@@ -1820,15 +1820,17 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    permission_set_config = (
-        PermissionSetConfig(
-            mode=body.grant_permission_set,
-            label=body.permission_set_label,
+    permission_set_config = None
+    if body.grant_permission_set == "new":
+        label = body.permission_set_label or "Generated Access"
+        permission_set_config = PermissionSetConfig(
+            mode="new", label=label, api_name=sanitize_api_name(label),
+        )
+    elif body.grant_permission_set == "existing":
+        permission_set_config = PermissionSetConfig(
+            mode="existing", label=body.permission_set_label,
             api_name=body.permission_set_api_name,
         )
-        if body.grant_permission_set is not None
-        else None
-    )
 
     generator = PlannerGenerator(provider)
     task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
@@ -1937,13 +1939,12 @@ async def _add_permission_set_files(
     before the bundle is complete.
     """
     grant = build_grant_from_steps(steps, config.label or config.api_name or "Generated Access")
+    api_name = config.api_name
     if config.mode == "new":
-        api_name = config.label or "Generated_Access"
         xml = generate_permission_set(grant, api_name=api_name)
     else:
-        existing_xml = await retrieve_permission_set(url, token, config.api_name, api_version=api_version)
+        existing_xml = await retrieve_permission_set(url, token, api_name, api_version=api_version)
         xml = merge_permission_set_xml(existing_xml, grant)
-        api_name = config.api_name
 
     files[f"permissionsets/{api_name}.permissionset"] = xml
     types.setdefault("PermissionSet", []).append(api_name)
@@ -2032,6 +2033,12 @@ async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
     urls: Dict[str, str] = {}
     if result.success:
         urls = await _plan_component_urls(session, pending.instance_url, pending.token)
+        if session.permission_set_config is not None:
+            urls["Permission Set"] = await component_setup_url(
+                pending.instance_url, pending.token, "permission_set",
+                session.permission_set_config.api_name,
+                api_version=session.api_version,
+            )
     return {
         "done": True,
         "success": result.success,

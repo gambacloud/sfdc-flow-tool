@@ -504,6 +504,25 @@ async def component_setup_url(
         except (httpx.HTTPError, ValueError, KeyError):
             return fallback
         return f"{base}/lightning/setup/{setup_type}/page?address=%2F{component_id}"
+    if artifact_type == "permission_set":
+        fallback = f"{base}/lightning/setup/PermSets/home"
+        query = f"SELECT Id FROM PermissionSet WHERE Name = '{api_name}'"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{base}/services/data/v{api_version}/tooling/query",
+                    params={"q": query},
+                    headers={"Authorization": f"Bearer {session_id}"},
+                )
+            if resp.status_code != 200:
+                return fallback
+            records = resp.json().get("records", [])
+            if not records:
+                return fallback
+            component_id = records[0]["Id"]
+        except (httpx.HTTPError, ValueError, KeyError):
+            return fallback
+        return f"{base}/lightning/setup/PermSets/page?address=%2F{component_id}"
     if artifact_type == "lwc":
         fallback = f"{base}/lightning/setup/LightningComponentBundles/home"
         query = f"SELECT Id FROM LightningComponentBundle WHERE DeveloperName = '{api_name}'"

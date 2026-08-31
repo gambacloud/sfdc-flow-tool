@@ -99,6 +99,7 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
     # valueSet
     if field.type == "Picklist":
         value_set = _sub(el, "valueSet")
+        _sub(value_set, "restricted", _bool(field.restricted))
         definition = _sub(value_set, "valueSetDefinition")
         _sub(definition, "sorted", "false")
         for value in field.picklist_values:

@@ -750,3 +750,62 @@ class TestPlanPermissionSet:
         xml = seen["files"]["permissionsets/Existing_Set.permissionset"]
         assert "Account.SomeOtherField__c" in xml, "must keep what was already there"
         assert "Invoice__c.Amount__c" in xml, "must add the new grant"
+
+    def test_new_grant_label_with_spaces_is_sanitized_into_a_valid_api_name(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        # A free-text label like "CS Onboarding Access" used to reach the
+        # deploy bundle verbatim, as both the file name and the package.xml
+        # member - Salesforce rejects that name outright, so the grant never
+        # landed. See ir_permset.sanitize_api_name.
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(
+            client, grant_permission_set="new", permission_set_label="CS Onboarding Access",
+        )
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        assert session["permission_set"]["target"] == "CS_Onboarding_Access"
+
+        seen = {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen["files"] = files
+            seen["types"] = types
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/validate/start", json={"session_id": sid})
+        poll(client, "/api/plan/validate/status", session_id=sid)
+
+        assert seen["types"]["PermissionSet"] == ["CS_Onboarding_Access"]
+        assert "permissionsets/CS_Onboarding_Access.permissionset" in seen["files"]
+
+    def test_successful_deploy_returns_a_setup_link_for_the_permission_set(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(
+            client, grant_permission_set="new", permission_set_label="Invoice_Access",
+        )
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            return DeployResult("1", "Succeeded", True)
+
+        async def fake_component_setup_url(
+            instance_url, session_id, artifact_type, api_name, api_version="62.0",
+            object_api_name=None,
+        ):
+            return f"https://x/setup/{artifact_type}/{api_name}"
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        monkeypatch.setattr(server, "component_setup_url", fake_component_setup_url)
+
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        client.post("/api/plan/deploy/start", json={"session_id": sid, "confirm": True})
+        result = poll(client, "/api/plan/deploy/status", session_id=sid).json()
+
+        assert result["setup_urls"]["Permission Set"] == "https://x/setup/permission_set/Invoice_Access"

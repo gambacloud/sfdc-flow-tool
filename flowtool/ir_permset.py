@@ -19,9 +19,29 @@ not something this IR represents.
 
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+_NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
+
+
+def sanitize_api_name(label: str, max_length: int = 80) -> str:
+    """
+    Turn a free-text "new Permission Set" label into a valid Metadata API
+    developer name - letters/digits/underscores, starting with a letter, no
+    consecutive or trailing underscores (Permission Set fullName is capped at
+    80 characters). Without this, a label like "CS Onboarding Access" reached
+    the deploy bundle verbatim, as both the .permissionset file name and its
+    package.xml member, and Salesforce rejected the whole deploy over the
+    invalid name - the grant silently never landed.
+    """
+    slug = _NON_ALNUM.sub("_", label.strip()).strip("_")
+    if not slug or not slug[0].isalpha():
+        slug = f"X_{slug}" if slug else "Generated_Access"
+    slug = re.sub(r"_+", "_", slug)[:max_length].rstrip("_")
+    return slug or "Generated_Access"
 
 # Field types this tool can actually create today (see ir_object.py's
 # FieldType) are all genuinely editable - Formula/roll-up summaries are

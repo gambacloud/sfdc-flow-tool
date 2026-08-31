@@ -64,6 +64,13 @@ class CustomField(BaseModel):
 
     # Picklist
     picklist_values: List[str] = Field(default_factory=list)
+    restricted: bool = Field(
+        default=True,
+        description="Picklist only: restrict entry to picklist_values. "
+        "Defaults to True - Salesforce's own default (False, letting API/bulk "
+        "writes bypass the list) is rarely what's wanted for a field the "
+        "request just defined a fixed set of values for.",
+    )
 
     # Lookup / MasterDetail
     reference_to: Optional[str] = Field(

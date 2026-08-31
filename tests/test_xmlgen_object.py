@@ -183,6 +183,23 @@ class TestFieldDeltaXml:
         entries = el.findall("m:valueSet/m:valueSetDefinition/m:value", NS)
         assert [_text(e, "fullName") for e in entries] == ["Draft", "Sent", "Paid"]
 
+    def test_picklist_is_restricted_by_default(self):
+        field = CustomField(
+            api_name="Status", label="Status", type="Picklist",
+            object_api_name="Invoice__c", picklist_values=["Draft", "Paid"],
+        )
+        el = self._one_field(field)
+        assert _text(el.find("m:valueSet", NS), "restricted") == "true"
+
+    def test_picklist_restricted_can_be_turned_off(self):
+        field = CustomField(
+            api_name="Status", label="Status", type="Picklist",
+            object_api_name="Invoice__c", picklist_values=["Draft", "Paid"],
+            restricted=False,
+        )
+        el = self._one_field(field)
+        assert _text(el.find("m:valueSet", NS), "restricted") == "false"
+
     def test_lookup_field(self):
         field = CustomField(
             api_name="Account_Link", label="Account", type="Lookup",

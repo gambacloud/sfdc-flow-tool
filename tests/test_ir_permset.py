@@ -3,7 +3,7 @@ from typing import Any
 
 from flowtool.ir_apex import ApexClass
 from flowtool.ir_object import CustomField, CustomObject
-from flowtool.ir_permset import READ_ONLY_FIELD_TYPES, build_grant_from_steps
+from flowtool.ir_permset import READ_ONLY_FIELD_TYPES, build_grant_from_steps, sanitize_api_name
 
 
 @dataclass
@@ -89,3 +89,31 @@ class TestBuildGrantFromSteps:
         assert grant.label == "Invoice Access"
         assert len(grant.object_grants) == 1
         assert len(grant.field_grants) == 1
+
+
+class TestSanitizeApiName:
+    def test_already_valid_name_is_unchanged(self):
+        assert sanitize_api_name("Invoice_Access") == "Invoice_Access"
+
+    def test_spaces_become_underscores(self):
+        assert sanitize_api_name("CS Onboarding Access") == "CS_Onboarding_Access"
+
+    def test_punctuation_collapses_to_a_single_underscore(self):
+        assert sanitize_api_name("Support's Access - Tier 1!") == "Support_s_Access_Tier_1"
+
+    def test_leading_digit_gets_a_letter_prefix(self):
+        assert sanitize_api_name("2026 Access") == "X_2026_Access"
+
+    def test_blank_label_falls_back_to_a_default(self):
+        assert sanitize_api_name("   ") == "Generated_Access"
+
+    def test_result_is_always_a_valid_api_name(self):
+        import re
+
+        from flowtool.ir import API_NAME_RE
+
+        for label in ("CS Onboarding Access", "2026 Access", "!!!", "a" * 200, "Already_Valid"):
+            assert API_NAME_RE.match(sanitize_api_name(label)), label
+
+    def test_result_never_exceeds_the_permission_set_name_limit(self):
+        assert len(sanitize_api_name("A " * 100)) <= 80
