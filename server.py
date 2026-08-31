@@ -2244,6 +2244,32 @@ def plan_report(session_id: str) -> PlainTextResponse:
     )
 
 
+INSTALL_DIR = STATIC / "install"
+
+
+@app.get("/install/sfdc-flow-forge-installer.ps1")
+def install_windows() -> PlainTextResponse:
+    """Downloadable Windows installer for the MCP server - see the "Install
+    MCP" link under Options. Served with an explicit filename/attachment
+    header since StaticFiles doesn't set Content-Disposition and browsers
+    have no reliable registered MIME type for .ps1."""
+    return PlainTextResponse(
+        (INSTALL_DIR / "sfdc-flow-forge-installer.ps1").read_text(),
+        media_type="text/plain",
+        headers={"Content-Disposition": 'attachment; filename="sfdc-flow-forge-installer.ps1"'},
+    )
+
+
+@app.get("/install/sfdc-flow-forge-installer.sh")
+def install_macos() -> PlainTextResponse:
+    """Downloadable macOS/Linux installer for the MCP server - see install_windows."""
+    return PlainTextResponse(
+        (INSTALL_DIR / "sfdc-flow-forge-installer.sh").read_text(),
+        media_type="text/plain",
+        headers={"Content-Disposition": 'attachment; filename="sfdc-flow-forge-installer.sh"'},
+    )
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
