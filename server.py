@@ -1621,6 +1621,7 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "label": value.label,
             "element_count": len(value.elements),
             "mermaid": to_mermaid(value),
+            "element_index": element_index(value),
         })
     elif isinstance(value, CustomObject):
         entry.update({

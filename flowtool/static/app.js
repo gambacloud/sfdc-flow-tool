@@ -439,7 +439,10 @@ function wireDiagramPanZoom() {
 }
 
 function renderElementIndex(rows) {
-  const host = $("elementIndex");
+  renderElementIndexInto($("elementIndex"), rows);
+}
+
+function renderElementIndexInto(host, rows) {
   host.innerHTML = "";
   (rows || []).forEach((row) => {
     const node = document.createElement("div");
@@ -468,8 +471,12 @@ function renderElementIndex(rows) {
 // API names are letters, numbers and underscores only), so the pattern is
 // unambiguous even though nodeId itself is unbounded text.
 function wireDiagramSync() {
-  const svg = $("diagram").querySelector("svg");
-  const rows = $("elementIndex").querySelectorAll(".row");
+  wireDiagramSyncScoped($("diagram"), $("elementIndex"));
+}
+
+function wireDiagramSyncScoped(diagramHost, indexHost) {
+  const svg = diagramHost.querySelector("svg");
+  const rows = indexHost.querySelectorAll(".row");
   if (!svg || !rows.length) return;
 
   const rowById = new Map([...rows].map((row) => [row.dataset.id, row]));
@@ -1008,10 +1015,18 @@ function renderPlanStep(step) {
   }
 
   if (step.artifact_type === "flow") {
+    const tab = document.createElement("div");
+    tab.className = "plan-step-diagram-tab";
     const diagram = document.createElement("div");
     diagram.className = "plan-step-diagram";
-    body.appendChild(diagram);
-    renderPlanStepDiagram(diagram, step.mermaid);
+    const indexPanel = document.createElement("div");
+    indexPanel.className = "element-index plan-step-element-index";
+    tab.append(diagram, indexPanel);
+    body.appendChild(tab);
+    renderElementIndexInto(indexPanel, step.element_index);
+    renderPlanStepDiagram(diagram, step.mermaid).then(() =>
+      wireDiagramSyncScoped(diagram, indexPanel)
+    );
   } else if (step.artifact_type === "apex") {
     const pre = document.createElement("pre");
     pre.textContent = step.body;
