@@ -14,6 +14,77 @@ const PLAN_SESSION_STORAGE_KEY = "flowtool.planSessionId";
 // request silently wiped it, same class of bug the comment on
 // restorePlanSession() below describes for the generated session itself.
 const PLAN_REQUEST_STORAGE_KEY = "flowtool.planRequestText";
+
+// Ready-made "What should be built?" requests covering a few common
+// business processes, offered from the Examples dialog next to Reset.
+const PLAN_EXAMPLES = {
+  "lead-simple":
+    "Add a Lead Priority picklist field (Hot, Warm, Cold) to Lead.",
+  "account-simple":
+    "Add an Account Tier picklist field (Strategic, Key, Standard) to " +
+    "Account.",
+  "acv-simple":
+    "Add an Annual Contract Value (ACV) currency field to Opportunity.",
+  "cs-simple":
+    "Add a Customer Health Score number field to Account.",
+
+  "lead-medium":
+    "Add a Lead Score number field to Lead, and a flow that sets the " +
+    "score to 100 when Lead Source is Web and Industry is Technology, or " +
+    "to 50 otherwise, whenever a Lead is created.",
+  "account-medium":
+    "Add an Account Tier picklist field (Strategic, Key, Standard) to " +
+    "Account, and a flow that sets Tier to Strategic whenever the " +
+    "Account's Annual Revenue exceeds $10 million.",
+  "acv-medium":
+    "Add an Annual Contract Value (ACV) currency field and a Contract " +
+    "Term Months number field to Opportunity, and a flow that " +
+    "recalculates ACV whenever Amount or Contract Term Months changes on " +
+    "an open Opportunity.",
+  "cs-medium":
+    "Add an Onboarding custom object related to Account, with a Stage " +
+    "picklist (Kickoff, Configuration, Training, Go-Live) and a Target Go " +
+    "Live Date field. Add a flow that, when an Account's Status changes " +
+    "to Customer, creates an Onboarding record and a matching set of " +
+    "onboarding Tasks assigned to the Customer Success Manager. Add a " +
+    "Permission Set named CS_Onboarding_Access that grants the Customer " +
+    "Success team Read/Create/Edit on the new object and its fields.",
+
+  "lead-complex":
+    "Add a Lead Score custom field (Number) to Lead, plus a Lead Source " +
+    "Quality picklist (Hot, Warm, Cold). Add an Apex class that computes " +
+    "the score from Industry, Company employee count, and whether the " +
+    "email domain matches a free provider like gmail.com. Add a flow that " +
+    "runs on Lead create and edit, calls the Apex class to set the score " +
+    "and quality, and - when the score is above 80 - assigns the record " +
+    "to the Sales queue and notifies the Lead Owner to convert it within " +
+    "24 hours.",
+  "account-complex":
+    "Add an Account Tier picklist (Strategic, Key, Standard) and an " +
+    "Account Health Score custom field (Number) to Account. Add a Health " +
+    "Check custom object related to Account with fields for Usage Score, " +
+    "Open Case Count, and Last Review Date. Add a flow that recalculates " +
+    "the Health Score whenever a Health Check record is created or " +
+    "updated, sets the Tier based on trailing 12-month Opportunity " +
+    "revenue, and creates a task for the Account Owner when a Strategic " +
+    "account's Health Score drops below 40.",
+  "acv-complex":
+    "Add an Annual Contract Value (ACV) currency field and a Contract " +
+    "Term Months number field to Opportunity, plus a Total Contract Value " +
+    "formula field that multiplies ACV by the term in years. Add a flow " +
+    "that recalculates ACV whenever Amount or Contract Term Months " +
+    "changes on an open Opportunity, and - when an Opportunity is marked " +
+    "Closed Won with an ACV over $100,000 - posts an update to Chatter on " +
+    "the related Account and notifies the Opportunity Owner's manager.",
+  "cs-complex":
+    "Add a Customer Health Score custom object related to Account, with " +
+    "fields for Usage Score, Support Ticket Count, NPS Score, and Renewal " +
+    "Risk (picklist: Low, Medium, High). Add an Apex class that " +
+    "aggregates the last 30 days of activity into those fields on a " +
+    "scheduled nightly run. Add a flow that, whenever Renewal Risk is set " +
+    "to High, creates a Case assigned to the account's Customer Success " +
+    "Manager and emails them a summary of the score change.",
+};
 // Which mode ("new" | "open" | "plan") a reload should land back on, when a
 // single-Flow session and a plan session happen to both be stored at once
 // (the user used more than one mode in this tab) - whichever actually
@@ -2334,6 +2405,25 @@ function restorePlanRequestText() {
   if (text) $("planRequest").value = text;
 }
 
+function updateExamplesPreview() {
+  const key = $("examplesSelect").value;
+  $("examplesPreview").textContent = PLAN_EXAMPLES[key] || "";
+}
+
+function openExamplesDialog() {
+  updateExamplesPreview();
+  $("examplesDialog").showModal();
+}
+
+function useSelectedExample() {
+  const key = $("examplesSelect").value;
+  const text = PLAN_EXAMPLES[key];
+  if (!text) return;
+  $("planRequest").value = text;
+  sessionStorage.setItem(PLAN_REQUEST_STORAGE_KEY, text);
+  $("examplesDialog").close();
+}
+
 // Clears the "What should be built?" box and drops any plan currently on
 // screen, so starting over doesn't require a reload (which - before this -
 // was the only way, and itself used to silently lose the typed text; see
@@ -2721,6 +2811,10 @@ async function boot() {
 
   $("planBtn").onclick = planAndBuild;
   $("planResetBtn").onclick = resetPlan;
+  $("planExamplesBtn").onclick = openExamplesDialog;
+  $("examplesSelect").addEventListener("change", updateExamplesPreview);
+  $("examplesUseBtn").onclick = useSelectedExample;
+  $("examplesCloseBtn").onclick = () => $("examplesDialog").close();
   $("planRequest").addEventListener("input", () => {
     sessionStorage.setItem(PLAN_REQUEST_STORAGE_KEY, $("planRequest").value);
   });

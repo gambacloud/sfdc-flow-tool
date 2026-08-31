@@ -241,6 +241,7 @@
       </div>
 
       <button id="planBtn" class="primary">Plan and build</button>
+      <button id="planExamplesBtn" type="button" class="link-btn">Examples</button>
       <button id="planResetBtn" type="button" class="link-btn">Reset</button>
     </div>
 
@@ -358,6 +359,41 @@
     </div>
   </section>
 </main>
+
+<dialog id="examplesDialog">
+  <h3>Example requests</h3>
+  <p class="dim">
+    Pick a common business process to load a ready-made request into the
+    box - you can still edit it before building. Listed simplest first,
+    growing more complex toward the bottom - a good way to try the tool
+    before combining a lot of pieces in one request.
+  </p>
+  <select id="examplesSelect" size="8">
+    <optgroup label="Simple - a single field">
+      <option value="lead-simple">Lead management - priority field</option>
+      <option value="account-simple">Account management - tier field</option>
+      <option value="acv-simple">ACV - contract value field</option>
+      <option value="cs-simple">Customer Success - health score field</option>
+    </optgroup>
+    <optgroup label="Medium - a field plus a flow">
+      <option value="lead-medium">Lead management - scoring flow</option>
+      <option value="account-medium">Account management - auto-tiering flow</option>
+      <option value="acv-medium">ACV - recalculation flow</option>
+      <option value="cs-medium">Customer Success - onboarding tracking</option>
+    </optgroup>
+    <optgroup label="Complex - object, Apex, flow, and more">
+      <option value="lead-complex">Lead management - scoring, Apex, and auto-routing</option>
+      <option value="account-complex">Account management - tiering and health</option>
+      <option value="acv-complex">ACV - contract tracking and Chatter alerts</option>
+      <option value="cs-complex">Customer Success - health score and renewal risk</option>
+    </optgroup>
+  </select>
+  <p id="examplesPreview" class="dim"></p>
+  <div class="row survey-actions">
+    <button id="examplesUseBtn" class="primary" type="button">Use this</button>
+    <button id="examplesCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
 
 <dialog id="surveyDialog">
   <h3>Support report</h3>
