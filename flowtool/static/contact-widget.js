@@ -11,6 +11,39 @@
   document.addEventListener('DOMContentLoaded', mount);
   if (document.readyState === 'complete' || document.readyState === 'interactive') mount();
 
+  var html2canvasPromise = null;
+  function loadHtml2Canvas() {
+    if (window.html2canvas) return Promise.resolve(window.html2canvas);
+    if (!html2canvasPromise) {
+      html2canvasPromise = new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        s.onload = function () { resolve(window.html2canvas); };
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+    return html2canvasPromise;
+  }
+
+  // Opt-in only (checkbox in the form) - never runs unless the user asks for
+  // it, since the page can contain sensitive org data (session tokens, etc).
+  function captureScreenshot() {
+    return loadHtml2Canvas()
+      .then(function (html2canvas) {
+        host.style.display = 'none';
+        return html2canvas(document.body, { logging: false, useCORS: true })
+          .then(function (canvas) {
+            host.style.display = '';
+            return canvas.toDataURL('image/png').split(',')[1] || '';
+          });
+      })
+      .catch(function () {
+        host.style.display = '';
+        return '';
+      });
+  }
+
   function mount() {
     if (document.getElementById('dt-contact-widget-host')) return;
     document.body.appendChild(host);
@@ -44,6 +77,8 @@
       '.msg.ok{color:#16a34a}' +
       '.msg.err{color:#dc2626}' +
       '.hp{position:absolute;left:-9999px;top:-9999px}' +
+      '.shot{display:flex;align-items:center;gap:6px;font-size:12px;color:#374151;margin-bottom:8px}' +
+      '.shot input{width:auto;margin:0}' +
       '</style>' +
       '<div class="wrap">' +
       '  <button class="btn" type="button" aria-label="Contact us">✉️ Contact us</button>' +
@@ -59,6 +94,7 @@
       '    <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">' +
       '    <textarea name="message" placeholder="What\'s up?" required maxlength="5000"></textarea>' +
       '    <input type="email" name="email" placeholder="Your email (optional, so we can reply)" maxlength="200">' +
+      '    <label class="shot"><input type="checkbox" name="attachScreenshot">Attach a screenshot of this page</label>' +
       '    <div class="row"><button class="send" type="submit">Send</button></div>' +
       '    <div class="msg" role="status"></div>' +
       '  </form>' +
@@ -91,18 +127,24 @@
       if (!message) return;
 
       sendBtn.disabled = true;
-      sendBtn.textContent = 'Sending...';
+      var wantsScreenshot = form.attachScreenshot.checked;
+      sendBtn.textContent = wantsScreenshot ? 'Capturing...' : 'Sending...';
 
-      fetch('/api/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: message,
-          email: form.email.value.trim(),
-          honeypot: form.website.value,
-          page: location.pathname
+      (wantsScreenshot ? captureScreenshot() : Promise.resolve(''))
+        .then(function (screenshot) {
+          sendBtn.textContent = 'Sending...';
+          return fetch('/api/contact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: message,
+              email: form.email.value.trim(),
+              honeypot: form.website.value,
+              page: location.pathname,
+              screenshot: screenshot
+            })
+          });
         })
-      })
         .then(function (res) {
           if (!res.ok) throw new Error('request failed');
           return res.json();
