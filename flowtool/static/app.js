@@ -17,73 +17,160 @@ const PLAN_REQUEST_STORAGE_KEY = "flowtool.planRequestText";
 
 // Ready-made "What should be built?" requests covering a few common
 // business processes, offered from the Examples dialog next to Reset.
+// Written as short specs (Business need / numbered sections) rather than a
+// single run-on sentence - easier to read back before hitting "Plan and
+// build", and it's the format the model itself tends to mirror in its own
+// per-step descriptions.
 const PLAN_EXAMPLES = {
   "lead-simple":
-    "Add a Lead Priority picklist field (Hot, Warm, Cold) to Lead.",
+`Process spec: Lead Priority Flag
+Business need: Sales needs a quick, manual way to flag which Leads deserve attention first, before any scoring automation exists.
+
+1. Data model
+   - Add a Lead Priority picklist field (Hot, Warm, Cold) to Lead.`,
+
   "account-simple":
-    "Add an Account Tier picklist field (Strategic, Key, Standard) to " +
-    "Account.",
+`Process spec: Account Tier Flag
+Business need: Account managers need a simple way to mark which Accounts are strategic, before any tiering automation exists.
+
+1. Data model
+   - Add an Account Tier picklist field (Strategic, Key, Standard) to Account.`,
+
   "acv-simple":
-    "Add an Annual Contract Value (ACV) currency field to Opportunity.",
+`Process spec: Annual Contract Value Tracking
+Business need: Revenue operations needs a place to record each Opportunity's Annual Contract Value (ACV) for reporting.
+
+1. Data model
+   - Add an Annual Contract Value (ACV) currency field to Opportunity.`,
+
   "cs-simple":
-    "Add a Customer Health Score number field to Account.",
+`Process spec: Customer Health Score Field
+Business need: The Customer Success team needs a single number on the Account to track how healthy a customer relationship is.
+
+1. Data model
+   - Add a Customer Health Score number field to Account.`,
+
+  "lwc-simple":
+`Process spec: Contact Quick View Component
+Business need: Users on the Contact record page want a compact, at-a-glance summary of the Contact's key details without scrolling through the full page layout.
+
+1. Component
+   - A Lightning Web Component for the Contact record page that shows the Contact's Name, Title, Email, and Phone in a simple card.
+   - Email and Phone are shown as clickable mailto: / tel: links.`,
 
   "lead-medium":
-    "Add a Lead Score number field to Lead, and a flow that sets the " +
-    "score to 100 when Lead Source is Web and Industry is Technology, or " +
-    "to 50 otherwise, whenever a Lead is created.",
+`Process spec: Lead Scoring Flow
+Business need: Sales wants Leads automatically scored on arrival so reps can prioritize without waiting on manual review.
+
+1. Data model
+   - Add a Lead Score number field to Lead.
+
+2. Flow logic
+   - On Lead creation, set the score to 100 when Lead Source is Web and Industry is Technology, or to 50 otherwise.`,
+
   "account-medium":
-    "Add an Account Tier picklist field (Strategic, Key, Standard) to " +
-    "Account, and a flow that sets Tier to Strategic whenever the " +
-    "Account's Annual Revenue exceeds $10 million.",
+`Process spec: Account Auto-Tiering Flow
+Business need: Account tiers should reflect revenue automatically instead of being set by hand.
+
+1. Data model
+   - Add an Account Tier picklist field (Strategic, Key, Standard) to Account.
+
+2. Flow logic
+   - Whenever an Account's Annual Revenue exceeds $10 million, set its Tier to Strategic.`,
+
   "acv-medium":
-    "Add an Annual Contract Value (ACV) currency field and a Contract " +
-    "Term Months number field to Opportunity, and a flow that " +
-    "recalculates ACV whenever Amount or Contract Term Months changes on " +
-    "an open Opportunity.",
+`Process spec: ACV Recalculation Flow
+Business need: An Opportunity's Annual Contract Value needs to stay accurate as deal terms change, without manual recalculation.
+
+1. Data model
+   - Add an Annual Contract Value (ACV) currency field and a Contract Term Months number field to Opportunity.
+
+2. Flow logic
+   - Whenever Amount or Contract Term Months changes on an open Opportunity, recalculate ACV.`,
+
   "cs-medium":
-    "Add an Onboarding custom object related to Account, with a Stage " +
-    "picklist (Kickoff, Configuration, Training, Go-Live) and a Target Go " +
-    "Live Date field. Add a flow that, when an Account's Status changes " +
-    "to Customer, creates an Onboarding record and a matching set of " +
-    "onboarding Tasks assigned to the Customer Success Manager. Add a " +
-    "Permission Set named CS_Onboarding_Access that grants the Customer " +
-    "Success team Read/Create/Edit on the new object and its fields.",
+`Process spec: Customer Onboarding Tracking
+Business need: The Customer Success team needs a consistent, trackable onboarding process every time a prospect becomes a customer.
+
+1. Data model
+   - Onboarding custom object related to Account, with a Stage picklist (Kickoff, Configuration, Training, Go-Live) and a Target Go Live Date field.
+
+2. Flow logic
+   - When an Account's Status changes to Customer, create an Onboarding record and a matching set of onboarding Tasks assigned to the Customer Success Manager.
+
+3. Access
+   - A Permission Set named CS_Onboarding_Access that grants the Customer Success team Read/Create/Edit on the new object and its fields.`,
 
   "lead-complex":
-    "Add a Lead Score custom field (Number) to Lead, plus a Lead Source " +
-    "Quality picklist (Hot, Warm, Cold). Add an Apex class that computes " +
-    "the score from Industry, Company employee count, and whether the " +
-    "email domain matches a free provider like gmail.com. Add a flow that " +
-    "runs on Lead create and edit, calls the Apex class to set the score " +
-    "and quality, and - when the score is above 80 - assigns the record " +
-    "to the Sales queue and notifies the Lead Owner to convert it within " +
-    "24 hours.",
+`Process spec: Lead Scoring, Apex Calculation & Auto-Routing
+Business need: Sales wants every new or edited Lead scored consistently by a shared calculation, with high-scoring Leads routed automatically instead of waiting in a general queue.
+
+1. Data model
+   - Lead Score custom field (Number) on Lead.
+   - Lead Source Quality picklist (Hot, Warm, Cold) on Lead.
+
+2. Scoring logic (Apex)
+   - An Apex class computes the score from Industry, Company employee count, and whether the email domain matches a free provider like gmail.com.
+
+3. Flow logic
+   - On Lead create and edit, call the Apex class to set the score and quality.
+   - When the score is above 80, assign the Lead to the Sales queue and notify the Lead Owner to convert it within 24 hours.`,
+
   "account-complex":
-    "Add an Account Tier picklist (Strategic, Key, Standard) and an " +
-    "Account Health Score custom field (Number) to Account. Add a Health " +
-    "Check custom object related to Account with fields for Usage Score, " +
-    "Open Case Count, and Last Review Date. Add a flow that recalculates " +
-    "the Health Score whenever a Health Check record is created or " +
-    "updated, sets the Tier based on trailing 12-month Opportunity " +
-    "revenue, and creates a task for the Account Owner when a Strategic " +
-    "account's Health Score drops below 40.",
+`Process spec: Account Tiering & Health Monitoring
+Business need: Account Owners need an early warning when a Strategic account's health is slipping, and Account tiers that reflect real revenue rather than manual judgment.
+
+1. Data model
+   - Account Tier picklist (Strategic, Key, Standard) and Account Health Score number field on Account.
+   - Health Check custom object related to Account, with fields for Usage Score, Open Case Count, and Last Review Date.
+
+2. Flow logic
+   - Whenever a Health Check record is created or updated, recalculate the Account's Health Score.
+   - Set the Tier based on trailing 12-month Opportunity revenue.
+   - When a Strategic account's Health Score drops below 40, create a task for the Account Owner.`,
+
   "acv-complex":
-    "Add an Annual Contract Value (ACV) currency field and a Contract " +
-    "Term Months number field to Opportunity, plus a Total Contract Value " +
-    "formula field that multiplies ACV by the term in years. Add a flow " +
-    "that recalculates ACV whenever Amount or Contract Term Months " +
-    "changes on an open Opportunity, and - when an Opportunity is marked " +
-    "Closed Won with an ACV over $100,000 - posts an update to Chatter on " +
-    "the related Account and notifies the Opportunity Owner's manager.",
+`Process spec: ACV Tracking with Contract Value & Chatter Alerts
+Business need: Leadership wants visibility into large closed deals the moment they close, and an accurate contract value on every Opportunity.
+
+1. Data model
+   - Annual Contract Value (ACV) currency field and Contract Term Months number field on Opportunity.
+   - Total Contract Value formula field that multiplies ACV by the term in years.
+
+2. Flow logic
+   - Whenever Amount or Contract Term Months changes on an open Opportunity, recalculate ACV.
+   - When an Opportunity is marked Closed Won with an ACV over $100,000, post an update to Chatter on the related Account and notify the Opportunity Owner's manager.`,
+
   "cs-complex":
-    "Add a Customer Health Score custom object related to Account, with " +
-    "fields for Usage Score, Support Ticket Count, NPS Score, and Renewal " +
-    "Risk (picklist: Low, Medium, High). Add an Apex class that " +
-    "aggregates the last 30 days of activity into those fields on a " +
-    "scheduled nightly run. Add a flow that, whenever Renewal Risk is set " +
-    "to High, creates a Case assigned to the account's Customer Success " +
-    "Manager and emails them a summary of the score change.",
+`Process spec: Customer Health Scoring & Renewal Risk
+Business need: The Customer Success team needs an early, automated signal when a customer is at risk of not renewing, backed by real usage and support data rather than gut feel.
+
+1. Data model
+   - Customer Health Score custom object related to Account, with fields for Usage Score, Support Ticket Count, NPS Score, and Renewal Risk (picklist: Low, Medium, High).
+
+2. Scoring logic (Apex)
+   - A scheduled Apex class aggregates the last 30 days of activity into those fields every night.
+
+3. Flow logic
+   - Whenever Renewal Risk is set to High, create a Case assigned to the account's Customer Success Manager and email them a summary of the score change.`,
+
+  "contact-complex":
+`Process spec: Dynamic Contact Assignment & Round-Robin Routing
+Business need: Users need a way, from the Contact record, to assign it automatically and evenly (round-robin) from a pool of active users, review or override the suggested assignee, and have every ownership change logged to a dedicated audit record.
+
+1. Data model
+   - Assignment_Log__c custom object with: Contact__c (Lookup to Contact), Assigned_User__c (Lookup to User), Previous_Owner__c (Lookup to User), Assignment_Date__c (Date/Time), Assignment_Type__c (Picklist: Round-Robin, Manual).
+   - A Public Group, Sales_Assignees_Group, holding the active users eligible to receive Contacts.
+
+2. Screen Flow on the Contact page (Quick Action, receives recordId)
+   - Screen 1: get the active users in Sales_Assignees_Group, round-robin to whichever eligible user has received the fewest Contacts recently, and show the suggested user ("Suggested User: [Name]") with a "Reroll / Pick Another" option and an "Assign" button.
+
+3. Backend processing (on Assign)
+   - Update the Contact's OwnerId to the selected user.
+   - Create an Assignment_Log__c record: Contact__c = recordId, Assigned_User__c = the selected user, Previous_Owner__c = the Contact's prior OwnerId, Assignment_Date__c = current date/time, Assignment_Type__c = "Round-Robin".
+
+4. Confirmation screen
+   - Show "Contact was successfully assigned to [User Name]" and return to the record page.`,
 };
 // Which mode ("new" | "open" | "plan") a reload should land back on, when a
 // single-Flow session and a plan session happen to both be stored at once

@@ -332,6 +332,13 @@ dialog p { margin: 0 0 12px; }
 .badge.active { border-color: var(--warn); color: var(--warn); }
 .badge.draft { border-color: var(--line); color: var(--dim); }
 
+#examplesPreview {
+  font-family: inherit;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 /* A plain dim line here was easy to miss, and it is the one place the model
    is told to flag an assumption or a substitution it made (an invented action
    name, a component it couldn't use) - text worth reading, not metadata. */
