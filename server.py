@@ -53,6 +53,7 @@ from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
 )
 from flowtool.report import render_standalone_report
+from flowtool import share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
@@ -673,6 +674,9 @@ def config() -> Dict[str, Any]:
         # rollout, gated the same way SHOW_IR_SUBTAB is, rather than a
         # behavior change that ships live to everyone at once.
         "highlight_plan_mode": os.environ.get("HIGHLIGHT_PLAN_MODE", "").strip().lower() == "true",
+        # "Share this" needs Upstash Redis config vars - off (button hidden)
+        # rather than a 400 on click when they aren't set.
+        "share_enabled": share.configured(),
     }
 
 
@@ -2250,6 +2254,192 @@ def plan_report(session_id: str) -> PlainTextResponse:
         report, media_type="text/html",
         headers={"Content-Disposition": f'attachment; filename="plan-{session_id}.html"'},
     )
+
+
+# --------------------------------------------------------------------------
+# Share ("Share this") - snapshot a Session or PlanSession, hand back a link
+# + password, let anyone with both resume from that point within 24h.
+# --------------------------------------------------------------------------
+#
+# Snapshotting stores only what's needed to rebuild a Session/PlanSession
+# that looks exactly like the one shared - the generated IR of every
+# artifact plus the LLM conversation that produced it (so a resumed session
+# can still refine()/repair() with real history, not a blank slate) - never
+# the provider/API key, which the resuming browser supplies itself, same as
+# opening any fresh design. A resumed session/plan always lands with
+# approved_version=0 (not yet approved), whatever the original's approval
+# state was - the whole point is "pick up review from here", not silently
+# inheriting someone else's approval.
+
+# kind -> (IR model class, generator class) for the single-artifact Session
+# path - mirrors _APEX_LIKE plus flow/lwc, kept separate since this also
+# needs FlowGenerator/LwcGenerator which _APEX_LIKE's two-entry dict does not.
+_SESSION_KIND_TYPES: Dict[str, tuple] = {
+    "flow": (Flow, FlowGenerator),
+    "apex": (ApexClass, ApexClassGenerator),
+    "trigger": (ApexTrigger, ApexTriggerGenerator),
+    "lwc": (LightningComponent, LwcGenerator),
+}
+
+# artifact_type -> IR model class for a plan step - the reverse of
+# planner.py's _GENERATOR_BY_TYPE, needed here to rebuild a StepResult's
+# `value` from plain JSON via model_validate.
+_PLAN_STEP_IR_CLASS: Dict[str, Any] = {
+    "flow": Flow,
+    "object": CustomObject,
+    "field": CustomField,
+    "apex": ApexClass,
+    "lwc": LightningComponent,
+    "mdt": MetadataType,
+    "mdt_record": CustomMetadataRecord,
+    "platform_event": PlatformEvent,
+}
+
+
+def _messages_to_json(messages: List[Message]) -> List[Dict[str, str]]:
+    return [{"role": m.role, "content": m.content} for m in messages]
+
+
+def _messages_from_json(data: List[Dict[str, str]]) -> List[Message]:
+    return [Message(role=m["role"], content=m["content"]) for m in data]
+
+
+def _session_snapshot(session: Session) -> Dict[str, Any]:
+    return {
+        "type": "session",
+        "kind": session.kind,
+        "api_version": session.api_version,
+        "activate": session.activate,
+        "history": session.history,
+        "imported": session.imported,
+        "repairs": session.result.repairs,
+        "messages": _messages_to_json(session.result.messages),
+        "ir": session.artifact.model_dump(mode="json"),
+    }
+
+
+def _session_from_snapshot(data: Dict[str, Any], provider: Provider) -> Session:
+    kind = data["kind"]
+    ir_cls, generator_cls = _SESSION_KIND_TYPES[kind]
+    artifact = ir_cls.model_validate(data["ir"])
+    messages = _messages_from_json(data["messages"])
+    result: Any
+    if kind == "flow":
+        result = GenerationResult(flow=artifact, messages=messages, repairs=data["repairs"])
+    else:
+        result = IRGenerationResult(value=artifact, messages=messages, repairs=data["repairs"])
+    session = Session(
+        generator=generator_cls(provider),
+        result=result,
+        kind=kind,
+        activate=data["activate"],
+        api_version=data["api_version"],
+        history=list(data["history"]) + [{"note": "Resumed from a shared link", "version": "1"}],
+        imported=data["imported"],
+    )
+    session.apply_policy()
+    return session
+
+
+def _plan_snapshot(session: "PlanSession") -> Dict[str, Any]:
+    config = session.permission_set_config
+    return {
+        "type": "plan",
+        "api_version": session.api_version,
+        "permission_set_config": (
+            None if config is None
+            else {"mode": config.mode, "label": config.label, "api_name": config.api_name}
+        ),
+        "steps": [
+            {
+                "step": r.step.model_dump(mode="json"),
+                "repairs": r.repairs,
+                "messages": _messages_to_json(r.messages),
+                "ir": r.value.model_dump(mode="json"),
+            }
+            for r in session.steps
+        ],
+    }
+
+
+def _plan_from_snapshot(data: Dict[str, Any], provider: Provider) -> "PlanSession":
+    steps: List[StepResult] = []
+    for entry in data["steps"]:
+        step = PlanStep.model_validate(entry["step"])
+        ir_cls = _PLAN_STEP_IR_CLASS[step.artifact_type]
+        value = ir_cls.model_validate(entry["ir"])
+        steps.append(StepResult(
+            step=step, value=value, repairs=entry["repairs"],
+            messages=_messages_from_json(entry["messages"]),
+        ))
+
+    config_data = data.get("permission_set_config")
+    permission_set_config = (
+        None if config_data is None else PermissionSetConfig(**config_data)
+    )
+
+    session = PlanSession(
+        provider=provider,
+        plan=Plan(steps=[r.step for r in steps]),
+        steps=steps,
+        api_version=data["api_version"],
+        permission_set_config=permission_set_config,
+    )
+    session.apply_policy()
+    return session
+
+
+class ShareRequest(BaseModel):
+    kind: Literal["session", "plan"]
+    session_id: str
+
+
+class ShareUnlockRequest(BaseModel):
+    password: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: Literal["medium", "high"] = "medium"
+    api_key: Optional[str] = None
+
+
+@app.post("/api/share/start")
+async def share_start(body: ShareRequest) -> Dict[str, Any]:
+    if body.kind == "plan":
+        snapshot = _plan_snapshot(get_plan_session(body.session_id))
+    else:
+        snapshot = _session_snapshot(get_session(body.session_id))
+
+    token = share.generate_token()
+    password = share.generate_password()
+    try:
+        await share.create_share(token, password, snapshot)
+    except share.ShareError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"token": token, "password": password, "expires_in": share.SHARE_TTL_SECONDS}
+
+
+@app.post("/api/share/{token}/unlock")
+async def share_unlock(token: str, body: ShareUnlockRequest) -> Dict[str, Any]:
+    try:
+        snapshot = await share.consume_password(token, body.password)
+    except share.ShareError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if snapshot["type"] == "plan":
+        plan_session = _plan_from_snapshot(snapshot, provider)
+        session_id = uuid.uuid4().hex
+        PLAN_SESSIONS[session_id] = plan_session
+        return {"done": True, "share_kind": "plan", **plan_view(session_id, plan_session)}
+
+    session = _session_from_snapshot(snapshot, provider)
+    session_id = uuid.uuid4().hex
+    SESSIONS[session_id] = session
+    return {"done": True, "share_kind": "session", **view(session_id, session)}
 
 
 INSTALL_DIR = STATIC / "install"

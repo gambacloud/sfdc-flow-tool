@@ -216,6 +216,7 @@ const state = {
   kind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which artifact type flowView is currently showing
   showIrSubtab: false, // SHOW_IR_SUBTAB config var - the IR tab is a debugging aid, off by default
   highlightPlanMode: false, // HIGHLIGHT_PLAN_MODE config var - hides "new", moves Options into the Builder pane
+  shareEnabled: false, // share_enabled config var - Upstash isn't always configured, so the Share button stays hidden until it is
 };
 
 let mermaid = null;
@@ -640,6 +641,7 @@ function renderGate() {
   approve.disabled = state.approved;
   approve.textContent = state.approved ? "Approved" : "Approve";
   validate.disabled = !state.approved;
+  $("shareBtn").hidden = !state.shareEnabled;
 
   const validatedNow = state.validatedVersion === state.version;
   deploy.disabled = !state.approved || !validatedNow;
@@ -1237,6 +1239,7 @@ function renderPlanGate() {
   approve.disabled = state.planApproved;
   approve.textContent = state.planApproved ? "Approved" : "Approve all";
   validate.disabled = !state.planApproved;
+  $("planShareBtn").hidden = !state.shareEnabled;
 
   const validatedNow = state.planValidatedVersion === state.planVersion;
   deploy.disabled = !state.planApproved || !validatedNow;
@@ -2434,6 +2437,109 @@ function restoreSessionFromUrlParam() {
   history.replaceState({}, document.title, location.pathname + (rest ? `?${rest}` : "") + location.hash);
 }
 
+// --------------------------------------------------------------------------
+// Share ("Share this") - snapshot the current session/plan on the server,
+// hand back an unguessable link + a short password; anyone with both can
+// resume review from exactly this point for 24 hours. See server.py's
+// /api/share/* and flowtool/share.py for the storage side.
+// --------------------------------------------------------------------------
+
+async function openShareDialog(kind, sessionId) {
+  if (!sessionId) return;
+  const dialog = $("shareDialog");
+  $("shareBody").hidden = false;
+  $("shareBody").textContent = "Creating link...";
+  $("shareResult").hidden = true;
+  dialog.showModal();
+  try {
+    const data = await api("api/share/start", { kind, session_id: sessionId });
+    // A `?share=<token>` query param on this same page, not a path segment
+    // (`/share/<token>`) - every asset and API call in this file is a
+    // relative path so the app works whether it's mounted at the site root
+    // or, in production, under /flow-tool; a path segment deeper would
+    // break every one of those relative references for whoever opens the
+    // link. See restoreSessionFromUrlParam() below for the identical
+    // existing pattern this mirrors.
+    $("shareLink").value = `${location.origin}${location.pathname}?share=${data.token}`;
+    $("sharePassword").value = data.password;
+    $("shareBody").hidden = true;
+    $("shareResult").hidden = false;
+  } catch (err) {
+    $("shareBody").textContent = err.message;
+  }
+}
+
+async function copyShareField(inputId, buttonId) {
+  const input = $(inputId);
+  const button = $(buttonId);
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch {
+    // Same fallback as the survey dialog's copy button - select the text so
+    // it can still be copied by hand when the Clipboard API is unavailable.
+    input.focus();
+    input.select();
+    return;
+  }
+  busy(button, true, "Copied");
+  setTimeout(() => busy(button, false), 1200);
+}
+
+// Landing on ?share=<token> - gate everything behind a password prompt
+// before rendering anything else. unlockShare() below turns a correct
+// password into a brand-new live session/plan, the same shape a fresh
+// design or a restored sessionStorage pointer produces. The token is
+// consumed from the URL immediately (same reasoning as
+// restoreSessionFromUrlParam) so a reload after unlocking doesn't prompt
+// for the password again.
+function checkShareLink() {
+  const params = new URLSearchParams(location.search);
+  const token = params.get("share");
+  if (!token) return;
+  params.delete("share");
+  const rest = params.toString();
+  history.replaceState({}, document.title, location.pathname + (rest ? `?${rest}` : "") + location.hash);
+
+  $("shareUnlockError").textContent = "";
+  $("shareUnlockDialog").showModal();
+  $("shareUnlockBtn").onclick = () => unlockShare(token);
+  $("shareUnlockPassword").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") unlockShare(token);
+  });
+  $("shareUnlockPassword").focus();
+}
+
+async function unlockShare(token) {
+  const button = $("shareUnlockBtn");
+  $("shareUnlockError").textContent = "";
+  busy(button, true, "Unlocking...");
+  try {
+    const data = await api(`api/share/${token}/unlock`, {
+      password: $("shareUnlockPassword").value.trim(),
+      provider: $("provider").value || null,
+      effort: $("effort").value,
+      api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
+    });
+    $("shareUnlockDialog").close();
+    if (data.share_kind === "plan") {
+      state.planValidatedVersion = null;
+      renderPlan(data);
+      sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "plan");
+      activateMode("plan");
+    } else {
+      state.validatedVersion = null;
+      renderFlow(data);
+      sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "open");
+      activateMode("open");
+    }
+  } catch (err) {
+    $("shareUnlockError").textContent = err.message;
+  } finally {
+    busy(button, false);
+  }
+}
+
 function restoreOAuthFromFragment() {
   if (!location.hash) return;
   const params = new URLSearchParams(location.hash.slice(1));
@@ -2734,6 +2840,7 @@ async function boot() {
     state.showIrSubtab = !!config.show_ir_subtab;
     $("irTab").hidden = !state.showIrSubtab;
     if (config.highlight_plan_mode) highlightPlanMode();
+    state.shareEnabled = !!config.share_enabled;
 
     const provider = $("provider");
     const known = config.all_providers?.length ? config.all_providers : config.providers;
@@ -2797,6 +2904,7 @@ async function boot() {
     renderOAuthStatus();
     restorePlanRequestText();
     await restoreSessions();
+    checkShareLink();
 
     const bits = [];
     if (config.providers.length) {
@@ -2917,6 +3025,10 @@ async function boot() {
   $("approveBtn").onclick = approve;
   $("validateBtn").onclick = validate;
   $("deployBtn").onclick = deploy;
+  $("shareBtn").onclick = () => openShareDialog("session", state.sessionId);
+  $("shareCopyLinkBtn").onclick = () => copyShareField("shareLink", "shareCopyLinkBtn");
+  $("shareCopyPasswordBtn").onclick = () => copyShareField("sharePassword", "shareCopyPasswordBtn");
+  $("shareCloseBtn").onclick = () => $("shareDialog").close();
 
   $("planBtn").onclick = planAndBuild;
   $("planResetBtn").onclick = resetPlan;
@@ -2943,6 +3055,7 @@ async function boot() {
   $("planApproveBtn").onclick = planApprove;
   $("planValidateBtn").onclick = planValidate;
   $("planDeployBtn").onclick = planDeploy;
+  $("planShareBtn").onclick = () => openShareDialog("plan", state.planSessionId);
   $("planExpandAllBtn").onclick = () => setAllPlanStepsOpen(true);
   $("planCollapseAllBtn").onclick = () => setAllPlanStepsOpen(false);
 

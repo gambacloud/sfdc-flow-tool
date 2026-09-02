@@ -327,6 +327,7 @@
           <button id="approveBtn" class="primary">Approve</button>
           <button id="validateBtn" disabled>Validate</button>
           <button id="deployBtn" class="danger" disabled>Deploy</button>
+          <button id="shareBtn" type="button" hidden>Share this</button>
         </div>
         <div id="gate" class="gate"></div>
       </div>
@@ -359,6 +360,7 @@
           <button id="planValidateBtn" disabled>Validate</button>
           <button id="planDeployBtn" class="danger" disabled>Deploy</button>
           <a id="planReportLink" href="#" download>Download report</a>
+          <button id="planShareBtn" type="button" hidden>Share this</button>
         </div>
         <div id="planGate" class="gate"></div>
       </div>
@@ -459,6 +461,46 @@
   <div class="row survey-actions">
     <button id="orgSummaryDownloadBtn" type="button" hidden>Save as .md</button>
     <button id="orgSummaryCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="shareDialog">
+  <h3>Share this</h3>
+  <p class="dim">
+    Anyone with this link <strong>and</strong> the password can resume from
+    exactly this point - review, approve, validate and deploy - for the next
+    24 hours. Nothing gets deployed to Salesforce just by opening the link.
+  </p>
+  <div id="shareBody" class="dim">Creating link...</div>
+  <div id="shareResult" hidden>
+    <label>Link
+      <div class="row">
+        <input id="shareLink" type="text" readonly>
+        <button id="shareCopyLinkBtn" type="button">Copy</button>
+      </div>
+    </label>
+    <label>Password
+      <div class="row">
+        <input id="sharePassword" type="text" readonly>
+        <button id="shareCopyPasswordBtn" type="button">Copy</button>
+      </div>
+    </label>
+    <p class="dim">Expires in 24 hours. Send the link and the password separately if you can.</p>
+  </div>
+  <div class="row survey-actions">
+    <button id="shareCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="shareUnlockDialog">
+  <h3>Enter the password</h3>
+  <p class="dim">This link opens a shared configuration, ready for review.</p>
+  <label>Password
+    <input id="shareUnlockPassword" type="text" autocomplete="off" inputmode="numeric">
+  </label>
+  <div id="shareUnlockError" class="error"></div>
+  <div class="row survey-actions">
+    <button id="shareUnlockBtn" class="primary" type="button">Unlock</button>
   </div>
 </dialog>
 
