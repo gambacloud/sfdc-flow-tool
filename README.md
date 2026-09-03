@@ -376,3 +376,9 @@ argument." `tests/test_gemini_budget.py` records what it actually counts, and
 | A flow won't open | The refusal names the construct — a gap in the IR, not a broken flow |
 | `Request contains an invalid argument` (Gemini) | Response schema over Gemini's undocumented size cap. Handled automatically; if you see it, lower `GEMINI_PROPERTY_BUDGET` in `flowtool/llm.py` |
 | `RESOURCE_EXHAUSTED` (Gemini) | Free tier is 20 requests/day/model. Wait, switch `--model`, or add billing |
+
+## Related tools
+
+- [salesforce-debugtool](https://github.com/gambacloud/salesforce-debugtool) — manage, review, and analyze Salesforce debug logs
+- [sfdc-deploy-tool](https://github.com/gambacloud/sfdc-deploy-tool) — compare, validate, and deploy Salesforce metadata between orgs
+- [sfdc-log-analyzer](https://github.com/gambacloud/sfdc-log-analyzer) — Salesforce debug log analyzer
