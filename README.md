@@ -3,7 +3,7 @@
 Describe business logic in plain language, get a Salesforce Flow that deploys.
 Or open a flow that already exists, ask what it does, and change it.
 
-Human-in-the-loop by design: nothing reaches the org before you approve it (see [How it works](#how-it-works)) — the model proposes, you decide.
+Human-in-the-loop (HITL) by design: nothing reaches the org before you approve it (see [How it works](#how-it-works)) — the model proposes, you decide.
 
 ```
 description ─┐
