@@ -12,6 +12,7 @@ view of the same build never drift apart.
 
 from __future__ import annotations
 
+import base64
 import html
 from pathlib import Path
 from typing import Any, List
@@ -25,6 +26,9 @@ from .mermaid import element_index, to_mermaid
 from .planner import StepResult
 
 _VENDOR_MERMAID_JS = Path(__file__).parent / "static" / "vendor" / "mermaid.min.js"
+_STATIC_DIR = Path(__file__).parent / "static"
+_LWC_PREVIEW_JS = _STATIC_DIR / "lwc-preview.js"
+_SLDS_SUBSET_CSS = _STATIC_DIR / "vendor" / "slds-subset.css"
 
 
 def _esc(value: Any) -> str:
@@ -66,6 +70,21 @@ def render_html_fragment(steps: List[StepResult]) -> str:
             parts.append(f"<h4>html</h4><pre><code>{_esc(value.html)}</code></pre>")
             if value.css:
                 parts.append(f"<h4>css</h4><pre><code>{_esc(value.css)}</code></pre>")
+            # Same rough non-executing preview the in-app "Preview" tab shows
+            # (window.renderLwcPreview, from static/lwc-preview.js) - the
+            # source html travels as base64 rather than inline markup so it
+            # survives the round trip through a raw-text <script> or a data
+            # attribute without any "</script"-in-source or quote-escaping
+            # edge cases. render_standalone_report below is what actually
+            # decodes and renders these; a caller embedding just this
+            # fragment (mcp_server.py, into an Artifact) gets an inert
+            # placeholder until it loads that script itself.
+            encoded_html = base64.b64encode(value.html.encode("utf-8")).decode("ascii")
+            parts.append(
+                f'<h4>preview</h4><div class="lwc-preview" data-lwc-html="{encoded_html}">'
+                "Preview renders once this report is opened in a browser."
+                "</div>"
+            )
         elif isinstance(value, PlatformEvent):
             parts.append(
                 "<table><tbody>"
@@ -132,6 +151,25 @@ def render_standalone_report(steps: List[StepResult], title: str, meta: str = ""
     """
     body = render_html_fragment(steps)
     meta_html = f'<p class="meta">{_esc(meta)}</p>' if meta else ""
+    lwc_preview_script = ""
+    if any(isinstance(r.value, LightningComponent) for r in steps):
+        lwc_preview_js = _LWC_PREVIEW_JS.read_text(encoding="utf-8")
+        slds_css = _SLDS_SUBSET_CSS.read_text(encoding="utf-8")
+        lwc_preview_script = (
+            f"<style>{slds_css}</style>"
+            f"<script>{lwc_preview_js}</script>"
+            "<script>"
+            "document.querySelectorAll('.lwc-preview[data-lwc-html]').forEach((div) => {"
+            "const b64 = div.getAttribute('data-lwc-html');"
+            "div.removeAttribute('data-lwc-html');"
+            "try {"
+            "const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));"
+            "const source = new TextDecoder('utf-8').decode(bytes);"
+            "window.renderLwcPreview(div, source);"
+            "} catch (err) { div.textContent = 'Could not render preview: ' + err.message; }"
+            "});"
+            "</script>"
+        )
     mermaid_script = ""
     if any(isinstance(r.value, Flow) for r in steps):
         mermaid_js = _VENDOR_MERMAID_JS.read_text(encoding="utf-8")
@@ -163,10 +201,10 @@ def render_standalone_report(steps: List[StepResult], title: str, meta: str = ""
         '<meta http-equiv="Content-Security-Policy" '
         'content="default-src \'none\'; script-src \'unsafe-inline\'; '
         'style-src \'unsafe-inline\'; img-src data:">'
-        if mermaid_script else ""
+        if mermaid_script or lwc_preview_script else ""
     )
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"{csp_meta}<title>{_esc(title)}</title><style>{_PAGE_CSS}</style></head><body>"
-        f"<h1>{_esc(title)}</h1>{meta_html}{body}{mermaid_script}</body></html>"
+        f"<h1>{_esc(title)}</h1>{meta_html}{body}{mermaid_script}{lwc_preview_script}</body></html>"
     )

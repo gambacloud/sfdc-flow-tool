@@ -6,8 +6,11 @@ fragment carries both, and the standalone document only pays for inlining
 mermaid.js when a Flow step is actually present.
 """
 
+import base64
+
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass
+from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_object import CustomObject
 from flowtool.planner import PlanStep, StepResult
 from flowtool.report import render_html_fragment, render_standalone_report
@@ -48,6 +51,18 @@ def _apex_step() -> StepResult:
     )
 
 
+def _lwc_step() -> StepResult:
+    return _step(
+        "lwc", "Widget",
+        LightningComponent(
+            api_name="widget",
+            js="export default class Widget {}",
+            html='<template><lightning-card title="Hi"></lightning-card></template>',
+            css="",
+        ),
+    )
+
+
 class TestRenderHtmlFragment:
     def test_flow_step_embeds_a_mermaid_diagram(self):
         fragment = render_html_fragment([_flow_step()])
@@ -65,6 +80,13 @@ class TestRenderHtmlFragment:
         fragment = render_html_fragment([_apex_step()])
         assert '<pre class="mermaid">' not in fragment
         assert "public class Helper" in fragment
+
+    def test_lwc_step_carries_its_html_for_a_preview(self):
+        fragment = render_html_fragment([_lwc_step()])
+        assert 'class="lwc-preview"' in fragment
+        step = _lwc_step()
+        encoded = base64.b64encode(step.value.html.encode("utf-8")).decode("ascii")
+        assert f'data-lwc-html="{encoded}"' in fragment
 
 
 class TestRenderStandaloneReport:
@@ -93,3 +115,11 @@ class TestRenderStandaloneReport:
         # No inlined script, nothing for a CSP meta tag to permit.
         report = render_standalone_report([_apex_step()], title="t")
         assert "Content-Security-Policy" not in report
+
+    def test_inlines_lwc_preview_js_only_when_an_lwc_step_is_present(self):
+        with_lwc = render_standalone_report([_lwc_step()], title="t")
+        without_lwc = render_standalone_report([_apex_step()], title="t")
+
+        assert "renderLwcPreview" in with_lwc
+        assert "renderLwcPreview" not in without_lwc
+        assert 'http-equiv="Content-Security-Policy"' in with_lwc
