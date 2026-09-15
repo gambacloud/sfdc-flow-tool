@@ -125,6 +125,8 @@ class MetadataType(BaseModel):
     label: str
     plural_label: str
     description: Optional[str] = None
+    # Not deployed - see CustomField.reasoning in ir_object.py.
+    reasoning: Optional[str] = None
     visibility: Visibility = "Public"
     deployment_status: Literal["Deployed", "InDevelopment"] = "Deployed"
     fields: List[MetadataField] = Field(min_length=1)
@@ -141,6 +143,8 @@ class CustomMetadataRecord(BaseModel):
     developer_name: str = Field(description="No suffix - the record's own DeveloperName")
     label: str
     protected: bool = False
+    # Not deployed - see CustomField.reasoning in ir_object.py.
+    reasoning: Optional[str] = None
     values: Dict[str, str] = Field(default_factory=dict)
 
     @field_validator("type_api_name")

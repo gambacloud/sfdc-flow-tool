@@ -1618,6 +1618,7 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
         "depends_on": result.step.depends_on,
         "repairs": result.repairs,
         "description": getattr(value, "description", None),
+        "reasoning": getattr(value, "reasoning", None),
     }
     if isinstance(value, Flow):
         entry.update({

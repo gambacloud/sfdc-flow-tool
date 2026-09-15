@@ -40,6 +40,8 @@ class LightningComponent(BaseModel):
     html: str
     css: Optional[str] = None
     description: Optional[str] = None
+    # Not deployed - see CustomField.reasoning in ir_object.py.
+    reasoning: Optional[str] = None
     is_exposed: bool = False
     targets: List[str] = Field(default_factory=list)
     api_version: str = "62.0"

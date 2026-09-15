@@ -426,9 +426,17 @@ Prefer the smallest flow that does what was asked. Do not add error handling, \
 logging, or extra branches that were not requested.
 
 When the request is ambiguous in a way that changes the logic, pick the reading a \
-careful Salesforce admin would take and state the assumption in the flow's \
-`description`. Do not invent fields or objects you were not given - if you must \
-guess an API name, say so in the description.
+careful Salesforce admin would take. Do not invent fields or objects you were not \
+given - if you must guess an API name, say so.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the flow there, never your \
+own commentary.
+
+Always fill in `reasoning` instead, for that commentary: one sentence, tweet-length \
+(under 280 characters), on what you built and, if you made a judgment call - an \
+ambiguous request, a guessed API name - what it was and why. This field is never \
+deployed; it is only for the person reviewing this step.
 """
 
 
@@ -481,6 +489,13 @@ one Salesforce generates - which requires `record_name_display_format` \
 tighter or looser sharing.
 - Do not invent fields here - a Custom Object in this IR is the object shell \
 alone. Fields are a separate request.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the object there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
 """
 
 
@@ -514,6 +529,14 @@ one.
 Salesforce refuses one left blank.
 - Do not invent a target object for a Lookup/MasterDetail that the request did \
 not name or imply.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the field there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call (a type, a target object), what it was and why. Never deployed - only for the \
+person reviewing this step.
 """
 
 
@@ -541,6 +564,13 @@ to this org/package (`Protected`) or to Apex in the same package only \
 (`PackageProtected`).
 - Prefer the smallest set of fields that does what was asked - do not add \
 audit fields, flags, or notes that were not requested.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the type there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
 """
 
 
@@ -561,6 +591,10 @@ as plain text, exactly as it should be stored - write "true"/"false" for a \
 checkbox field, a plain number for a numeric one. Only set a value for a \
 field the type actually has and the request actually specifies - do not \
 invent values for fields nobody mentioned.
+
+Always fill in `reasoning`: one sentence, tweet-length (under 280 characters), on \
+what this record sets and, if you made a judgment call, what it was and why. Never \
+deployed - only for the person reviewing this step.
 """
 
 
@@ -592,6 +626,13 @@ whether the surrounding transaction succeeds, in which case use \
 `PublishImmediately`.
 - Prefer the smallest set of fields that does what was asked - do not add \
 audit fields, flags, or notes that were not requested.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the event there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
 """
 
 
@@ -616,6 +657,13 @@ the moment it is wrong.
 - No compiler runs against this output before it is checked here - only a \
 brace-balance and class-name sanity check. Write it as if it must be correct \
 the first time.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the class there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
 """
 
 TRIGGER_SYSTEM_PROMPT = """\
@@ -642,6 +690,13 @@ moment it is wrong.
 - No compiler runs against this output before it is checked here - only a \
 brace-balance and declaration sanity check. Write it as if it must be correct \
 the first time.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the trigger there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
 """
 
 
@@ -682,6 +737,13 @@ not requested.
 - No compiler runs against this output before it is checked here - only a \
 brace/tag-balance and name-matching sanity check. Write it as if it must be \
 correct the first time.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the component there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
 """
 
 

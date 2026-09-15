@@ -2269,6 +2269,10 @@ class Flow(BaseModel):
     api_name: str
     label: str
     description: Optional[str] = None
+    # Not deployed - see Flow.reasoning docstring analogue in the other IRs.
+    # The model's own account of what it built and any judgment call it made,
+    # for the person reviewing the plan step. Never written to metadata XML.
+    reasoning: Optional[str] = None
     api_version: str = "62.0"
     # "Flow" is Salesforce's name for a screen flow — the one a user runs and
     # watches. "AutoLaunchedFlow" covers both record-triggered and autolaunched.

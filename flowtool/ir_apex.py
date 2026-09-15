@@ -42,6 +42,8 @@ class ApexClass(BaseModel):
     api_name: str
     body: str
     description: Optional[str] = None
+    # Not deployed - see CustomField.reasoning in ir_object.py.
+    reasoning: Optional[str] = None
     api_version: str = "62.0"
     status: Literal["Active", "Inactive"] = "Active"
 
@@ -70,6 +72,8 @@ class ApexTrigger(BaseModel):
     api_name: str
     body: str
     description: Optional[str] = None
+    # Not deployed - see CustomField.reasoning in ir_object.py.
+    reasoning: Optional[str] = None
     api_version: str = "62.0"
     status: Literal["Active", "Inactive"] = "Active"
 

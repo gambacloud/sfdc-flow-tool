@@ -47,6 +47,10 @@ class CustomField(BaseModel):
         "custom object's api_name including its __c suffix"
     )
     description: Optional[str] = None
+    # Not deployed - the model's own account of what it built and any
+    # judgment call it made, for the person reviewing the plan step. Never
+    # written to metadata XML, unlike description above.
+    reasoning: Optional[str] = None
     required: bool = False
     unique: bool = False
     default_value: Optional[str] = Field(
@@ -157,6 +161,8 @@ class CustomObject(BaseModel):
     label: str
     plural_label: str
     description: Optional[str] = None
+    # Not deployed - see CustomField.reasoning.
+    reasoning: Optional[str] = None
     record_name: str = "Name"
     record_name_type: Literal["Text", "AutoNumber"] = "Text"
     record_name_display_format: Optional[str] = Field(

@@ -1103,6 +1103,13 @@ function renderPlanStep(step) {
     body.appendChild(desc);
   }
 
+  if (step.reasoning) {
+    const reasoning = document.createElement("p");
+    reasoning.className = "dim plan-step-reasoning";
+    reasoning.textContent = "Why: " + step.reasoning;
+    body.appendChild(reasoning);
+  }
+
   if (step.artifact_type === "flow") {
     const tab = document.createElement("div");
     tab.className = "plan-step-diagram-tab";

@@ -115,6 +115,8 @@ class PlatformEvent(BaseModel):
     label: str
     plural_label: str
     description: Optional[str] = None
+    # Not deployed - see CustomField.reasoning in ir_object.py.
+    reasoning: Optional[str] = None
     publish_behavior: PublishBehavior = "PublishAfterCommit"
     fields: List[PlatformEventField] = Field(min_length=1)
 
