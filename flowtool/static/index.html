@@ -346,6 +346,12 @@
         </div>
       </div>
 
+      <p class="desc" id="planReasoning" hidden></p>
+      <details class="plan-how-to-test" id="planHowToTestBox" hidden>
+        <summary>How to test</summary>
+        <pre id="planHowToTest"></pre>
+      </details>
+
       <div class="plan-overview" id="planOverview"></div>
       <div class="plan-steps-toolbar">
         <button id="planExpandAllBtn" class="link-button" type="button">Expand all</button>
@@ -366,6 +372,13 @@
       </div>
 
       <div id="planResult" class="result" hidden></div>
+
+      <div class="pad refine" id="planRefineBox">
+        <label for="planInstruction">Change the plan itself - add, remove or restructure steps</label>
+        <textarea id="planInstruction" rows="2"
+          placeholder="also add a test class for the Apex trigger"></textarea>
+        <button id="planReviseBtn">Revise plan</button>
+      </div>
     </div>
   </section>
 </main>

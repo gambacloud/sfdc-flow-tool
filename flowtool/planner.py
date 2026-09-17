@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Type, Union
+from typing import Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -80,6 +80,18 @@ class PlanStep(BaseModel):
 
 class Plan(BaseModel):
     steps: List[PlanStep] = Field(min_length=1)
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="High-level - not per step: why the request was broken down "
+        "into these steps and how they fit together. Never deployed.",
+    )
+    how_to_test: Optional[str] = Field(
+        default=None,
+        description="How a person checks, after deploy, that the whole bundle "
+        "actually does what was asked - concrete steps against the artifacts "
+        "this plan creates, e.g. what record to create and what to expect. "
+        "Never deployed.",
+    )
 
     @model_validator(mode="after")
     def names_unique_and_dependencies_resolve(self) -> "Plan":
@@ -235,6 +247,23 @@ that only needs a single Flow (or a single object, field, or class) is a \
 plan with exactly one step - do not invent extra steps to make the plan look \
 more thorough. Do not add validation, logging, or components the request did \
 not ask for, the same restraint every individual generator is asked for.
+
+## Explaining the plan
+
+Always fill in `reasoning`: one or two sentences, tweet-length (under 280 \
+characters), on why the request became these particular steps - the breakdown \
+itself, not a restatement of the request. If the plan is a single step, say why \
+one step is enough. This is never deployed - it is only for the person deciding \
+whether to approve the plan.
+
+## How to test
+
+Always fill in `how_to_test`: concrete steps a person follows, after everything \
+in this plan deploys, to check it actually does what was asked - what record to \
+create or field to set, what screen or flow to run, and what they should see \
+happen. Name the real objects/fields/flows this plan creates. Skip generic advice \
+("check the debug logs") in favor of the specific scenario the request describes. \
+Never deployed.
 """
 
 
@@ -494,3 +523,38 @@ def refine_step(
         lambda generator, prior: generator.refine(prior, instruction),
         max_repairs,
     )
+
+
+@dataclass
+class PlanRevision:
+    plan: Plan
+    messages: List[Message]
+    steps: List[StepResult]
+
+
+def revise_plan(
+    provider: Provider, plan: Plan, messages: List[Message], instruction: str,
+    max_repairs: int = DEFAULT_MAX_REPAIRS, parallel: bool = False,
+) -> PlanRevision:
+    """
+    The plan-level sibling of refine_step: a change to the plan's own shape
+    (add/remove a step, split one step into two, change a dependency) rather
+    than one step's content - refine_step and /api/plan/step/revise/start
+    cover that already. `PlannerGenerator.refine` (inherited from IRGenerator,
+    unmodified) continues the same planning conversation the initial
+    /api/plan/start call produced, so the model edits the plan it already
+    wrote instead of re-planning from the request alone.
+
+    Every step of the revised plan is then generated fresh through
+    execute_plan, not just the ones that look new: a changed step list can
+    change what a dependent step's own brief needs to say (a renamed or
+    removed step invalidates any other step's depends_on/brief that named it),
+    and there is no reliable way to tell "genuinely unchanged" apart from
+    "looks similar but should regenerate" from outside the model that wrote
+    both plans. Simpler and safer to treat this the same as a first execute.
+    """
+    planner = PlannerGenerator(provider, max_repairs)
+    prior = IRGenerationResult(value=plan, messages=messages, repairs=0)
+    revised = planner.refine(prior, instruction)
+    steps = execute_plan(provider, revised.value, max_repairs, parallel=parallel)
+    return PlanRevision(plan=revised.value, messages=revised.messages, steps=steps)

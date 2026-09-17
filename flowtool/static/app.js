@@ -1214,6 +1214,14 @@ function renderPlan(data) {
   $("planMeta").textContent = `${steps.length} step${steps.length === 1 ? "" : "s"}`;
   $("planVersionBadge").textContent = "v" + data.version;
 
+  const reasoning = $("planReasoning");
+  reasoning.hidden = !data.reasoning;
+  reasoning.textContent = data.reasoning || "";
+
+  const howToTestBox = $("planHowToTestBox");
+  howToTestBox.hidden = !data.how_to_test;
+  $("planHowToTest").textContent = data.how_to_test || "";
+
   const overview = $("planOverview");
   overview.innerHTML = "";
   steps.forEach((step) => {
@@ -2317,6 +2325,28 @@ async function planStepRevise(stepName, input, button) {
   }
 }
 
+async function planRevise() {
+  const button = $("planReviseBtn");
+  const instruction = $("planInstruction").value.trim();
+  if (!instruction) return;
+  showError($("planGate").parentElement, "");
+  busy(button, true, "Revising plan...");
+  try {
+    await api("api/plan/revise/start", {
+      session_id: state.planSessionId, instruction,
+    });
+    const data = await poll("api/plan/revise/status", { session_id: state.planSessionId });
+    $("planInstruction").value = "";
+    state.planValidatedVersion = null;
+    renderPlan(data);
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Revise plan", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
 async function planDeploy() {
   if (!confirm("Deploy every step above to the org?\n\nThis happens as one transaction.")) return;
 
@@ -3039,6 +3069,7 @@ async function boot() {
 
   $("planBtn").onclick = planAndBuild;
   $("planResetBtn").onclick = resetPlan;
+  $("planReviseBtn").onclick = planRevise;
   $("planExamplesBtn").onclick = openExamplesDialog;
   $("examplesSelect").addEventListener("change", updateExamplesPreview);
   $("examplesUseBtn").onclick = useSelectedExample;
@@ -3081,6 +3112,9 @@ async function boot() {
   });
   $("instruction").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) refine();
+  });
+  $("planInstruction").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) planRevise();
   });
 
   wireDropdown($("logsBtn"), $("logsPanel"));

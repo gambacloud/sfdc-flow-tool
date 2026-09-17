@@ -51,6 +51,7 @@ from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_gui
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
+    revise_plan,
 )
 from flowtool.report import render_standalone_report
 from flowtool import share
@@ -1511,6 +1512,11 @@ class PlanStepReviseRequest(BaseModel):
     instruction: str
 
 
+class PlanReviseRequest(BaseModel):
+    session_id: str
+    instruction: str
+
+
 @dataclass
 class PermissionSetConfig:
     """The opt-in Permission Set grant a plan can carry, threaded through
@@ -1548,6 +1554,11 @@ class StoredPlan:
 
     provider: Provider
     plan: Plan
+    # The planning conversation that produced `plan` - kept so a later
+    # /api/plan/revise/start can continue it (see revise_plan in planner.py)
+    # instead of re-planning from the original request with no memory of
+    # what it already decided.
+    messages: List[Message]
     api_version: str
     permission_set_config: Optional[PermissionSetConfig] = None
 
@@ -1560,6 +1571,7 @@ class PendingPlanExecution:
     task: "asyncio.Task"
     provider: Provider
     plan: Plan
+    messages: List[Message]
     api_version: str
     permission_set_config: Optional[PermissionSetConfig] = None
 
@@ -1577,6 +1589,9 @@ class PlanSession:
     version: int = 1
     approved_version: int = 0
     permission_set_config: Optional[PermissionSetConfig] = None
+    # See StoredPlan.messages - carried through so a plan-level revise can
+    # still continue the original planning conversation after execute.
+    planner_messages: List[Message] = field(default_factory=list)
     pending_deploy: Optional[PendingDeploy] = None
     pending_llm: Optional[PendingLLM] = None
     # What the org said last time validate failed. `last_failures` is the
@@ -1709,6 +1724,8 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
         "session_id": session_id,
         "version": session.version,
         "approved": session.approved,
+        "reasoning": session.plan.reasoning,
+        "how_to_test": session.plan.how_to_test,
         "steps": [_step_view(r) for r in session.steps],
         "permission_set": _permission_set_view(session),
         "usage": session.provider.usage.as_dict(),
@@ -1859,15 +1876,18 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
     result = llm_result(pending.task)
     plan_id = uuid.uuid4().hex
     PLANS[plan_id] = StoredPlan(
-        provider=pending.provider, plan=result.value, api_version=pending.api_version,
-        permission_set_config=pending.permission_set_config,
+        provider=pending.provider, plan=result.value, messages=result.messages,
+        api_version=pending.api_version, permission_set_config=pending.permission_set_config,
     )
     steps = [
         {"name": s.name, "artifact_type": s.artifact_type, "brief": s.brief,
          "depends_on": s.depends_on}
         for s in result.value.steps
     ]
-    return {"done": True, "plan_id": plan_id, "steps": steps}
+    return {
+        "done": True, "plan_id": plan_id, "steps": steps,
+        "reasoning": result.value.reasoning, "how_to_test": result.value.how_to_test,
+    }
 
 
 @app.post("/api/plan/execute/start")
@@ -1888,8 +1908,8 @@ async def plan_execute_start(body: PlanExecuteRequest) -> Dict[str, Any]:
     )
     job_id = uuid.uuid4().hex
     PLAN_EXECUTIONS[job_id] = PendingPlanExecution(
-        task=task, provider=stored.provider, plan=stored.plan, api_version=stored.api_version,
-        permission_set_config=stored.permission_set_config,
+        task=task, provider=stored.provider, plan=stored.plan, messages=stored.messages,
+        api_version=stored.api_version, permission_set_config=stored.permission_set_config,
     )
     return {"job_id": job_id}
 
@@ -1909,6 +1929,7 @@ async def plan_execute_status(job_id: str) -> Dict[str, Any]:
         provider=pending.provider, plan=pending.plan, steps=steps,
         api_version=pending.api_version,
         permission_set_config=pending.permission_set_config,
+        planner_messages=pending.messages,
     )
     session.apply_policy()
     PLAN_SESSIONS[session_id] = session
@@ -2224,6 +2245,50 @@ async def plan_step_revise_status(session_id: str) -> Dict[str, Any]:
     return {"done": True, **plan_view(session_id, session)}
 
 
+@app.post("/api/plan/revise/start")
+async def plan_revise_start(body: PlanReviseRequest) -> Dict[str, Any]:
+    """
+    Ask the model to change the plan itself - add, remove or restructure
+    steps - not just one step's content (that's
+    /api/plan/step/revise/start). Every step is regenerated against the
+    revised plan; see revise_plan's docstring in planner.py for why a partial
+    re-run isn't safe here.
+    """
+    session = get_plan_session(body.session_id)
+    if not body.instruction.strip():
+        raise HTTPException(400, "Say what should change about the plan.")
+    if session.pending_llm is not None and not session.pending_llm.task.done():
+        raise HTTPException(409, "Another request is already running for this plan.")
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            revise_plan, session.provider, session.plan, session.planner_messages,
+            body.instruction,
+        )
+    )
+    session.pending_llm = PendingLLM(task=task, note=f"Revised plan: {body.instruction}")
+    return {"started": True}
+
+
+@app.get("/api/plan/revise/status")
+async def plan_revise_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    pending = session.pending_llm
+    if pending is None:
+        raise HTTPException(
+            400, "No plan revision in progress - call /api/plan/revise/start first."
+        )
+    if not pending.task.done():
+        return waiting(session.provider)
+    session.pending_llm = None
+    revision = llm_result(pending.task)
+    session.plan = revision.plan
+    session.planner_messages = revision.messages
+    session.steps = revision.steps
+    session.version += 1
+    session.apply_policy()
+    return {"done": True, **plan_view(session_id, session)}
+
+
 @app.get("/api/plan/session/{session_id}")
 def plan_session_view(session_id: str) -> Dict[str, Any]:
     """Re-fetch a plan session's current state - same reasoning as
@@ -2250,6 +2315,7 @@ def plan_report(session_id: str) -> PlainTextResponse:
         session.steps,
         title=f"Plan report - v{session.version}",
         meta=f"{len(session.steps)} step(s) - {status}",
+        plan=session.plan,
     )
     return PlainTextResponse(
         report, media_type="text/html",

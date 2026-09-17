@@ -15,15 +15,15 @@ from __future__ import annotations
 import base64
 import html
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 
 from .ir import Flow
 from .ir_apex import ApexClass, ApexTrigger
 from .ir_lwc import LightningComponent
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
-from .mermaid import element_index, to_mermaid
-from .planner import StepResult
+from .mermaid import element_index, to_mermaid, to_test_guide
+from .planner import Plan, StepResult
 
 _VENDOR_MERMAID_JS = Path(__file__).parent / "static" / "vendor" / "mermaid.min.js"
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -46,6 +46,9 @@ def render_html_fragment(steps: List[StepResult]) -> str:
         step = result.step
         parts.append(f'<article data-step-type="{_esc(step.artifact_type)}">')
         parts.append(f"<h3>{_esc(step.name)}</h3>")
+        reasoning = getattr(value, "reasoning", None)
+        if reasoning:
+            parts.append(f'<p class="reasoning">Why: {_esc(reasoning)}</p>')
 
         if isinstance(value, CustomObject):
             parts.append(
@@ -116,6 +119,9 @@ def render_html_fragment(steps: List[StepResult]) -> str:
                     f"<td>{_esc(row['detail'])}</td></tr>"
                 )
             parts.append("</tbody></table>")
+            parts.append(
+                f"<h4>How to test this flow</h4><pre>{_esc(to_test_guide(value))}</pre>"
+            )
 
         parts.append("</article>")
     parts.append("</section>")
@@ -130,12 +136,36 @@ article { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1re
 table { border-collapse: collapse; }
 th, td { text-align: left; padding: 0.2rem 0.75rem 0.2rem 0; }
 th { color: #555; font-weight: 600; }
-pre { background: #f5f5f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; }
+pre { background: #f5f5f5; padding: 0.75rem; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
 .meta { color: #555; font-size: 0.9rem; }
+.reasoning { color: #555; font-size: 0.9rem; font-style: italic; }
+section.plan-summary { margin: 1rem 0; }
+section.plan-summary h2 { font-size: 1.05rem; margin-bottom: 0.25rem; }
 """
 
 
-def render_standalone_report(steps: List[StepResult], title: str, meta: str = "") -> str:
+def _plan_summary_html(plan: Optional[Plan]) -> str:
+    """The plan-level "why" and "how to test" - above the per-step detail,
+    since both describe the bundle as a whole, not any one step."""
+    if plan is None:
+        return ""
+    parts: List[str] = []
+    if plan.reasoning:
+        parts.append(
+            f"<section class='plan-summary'><h2>Why this plan</h2>"
+            f"<p>{_esc(plan.reasoning)}</p></section>"
+        )
+    if plan.how_to_test:
+        parts.append(
+            f"<section class='plan-summary'><h2>How to test</h2>"
+            f"<pre>{_esc(plan.how_to_test)}</pre></section>"
+        )
+    return "".join(parts)
+
+
+def render_standalone_report(
+    steps: List[StepResult], title: str, meta: str = "", plan: Optional[Plan] = None,
+) -> str:
     """
     A complete, self-contained HTML document - what the web UI's "Download
     report" button hands out. Meant to be opened in a browser and printed to
@@ -151,6 +181,7 @@ def render_standalone_report(steps: List[StepResult], title: str, meta: str = ""
     """
     body = render_html_fragment(steps)
     meta_html = f'<p class="meta">{_esc(meta)}</p>' if meta else ""
+    summary_html = _plan_summary_html(plan)
     lwc_preview_script = ""
     if any(isinstance(r.value, LightningComponent) for r in steps):
         lwc_preview_js = _LWC_PREVIEW_JS.read_text(encoding="utf-8")
@@ -206,5 +237,6 @@ def render_standalone_report(steps: List[StepResult], title: str, meta: str = ""
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"{csp_meta}<title>{_esc(title)}</title><style>{_PAGE_CSS}</style></head><body>"
-        f"<h1>{_esc(title)}</h1>{meta_html}{body}{mermaid_script}{lwc_preview_script}</body></html>"
+        f"<h1>{_esc(title)}</h1>{meta_html}{summary_html}{body}"
+        f"{mermaid_script}{lwc_preview_script}</body></html>"
     )

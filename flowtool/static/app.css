@@ -536,6 +536,19 @@ pre.lwc-file-content {
 }
 .plan-step-revise input { flex: 1; }
 
+.plan-how-to-test { margin: 8px 0 0; }
+.plan-how-to-test summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.plan-how-to-test pre {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
 .error { color: var(--danger); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
 .spin { color: var(--dim); font-size: 13px; margin-top: 10px; }
 
