@@ -280,8 +280,6 @@
         <div class="badges">
           <span class="badge" id="statusBadge"></span>
           <span class="badge dim" id="versionBadge"></span>
-          <a id="flowReportLink" href="#" download class="link-button">Download report</a>
-          <a id="flowPackageLink" href="#" download class="link-button" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
         </div>
       </div>
 
@@ -328,11 +326,19 @@
           <input id="refInput" maxlength="80" placeholder="Reference, e.g. JIRA-123 (optional)"
                  title="Stamped into descriptions and code comments of whatever is deployed or exported">
         </div>
-        <div class="row">
-          <button id="approveBtn" class="primary">Approve</button>
-          <button id="validateBtn" disabled>Validate</button>
-          <button id="deployBtn" class="danger" disabled>Deploy</button>
-          <button id="shareBtn" type="button" hidden>Share this</button>
+        <div class="action-groups">
+          <fieldset class="action-group">
+            <legend>Review &amp; deploy</legend>
+            <button id="approveBtn" class="primary">Approve</button>
+            <button id="validateBtn" disabled>Validate</button>
+            <button id="deployBtn" class="danger" disabled>Deploy</button>
+          </fieldset>
+          <fieldset class="action-group">
+            <legend>Export &amp; share</legend>
+            <a id="flowReportLink" href="#" download class="btn">Download report</a>
+            <a id="flowPackageLink" href="#" download class="btn" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
+            <button id="shareBtn" type="button" hidden>Share this</button>
+          </fieldset>
         </div>
         <div id="gate" class="gate"></div>
       </div>
@@ -370,14 +376,20 @@
           <input id="planRefInput" maxlength="80" placeholder="Reference, e.g. JIRA-123 (optional)"
                  title="Stamped into descriptions and code comments of everything deployed or exported">
         </div>
-        <div class="row">
-          <button id="planApproveBtn" class="primary">Approve all</button>
-          <button id="planValidateBtn" disabled>Validate</button>
-          <button id="planDeployBtn" class="danger" disabled>Deploy</button>
-          <a id="planReportLink" href="#" download>Download report</a>
-          <a id="planPackageLink" href="#" download title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
-          <button id="planGitBtn" type="button" title="Commit the package to a new branch and open a pull request - deploys nothing to Salesforce">Push to Git (PR)</button>
-          <button id="planShareBtn" type="button" hidden>Share this</button>
+        <div class="action-groups">
+          <fieldset class="action-group">
+            <legend>Review &amp; deploy</legend>
+            <button id="planApproveBtn" class="primary">Approve all</button>
+            <button id="planValidateBtn" disabled>Validate</button>
+            <button id="planDeployBtn" class="danger" disabled>Deploy</button>
+          </fieldset>
+          <fieldset class="action-group">
+            <legend>Export &amp; share</legend>
+            <a id="planReportLink" href="#" download class="btn">Download report</a>
+            <a id="planPackageLink" href="#" download class="btn" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
+            <button id="planGitBtn" type="button" title="Commit the package to a new branch and open a pull request - deploys nothing to Salesforce">Push to Git (PR)</button>
+            <button id="planShareBtn" type="button" hidden>Share this</button>
+          </fieldset>
         </div>
         <div id="planGate" class="gate"></div>
       </div>

@@ -217,6 +217,27 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.danger { border-color: var(--danger); color: var(--danger); }
 button.danger:not(:disabled):hover { background: var(--danger); color: #fff; }
 
+a.btn {
+  display: inline-block;
+  font: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+a.btn:hover { border-color: var(--dim); }
+
+.action-groups { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
+.action-group {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 0; padding: 8px 12px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.action-group legend { padding: 0 6px; font-size: 11.5px; color: var(--dim); }
+
 #designBtn, #refineBtn { margin-top: 10px; }
 
 .combo { position: relative; }
