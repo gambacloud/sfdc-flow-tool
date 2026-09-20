@@ -47,6 +47,7 @@ from flowtool.llm import (
     Provider,
 )
 from flowtool.llm import GeminiProvider, OllamaProvider
+from flowtool.lwc_guide import to_lwc_test_guide
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
@@ -395,6 +396,7 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
             "is_exposed": component.is_exposed,
             "targets": component.targets,
             "has_css": component.css is not None,
+            "test_guide": to_lwc_test_guide(component),
             "ir": component.model_dump(exclude_none=True),
             "repairs": session.result.repairs,
             "usage": session.generator.provider.usage.as_dict(),
@@ -1670,6 +1672,7 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "css": value.css,
             "is_exposed": value.is_exposed,
             "targets": value.targets,
+            "test_guide": to_lwc_test_guide(value),
         })
     elif isinstance(value, MetadataType):
         entry.update({

@@ -852,6 +852,7 @@ function renderLwc(data) {
   state.version = data.version;
   state.approved = data.approved;
   state.artifacts.ir = JSON.stringify(data.ir, null, 2);
+  state.artifacts.test = data.test_guide;
   state.lwcHtml = data.ir.html;
 
   $("empty").hidden = true;
@@ -1141,6 +1142,16 @@ function renderPlanStep(step) {
     ]));
   } else if (step.artifact_type === "lwc") {
     body.appendChild(renderLwcFiles(step));
+    if (step.test_guide) {
+      const guide = document.createElement("details");
+      guide.className = "plan-step-test-guide";
+      const guideSummary = document.createElement("summary");
+      guideSummary.textContent = "How to test this component";
+      const guidePre = document.createElement("pre");
+      guidePre.textContent = step.test_guide;
+      guide.append(guideSummary, guidePre);
+      body.appendChild(guide);
+    }
   } else if (step.artifact_type === "mdt") {
     body.appendChild(planStepTable([
       ["API name", step.api_name],

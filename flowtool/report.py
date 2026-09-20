@@ -22,6 +22,7 @@ from .ir_apex import ApexClass, ApexTrigger
 from .ir_lwc import LightningComponent
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .lwc_guide import to_lwc_test_guide
 from .mermaid import element_index, to_mermaid, to_test_guide
 from .planner import Plan, StepResult
 
@@ -87,6 +88,10 @@ def render_html_fragment(steps: List[StepResult]) -> str:
                 f'<h4>preview</h4><div class="lwc-preview" data-lwc-html="{encoded_html}">'
                 "Preview renders once this report is opened in a browser."
                 "</div>"
+            )
+            parts.append(
+                f"<h4>How to test this component</h4>"
+                f"<pre>{_esc(to_lwc_test_guide(value))}</pre>"
             )
         elif isinstance(value, PlatformEvent):
             parts.append(
