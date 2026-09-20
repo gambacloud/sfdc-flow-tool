@@ -729,6 +729,8 @@ function renderFlow(data) {
 
   $("result").hidden = true;
   $("flowReportLink").href = `api/session/${data.session_id}/report`;
+  $("flowPackageLink").href = `api/session/${data.session_id}/package`;
+  $("refInput").value = data.reference || "";
   renderElementIndex(data.element_index);
   renderDiagram(data.mermaid);
   renderTab();
@@ -795,6 +797,8 @@ function renderApex(data) {
 
   $("result").hidden = true;
   $("flowReportLink").href = `api/session/${data.session_id}/report`;
+  $("flowPackageLink").href = `api/session/${data.session_id}/package`;
+  $("refInput").value = data.reference || "";
   renderTab();
   renderGate();
 
@@ -889,6 +893,8 @@ function renderLwc(data) {
 
   $("result").hidden = true;
   $("flowReportLink").href = `api/session/${data.session_id}/report`;
+  $("flowPackageLink").href = `api/session/${data.session_id}/package`;
+  $("refInput").value = data.reference || "";
 
   $("lwcCssTab").hidden = !data.has_css;
   setLwcFile(data.has_css && state.lwcFile === "css" ? "css" : "js");
@@ -1247,6 +1253,8 @@ function renderPlan(data) {
   steps.forEach((step) => container.appendChild(renderPlanStep(step)));
 
   $("planReportLink").href = `api/plan/session/${data.session_id}/report`;
+  $("planPackageLink").href = `api/plan/session/${data.session_id}/package`;
+  $("planRefInput").value = data.reference || "";
   renderPermissionSetGrant(data.permission_set);
 
   if (data.usage) state.usage = data.usage;
@@ -2153,6 +2161,23 @@ async function refine() {
   }
 }
 
+async function saveReference(kind, input) {
+  const sessionId = kind === "plan" ? state.planSessionId : state.sessionId;
+  if (!sessionId) return;
+  try {
+    const data = await api("api/reference", {
+      kind, session_id: sessionId, reference: input.value,
+    });
+    input.value = data.reference || "";
+    input.classList.remove("invalid");
+    input.title = "";
+  } catch (err) {
+    input.classList.add("invalid");
+    input.title = err.message;
+    logError("Reference", err.message);
+  }
+}
+
 async function approve() {
   const button = $("approveBtn");
   try {
@@ -2514,6 +2539,79 @@ async function openShareDialog(kind, sessionId) {
     $("shareResult").hidden = false;
   } catch (err) {
     $("shareBody").textContent = err.message;
+  }
+}
+
+// --------------------------------------------------------------------------
+// Push to Git - commit the plan's Metadata API package to a new branch of a
+// GitHub repo and open a PR. The token goes to our server only to be forwarded
+// to GitHub for that one call; it is kept in this browser (localStorage) only
+// if the box is ticked. See server.py's /api/plan/git/push.
+// --------------------------------------------------------------------------
+
+const GIT_STORAGE_KEY = "flowtool.git";
+
+function loadGitPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(GIT_STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function openGitDialog() {
+  if (!state.planSessionId) return;
+  const prefs = loadGitPrefs();
+  $("gitRepo").value = prefs.repo || "";
+  $("gitBase").value = prefs.base || "";
+  $("gitFolder").value = `sfdc-flow-forge/${state.planSessionId.slice(0, 8)}`;
+  $("gitTitle").value = "";
+  $("gitToken").value = prefs.token || "";
+  $("gitRemember").checked = !!prefs.token;
+  $("gitError").textContent = "";
+  $("gitResult").hidden = true;
+  $("gitForm").hidden = false;
+  $("gitSubmitBtn").hidden = false;
+  $("gitDialog").showModal();
+}
+
+async function submitGit() {
+  const button = $("gitSubmitBtn");
+  const repo = $("gitRepo").value.trim();
+  const token = $("gitToken").value.trim();
+  if (!repo || !token) {
+    $("gitError").textContent = "Repository and token are required.";
+    return;
+  }
+  $("gitError").textContent = "";
+  busy(button, true, "Pushing...");
+  try {
+    const data = await api("api/plan/git/push", {
+      session_id: state.planSessionId,
+      repo,
+      token,
+      base: $("gitBase").value.trim() || null,
+      folder: $("gitFolder").value.trim(),
+      title: $("gitTitle").value.trim() || null,
+    });
+    try {
+      localStorage.setItem(GIT_STORAGE_KEY, JSON.stringify({
+        repo, base: $("gitBase").value.trim(),
+        token: $("gitRemember").checked ? token : "",
+      }));
+    } catch {
+      // Storage blocked - the push already worked, so just don't remember.
+    }
+    const link = $("gitPrLink");
+    link.href = data.url;
+    link.textContent = `#${data.number} (${data.branch} -> ${data.base})`;
+    $("gitForm").hidden = true;
+    $("gitSubmitBtn").hidden = true;
+    $("gitResult").hidden = false;
+  } catch (err) {
+    $("gitError").textContent = err.message;
+  } finally {
+    busy(button, false);
   }
 }
 
@@ -3071,6 +3169,7 @@ async function boot() {
   $("explainBtn").onclick = explainFlow;
   $("refineBtn").onclick = refine;
   $("approveBtn").onclick = approve;
+  $("refInput").onchange = () => saveReference("session", $("refInput"));
   $("validateBtn").onclick = validate;
   $("deployBtn").onclick = deploy;
   $("shareBtn").onclick = () => openShareDialog("session", state.sessionId);
@@ -3102,9 +3201,13 @@ async function boot() {
     $("planPermSetResults").hidden = true;
   });
   $("planApproveBtn").onclick = planApprove;
+  $("planRefInput").onchange = () => saveReference("plan", $("planRefInput"));
   $("planValidateBtn").onclick = planValidate;
   $("planDeployBtn").onclick = planDeploy;
   $("planShareBtn").onclick = () => openShareDialog("plan", state.planSessionId);
+  $("planGitBtn").onclick = openGitDialog;
+  $("gitSubmitBtn").onclick = submitGit;
+  $("gitCloseBtn").onclick = () => $("gitDialog").close();
   $("planExpandAllBtn").onclick = () => setAllPlanStepsOpen(true);
   $("planCollapseAllBtn").onclick = () => setAllPlanStepsOpen(false);
 

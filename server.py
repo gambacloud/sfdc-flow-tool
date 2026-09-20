@@ -20,8 +20,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -54,11 +55,14 @@ from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
     revise_plan,
 )
+from flowtool.reference import clean_reference, tag_description, tag_value
 from flowtool.report import render_standalone_report
-from flowtool import share
+from flowtool import github, share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     RetrieveError,
+    _deploy_package_xml,
+    build_deploy_package,
     component_setup_url,
     list_apex_classes,
     list_apex_triggers,
@@ -190,6 +194,9 @@ class Session:
     last_failures: List[str] = field(default_factory=list)
     # True when the artifact came out of the org rather than from a description.
     imported: bool = False
+    # Optional external reference (e.g. a JIRA key) stamped onto what deploys
+    # or exports - see flowtool/reference.py.
+    reference: Optional[str] = None
     pending_deploy: Optional[PendingDeploy] = None
     pending_llm: Optional[PendingLLM] = None
     pending_explain: Optional["asyncio.Task"] = None
@@ -375,6 +382,7 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
             "description": artifact.description,
             "status": artifact.status,
             "api_version": artifact.api_version,
+            "reference": session.reference,
             "ir": artifact.model_dump(exclude_none=True),
             "repairs": session.result.repairs,
             "usage": session.generator.provider.usage.as_dict(),
@@ -396,6 +404,7 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
             "is_exposed": component.is_exposed,
             "targets": component.targets,
             "has_css": component.css is not None,
+            "reference": session.reference,
             "test_guide": to_lwc_test_guide(component),
             "ir": component.model_dump(exclude_none=True),
             "repairs": session.result.repairs,
@@ -428,6 +437,7 @@ def view(session_id: str, session: Session) -> Dict[str, Any]:
         "markdown": to_markdown(flow),
         "test_guide": to_test_guide(flow),
         "element_index": element_index(flow),
+        "reference": session.reference,
         "ir": flow.model_dump(exclude_none=True),
         "repairs": session.result.repairs,
         "usage": session.generator.provider.usage.as_dict(),
@@ -1210,7 +1220,7 @@ def _deploy_files(session: Session) -> "tuple[Dict[str, str], Dict[str, List[str
     multi-type plan deploy.
     """
     if session.kind == "apex":
-        apex = session.apex
+        apex = tag_value(session.apex, session.reference)
         body, meta = generate_apex(apex)
         return (
             {
@@ -1220,7 +1230,7 @@ def _deploy_files(session: Session) -> "tuple[Dict[str, str], Dict[str, List[str
             {"ApexClass": [apex.api_name]},
         )
     if session.kind == "trigger":
-        trigger = session.trigger
+        trigger = tag_value(session.trigger, session.reference)
         body, meta = generate_apex_trigger(trigger)
         return (
             {
@@ -1230,9 +1240,9 @@ def _deploy_files(session: Session) -> "tuple[Dict[str, str], Dict[str, List[str
             {"ApexTrigger": [trigger.api_name]},
         )
     if session.kind == "lwc":
-        component = session.lwc
+        component = tag_value(session.lwc, session.reference)
         return generate_lwc(component), {"LightningComponentBundle": [component.api_name]}
-    flow = session.flow
+    flow = tag_value(session.flow, session.reference)
     return {f"flows/{flow.api_name}.flow": generate_xml(flow)}, {"Flow": [flow.api_name]}
 
 
@@ -1369,6 +1379,13 @@ def session_view(session_id: str) -> Dict[str, Any]:
 def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     session = get_session(session_id)
 
+    if artifact == "package":
+        files, types = _deploy_files(session)
+        return _zip_response(
+            build_deploy_package(files, types, session.api_version),
+            f"package-{session_id}.zip",
+        )
+
     if session.kind in ("apex", "trigger"):
         component = session.artifact
 
@@ -1384,7 +1401,8 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
             )
             report = render_standalone_report(
                 [step], title=f"{component.api_name} - v{session.version}",
-                meta=f"{len(component.body.splitlines())} line(s) - {status}",
+                meta=f"{len(component.body.splitlines())} line(s) - {status}"
+            + (f" - Ref: {session.reference}" if session.reference else ""),
             )
             return PlainTextResponse(
                 report, media_type="text/html",
@@ -1413,7 +1431,8 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
             )
             report = render_standalone_report(
                 [step], title=f"{component.api_name} - v{session.version}",
-                meta=f"{len(component.js.splitlines())} line(s) of js - {status}",
+                meta=f"{len(component.js.splitlines())} line(s) of js - {status}"
+            + (f" - Ref: {session.reference}" if session.reference else ""),
             )
             return PlainTextResponse(
                 report, media_type="text/html",
@@ -1452,7 +1471,8 @@ def artifact(session_id: str, artifact: str) -> PlainTextResponse:
         )
         report = render_standalone_report(
             [step], title=f"{flow.label} - v{session.version}",
-            meta=f"{len(flow.elements)} element(s) - {status}",
+            meta=f"{len(flow.elements)} element(s) - {status}"
+            + (f" - Ref: {session.reference}" if session.reference else ""),
         )
         return PlainTextResponse(
             report, media_type="text/html",
@@ -1591,6 +1611,7 @@ class PlanSession:
     version: int = 1
     approved_version: int = 0
     permission_set_config: Optional[PermissionSetConfig] = None
+    reference: Optional[str] = None
     # See StoredPlan.messages - carried through so a plan-level revise can
     # still continue the original planning conversation after execute.
     planner_messages: List[Message] = field(default_factory=list)
@@ -1729,6 +1750,7 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
         "approved": session.approved,
         "reasoning": session.plan.reasoning,
         "how_to_test": session.plan.how_to_test,
+        "reference": session.reference,
         "steps": [_step_view(r) for r in session.steps],
         "permission_set": _permission_set_view(session),
         "usage": session.provider.usage.as_dict(),
@@ -1736,7 +1758,7 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
 
 
 def _bundle_files_and_types(
-    steps: List[StepResult],
+    steps: List[StepResult], reference: Optional[str] = None,
 ) -> tuple[Dict[str, str], Dict[str, List[str]]]:
     """
     Every step's generated IR, compiled to the metadata files and package.xml
@@ -1758,10 +1780,10 @@ def _bundle_files_and_types(
     fields_by_object: Dict[str, List[CustomField]] = {}
     mdt_types: Dict[str, MetadataType] = {}
     platform_events: Dict[str, PlatformEvent] = {}
-    other_steps: List[StepResult] = []
+    other_steps: List[Any] = []
 
     for result in steps:
-        value = result.value
+        value = tag_value(result.value, reference)
         if isinstance(value, CustomObject):
             objects[value.api_name] = value
         elif isinstance(value, CustomField):
@@ -1771,7 +1793,7 @@ def _bundle_files_and_types(
         elif isinstance(value, PlatformEvent):
             platform_events[value.api_name] = value
         else:
-            other_steps.append(result)
+            other_steps.append(value)
 
     files: Dict[str, str] = {}
     types: Dict[str, List[str]] = {}
@@ -1809,8 +1831,7 @@ def _bundle_files_and_types(
         files[f"objects/{api_name}.object"] = generate_platform_event(event)
         types.setdefault("CustomObject", []).append(api_name)
 
-    for result in other_steps:
-        value = result.value
+    for value in other_steps:
         if isinstance(value, Flow):
             files[f"flows/{value.api_name}.flow"] = generate_xml(value)
             types.setdefault("Flow", []).append(value.api_name)
@@ -1958,6 +1979,7 @@ async def _add_permission_set_files(
     api_version: str,
     files: Dict[str, str],
     types: Dict[str, List[str]],
+    reference: Optional[str] = None,
 ) -> None:
     """
     Renders the opt-in Permission Set grant and folds it into `files`/`types`
@@ -1968,6 +1990,8 @@ async def _add_permission_set_files(
     before the bundle is complete.
     """
     grant = build_grant_from_steps(steps, config.label or config.api_name or "Generated Access")
+    if reference:
+        grant.description = tag_description(grant.description, reference)
     api_name = config.api_name
     if config.mode == "new":
         xml = generate_permission_set(grant, api_name=api_name)
@@ -1982,11 +2006,11 @@ async def _add_permission_set_files(
 async def _deploy_plan_bundle(
     session: PlanSession, url: str, token: str, check_only: bool,
 ) -> Any:
-    files, types = _bundle_files_and_types(session.steps)
+    files, types = _bundle_files_and_types(session.steps, session.reference)
     if session.permission_set_config is not None:
         await _add_permission_set_files(
             session.permission_set_config, session.steps, url, token,
-            session.api_version, files, types,
+            session.api_version, files, types, session.reference,
         )
     return await validate_bundle(
         url, token, files, types, api_version=session.api_version, check_only=check_only,
@@ -2300,6 +2324,147 @@ def plan_session_view(session_id: str) -> Dict[str, Any]:
     return plan_view(session_id, session)
 
 
+def _zip_response(zip_bytes: bytes, filename: str) -> Response:
+    return Response(
+        zip_bytes, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _plan_package_files(
+    session: PlanSession,
+) -> tuple[Dict[str, str], Dict[str, List[str]]]:
+    """
+    The plan's member files and package.xml types, org-free - shared by the
+    zip download and Push to Git.
+
+    A Permission Set that merges into an existing one needs that org's
+    current copy to merge with, so it is left out; a new one is included,
+    since it needs nothing from an org.
+    """
+    files, types = _bundle_files_and_types(session.steps, session.reference)
+    config = session.permission_set_config
+    if config is not None and config.mode == "new":
+        grant = build_grant_from_steps(
+            session.steps, config.label or config.api_name or "Generated Access",
+        )
+        if session.reference:
+            grant.description = tag_description(grant.description, session.reference)
+        files[f"permissionsets/{config.api_name}.permissionset"] = generate_permission_set(
+            grant, api_name=config.api_name,
+        )
+        types.setdefault("PermissionSet", []).append(config.api_name)
+    return files, types
+
+
+@app.get("/api/plan/session/{session_id}/package")
+def plan_package(session_id: str) -> Response:
+    """
+    The plan as a Metadata API zip (package.xml + every component), for
+    deploying with `sf project deploy start --metadata-dir`, Workbench, or
+    anything else that takes a package - without going through this tool's
+    own org connection. Needs no org and no approval: it deploys nothing.
+    """
+    session = get_plan_session(session_id)
+    files, types = _plan_package_files(session)
+    zip_bytes = build_deploy_package(files, types, session.api_version)
+    return _zip_response(zip_bytes, f"package-{session_id}.zip")
+
+
+class GitPushRequest(BaseModel):
+    session_id: str
+    token: str
+    repo: str
+    base: Optional[str] = None
+    folder: Optional[str] = None
+    branch: Optional[str] = None
+    title: Optional[str] = None
+
+
+def _plan_pr_body(session: PlanSession, folder: str) -> str:
+    lines = []
+    if session.reference:
+        lines.append(f"Reference: **{session.reference}**\n")
+    if session.plan.reasoning:
+        lines.append(session.plan.reasoning + "\n")
+    lines.append("### Components")
+    for result in session.steps:
+        description = getattr(result.value, "description", None)
+        suffix = f" - {description}" if description else ""
+        lines.append(f"- **{result.step.artifact_type}** `{result.step.name}`{suffix}")
+    if session.plan.how_to_test:
+        lines.append("\n### How to test\n" + session.plan.how_to_test)
+    where = folder or "."
+    lines.append(
+        "\n### Deploying\n"
+        f"The Metadata API package is in `{where}/` (package.xml + components):\n"
+        f"```\nsf project deploy start --metadata-dir {where}\n```"
+    )
+    config = session.permission_set_config
+    if config is not None and config.mode != "new":
+        lines.append(
+            "\n_The Permission Set grant merges into an existing set, which needs that "
+            "org's current copy - it is not included here._"
+        )
+    lines.append("\nGenerated by sfdc-flow-forge.")
+    return "\n".join(lines)
+
+
+@app.post("/api/plan/git/push")
+async def plan_git_push(body: GitPushRequest) -> Dict[str, Any]:
+    """
+    Commit the plan's Metadata API package to a new branch of a GitHub repo and
+    open a pull request. Deploys nothing to Salesforce, so - like the zip
+    download - it needs no approval. The token is used for this call only.
+    """
+    session = get_plan_session(body.session_id)
+    try:
+        repo = github.clean_repo(body.repo)
+        ref = session.reference
+        folder = github.clean_folder(
+            body.folder if body.folder is not None else f"sfdc-flow-forge/{body.session_id[:8]}"
+        )
+        branch = github.clean_branch(
+            body.branch or f"flow-forge/{ref + '-' if ref else ''}{body.session_id[:8]}"
+        )
+        files, types = _plan_package_files(session)
+        files["package.xml"] = _deploy_package_xml(types, session.api_version)
+        title = (body.title or "").strip() or (
+            f"{ref}: " if ref else ""
+        ) + f"sfdc-flow-forge plan ({len(session.steps)} step(s))"
+        return await github.open_pull_request(
+            token=body.token, repo=repo, base=body.base, branch=branch, files=files,
+            folder=folder, commit_message=title, title=title,
+            body=_plan_pr_body(session, folder),
+        )
+    except github.GitHubError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Couldn't reach GitHub: {type(exc).__name__}") from exc
+
+
+class ReferenceRequest(BaseModel):
+    kind: Literal["session", "plan"]
+    session_id: str
+    reference: Optional[str] = None
+
+
+@app.post("/api/reference")
+def set_reference(body: ReferenceRequest) -> Dict[str, Any]:
+    """Set or clear the optional external reference (e.g. a JIRA key). It only
+    affects what gets deployed or exported next - the reviewed IR is left
+    alone - so it needs no re-approval and does not bump the version."""
+    try:
+        reference = clean_reference(body.reference)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if body.kind == "plan":
+        get_plan_session(body.session_id).reference = reference
+    else:
+        get_session(body.session_id).reference = reference
+    return {"reference": reference}
+
+
 @app.get("/api/plan/session/{session_id}/report")
 def plan_report(session_id: str) -> PlainTextResponse:
     """
@@ -2317,7 +2482,8 @@ def plan_report(session_id: str) -> PlainTextResponse:
     report = render_standalone_report(
         session.steps,
         title=f"Plan report - v{session.version}",
-        meta=f"{len(session.steps)} step(s) - {status}",
+        meta=f"{len(session.steps)} step(s) - {status}"
+        + (f" - Ref: {session.reference}" if session.reference else ""),
         plan=session.plan,
     )
     return PlainTextResponse(
@@ -2382,6 +2548,7 @@ def _session_snapshot(session: Session) -> Dict[str, Any]:
         "activate": session.activate,
         "history": session.history,
         "imported": session.imported,
+        "reference": session.reference,
         "repairs": session.result.repairs,
         "messages": _messages_to_json(session.result.messages),
         "ir": session.artifact.model_dump(mode="json"),
@@ -2406,6 +2573,7 @@ def _session_from_snapshot(data: Dict[str, Any], provider: Provider) -> Session:
         api_version=data["api_version"],
         history=list(data["history"]) + [{"note": "Resumed from a shared link", "version": "1"}],
         imported=data["imported"],
+        reference=data.get("reference"),
     )
     session.apply_policy()
     return session
@@ -2416,6 +2584,7 @@ def _plan_snapshot(session: "PlanSession") -> Dict[str, Any]:
     return {
         "type": "plan",
         "api_version": session.api_version,
+        "reference": session.reference,
         "permission_set_config": (
             None if config is None
             else {"mode": config.mode, "label": config.label, "api_name": config.api_name}
@@ -2454,6 +2623,7 @@ def _plan_from_snapshot(data: Dict[str, Any], provider: Provider) -> "PlanSessio
         steps=steps,
         api_version=data["api_version"],
         permission_set_config=permission_set_config,
+        reference=data.get("reference"),
     )
     session.apply_policy()
     return session

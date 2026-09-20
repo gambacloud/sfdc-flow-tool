@@ -281,6 +281,7 @@
           <span class="badge" id="statusBadge"></span>
           <span class="badge dim" id="versionBadge"></span>
           <a id="flowReportLink" href="#" download class="link-button">Download report</a>
+          <a id="flowPackageLink" href="#" download class="link-button" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
         </div>
       </div>
 
@@ -323,6 +324,10 @@
       </div>
 
       <div class="actions">
+        <div class="row reference-row">
+          <input id="refInput" maxlength="80" placeholder="Reference, e.g. JIRA-123 (optional)"
+                 title="Stamped into descriptions and code comments of whatever is deployed or exported">
+        </div>
         <div class="row">
           <button id="approveBtn" class="primary">Approve</button>
           <button id="validateBtn" disabled>Validate</button>
@@ -361,11 +366,17 @@
       <div class="plan-permset" id="planPermSetGrant" hidden></div>
 
       <div class="actions">
+        <div class="row reference-row">
+          <input id="planRefInput" maxlength="80" placeholder="Reference, e.g. JIRA-123 (optional)"
+                 title="Stamped into descriptions and code comments of everything deployed or exported">
+        </div>
         <div class="row">
           <button id="planApproveBtn" class="primary">Approve all</button>
           <button id="planValidateBtn" disabled>Validate</button>
           <button id="planDeployBtn" class="danger" disabled>Deploy</button>
           <a id="planReportLink" href="#" download>Download report</a>
+          <a id="planPackageLink" href="#" download title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
+          <button id="planGitBtn" type="button" title="Commit the package to a new branch and open a pull request - deploys nothing to Salesforce">Push to Git (PR)</button>
           <button id="planShareBtn" type="button" hidden>Share this</button>
         </div>
         <div id="planGate" class="gate"></div>
@@ -502,6 +513,43 @@
   </div>
   <div class="row survey-actions">
     <button id="shareCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="gitDialog">
+  <h3>Push to Git</h3>
+  <p class="dim">
+    Commits this plan's Metadata API package (package.xml + components) to a new
+    branch and opens a pull request. Nothing is deployed to Salesforce.
+  </p>
+  <div id="gitForm">
+    <label>Repository
+      <input id="gitRepo" type="text" placeholder="owner/name" autocomplete="off">
+    </label>
+    <label>Base branch
+      <input id="gitBase" type="text" placeholder="default branch" autocomplete="off">
+    </label>
+    <label>Folder in the repo
+      <input id="gitFolder" type="text" autocomplete="off">
+    </label>
+    <label>Pull request title
+      <input id="gitTitle" type="text" placeholder="generated from the plan" autocomplete="off">
+    </label>
+    <label>GitHub personal access token
+      <input id="gitToken" type="password" autocomplete="off" placeholder="ghp_... or github_pat_...">
+    </label>
+    <label class="check">
+      <input id="gitRemember" type="checkbox"> Remember the token in this browser
+    </label>
+    <p class="dim">Needs write access to the repo (classic: <code>repo</code> scope; fine-grained: Contents and Pull requests, read &amp; write). Sent to GitHub for this request only - the server doesn't keep it.</p>
+  </div>
+  <div id="gitError" class="error"></div>
+  <div id="gitResult" hidden>
+    <p>Pull request opened: <a id="gitPrLink" href="#" target="_blank" rel="noopener"></a></p>
+  </div>
+  <div class="row survey-actions">
+    <button id="gitSubmitBtn" class="primary" type="button">Create pull request</button>
+    <button id="gitCloseBtn" type="button">Close</button>
   </div>
 </dialog>
 

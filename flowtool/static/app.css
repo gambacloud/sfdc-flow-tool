@@ -438,6 +438,9 @@ pre#code {
 .actions { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .actions .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .actions .row label { flex: 0 0 200px; }
+.reference-row { margin-bottom: 10px; }
+.reference-row input { max-width: 320px; }
+input.invalid { border-color: var(--danger); }
 .gate { margin-top: 10px; font-size: 13px; color: var(--dim); }
 
 .result { margin-top: 16px; padding: 14px; border-radius: 8px; border: 1px solid var(--line); }
