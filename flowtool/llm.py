@@ -753,7 +753,11 @@ call, what it was and why. Never deployed - only for the person reviewing this s
 
 
 class _SchemaTooComplex(LLMError):
-    """Anthropic's schema compiler refused the response schema (400)."""
+    """
+    Anthropic's schema compiler refused the response schema (400): too
+    complex, or something it can't express, such as a self-referencing
+    definition (ScreenField -> ScreenField).
+    """
 
 
 class AnthropicProvider:
@@ -845,7 +849,12 @@ class AnthropicProvider:
         except anthropic.APIConnectionError as exc:
             raise LLMError(f"Could not reach the Anthropic API: {exc}") from exc
         except anthropic.APIStatusError as exc:
-            if exc.status_code == 400 and "too complex" in str(exc.message).lower():
+            message = str(exc.message).lower()
+            if exc.status_code == 400 and (
+                "too complex" in message
+                or "invalid schema" in message
+                or "output_config.format" in message
+            ):
                 raise _SchemaTooComplex(
                     f"Anthropic API error 400: {exc.message}"
                 ) from exc
@@ -901,9 +910,9 @@ class AnthropicProvider:
                 # validated against the real IR and repaired on mismatch.
                 self._too_complex.add(schema_key)
                 log.warning(
-                    "schema rejected as too complex by Anthropic - sending it as "
-                    "text instead of a response schema. Output is validated and "
-                    "repaired as usual, but expect more repair rounds."
+                    "schema rejected by Anthropic - sending it as text instead of "
+                    "a response schema. Output is validated and repaired as "
+                    "usual, but expect more repair rounds."
                 )
         if response is None:
             response = self._create(
