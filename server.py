@@ -126,6 +126,15 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
+    # StaticFiles sends an ETag but no Cache-Control, so browsers cache the
+    # page and its scripts heuristically - after a deploy a user can be left
+    # with new HTML driving an old app.js. no-cache still allows a cheap 304
+    # revalidation; it just stops a stale copy being used without asking.
+    kind = response.headers.get("content-type", "")
+    if "cache-control" not in response.headers and kind.startswith(
+        ("text/html", "text/css", "text/javascript", "application/javascript")
+    ):
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 

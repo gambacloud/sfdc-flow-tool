@@ -434,11 +434,13 @@ function usageText(usage) {
   }
   // An estimate from list prices, and only for models flowtool/llm.py knows
   // the price of - so say when some calls could not be priced.
+  const unpriced = usage.unpriced_calls
+    ? `${usage.unpriced_calls} unpriced call${usage.unpriced_calls === 1 ? "" : "s"}`
+    : "";
   if (usage.cost_usd) {
-    const unpriced = usage.unpriced_calls
-      ? ` + ${usage.unpriced_calls} unpriced call${usage.unpriced_calls === 1 ? "" : "s"}`
-      : "";
-    bits.push(`~$${usage.cost_usd.toFixed(3)}${unpriced}`);
+    bits.push(`~$${usage.cost_usd.toFixed(3)}${unpriced ? ` + ${unpriced}` : ""}`);
+  } else if (unpriced) {
+    bits.push(`cost unknown (${unpriced})`);
   }
   return bits.join("  ·  ");
 }
