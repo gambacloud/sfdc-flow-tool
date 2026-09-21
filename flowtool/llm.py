@@ -932,6 +932,9 @@ class AnthropicProvider:
     ) -> Dict[str, Any]:
         dialect = strict_schema(schema)
         schema_key = json.dumps(dialect, sort_keys=True)
+        # Compact and in the schema's own key order: whitespace is pure token
+        # cost, and it lands in the cache-write bill on every new prompt.
+        schema_text = _compact_json(dialect)
         common = dict(
             messages=[{"role": m.role, "content": m.content} for m in messages],
             thinking={"type": "adaptive"},
@@ -945,7 +948,7 @@ class AnthropicProvider:
                         f"{system}\n\n## The exact shape to return\n\n"
                         "Return a single JSON object matching this JSON Schema. "
                         "Return nothing else - no prose, no code fence.\n\n"
-                        f"{schema_key}"
+                        f"{schema_text}"
                     ),
                     "cache_control": {"type": "ephemeral"},
                 }
@@ -1099,6 +1102,11 @@ def _descending(name: str):
         (-float(part), "") if _VERSION.fullmatch(part) else (0.0, part)
         for part in parts
     ]
+
+
+def _compact_json(value: Any) -> str:
+    """JSON with no padding whitespace - for a schema sent as prompt text."""
+    return json.dumps(value, separators=(",", ":"))
 
 
 def _unfenced(text: str) -> str:
@@ -1446,7 +1454,7 @@ class GeminiProvider:
                 f"{system}\n\n## The exact shape to return\n\n"
                 "Return a single JSON object matching this JSON Schema. Return "
                 "nothing else - no prose, no code fence.\n\n"
-                f"{json.dumps(dialect)}"
+                f"{_compact_json(dialect)}"
             )
 
         config = types.GenerateContentConfig(
