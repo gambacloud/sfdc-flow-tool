@@ -45,6 +45,44 @@ GENERATED_NAME_PREFIX = "GC_"
 log = logging.getLogger("flowtool")
 
 
+# Anthropic list prices, USD per million tokens (input, output), matched by
+# model-id prefix - so a dated snapshot of a listed model is priced too.
+# Snapshot from 2026-06-24; check the pricing page if these look stale. Only
+# Anthropic is priced: Gemini and Ollama are left out rather than guessed at.
+_ANTHROPIC_PRICES = (
+    ("claude-fable-5", (10.0, 50.0)),
+    ("claude-mythos-5", (10.0, 50.0)),
+    ("claude-opus-5", (5.0, 25.0)),
+    ("claude-opus-4", (5.0, 25.0)),
+    ("claude-sonnet-5", (2.0, 10.0)),
+    ("claude-sonnet-4", (3.0, 15.0)),
+    ("claude-haiku-4", (1.0, 5.0)),
+)
+_CACHE_READ_FACTOR = 0.10   # of the input rate
+_CACHE_WRITE_FACTOR = 1.25  # of the input rate, 5-minute cache
+
+
+def estimate_cost(
+    model: Optional[str],
+    input_tokens: int,
+    output_tokens: int,
+    cached_input_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> Optional[float]:
+    """Dollars for one call, or None when the model has no known price."""
+    if not model:
+        return None
+    for prefix, (rate_in, rate_out) in _ANTHROPIC_PRICES:
+        if model.startswith(prefix):
+            return (
+                input_tokens * rate_in
+                + cached_input_tokens * rate_in * _CACHE_READ_FACTOR
+                + cache_write_tokens * rate_in * _CACHE_WRITE_FACTOR
+                + output_tokens * rate_out
+            ) / 1_000_000
+    return None
+
+
 @dataclass
 class Usage:
     """
@@ -57,7 +95,16 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0
+    # Input written to the prompt cache (Anthropic only), billed above the
+    # normal input rate - not included in input_tokens, so it has to be
+    # counted on its own or a cost estimate silently undercounts.
+    cache_write_tokens: int = 0
     thinking_tokens: int = 0
+    # Estimated dollars for the calls whose model has a known price; calls
+    # with no price (Gemini, Ollama, a newer model id) are counted apart
+    # rather than folded in as free.
+    cost_usd: float = 0.0
+    unpriced_calls: int = 0
     # A plan can now run several steps' generations concurrently in separate
     # threads (see planner.execute_plan), all updating the one Usage a
     # session's provider carries - `+=` is not atomic, so without this a
@@ -70,21 +117,35 @@ class Usage:
         output_tokens: int = 0,
         cached_input_tokens: int = 0,
         thinking_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        model: Optional[str] = None,
     ) -> None:
+        cost = estimate_cost(
+            model, input_tokens or 0, output_tokens or 0,
+            cached_input_tokens or 0, cache_write_tokens or 0,
+        )
         with self._lock:
             self.calls += 1
             self.input_tokens += input_tokens or 0
             self.output_tokens += output_tokens or 0
             self.cached_input_tokens += cached_input_tokens or 0
+            self.cache_write_tokens += cache_write_tokens or 0
             self.thinking_tokens += thinking_tokens or 0
+            if cost is None:
+                self.unpriced_calls += 1
+            else:
+                self.cost_usd += cost
 
-    def as_dict(self) -> Dict[str, int]:
+    def as_dict(self) -> Dict[str, Any]:
         return {
             "calls": self.calls,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cached_input_tokens": self.cached_input_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
             "thinking_tokens": self.thinking_tokens,
+            "cost_usd": round(self.cost_usd, 4),
+            "unpriced_calls": self.unpriced_calls,
         }
 
     def __str__(self) -> str:
@@ -95,8 +156,12 @@ class Usage:
         ]
         if self.cached_input_tokens:
             parts.append(f"cached {self.cached_input_tokens:,}")
+        if self.cache_write_tokens:
+            parts.append(f"cache-write {self.cache_write_tokens:,}")
         if self.thinking_tokens:
             parts.append(f"thinking {self.thinking_tokens:,}")
+        if self.cost_usd:
+            parts.append(f"~${self.cost_usd:.3f}")
         return ", ".join(parts)
 
 
@@ -798,6 +863,8 @@ class AnthropicProvider:
             input_tokens=getattr(usage, "input_tokens", 0),
             output_tokens=getattr(usage, "output_tokens", 0),
             cached_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            model=self.model,
         )
         log.info("%s %s -> %s", self.name, self.model, self.usage)
 

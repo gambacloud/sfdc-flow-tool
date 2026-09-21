@@ -664,3 +664,28 @@ class TestShrinkingForGoodReasons:
             "the model must be told why this deletion is different from a "
             "legitimate one"
         )
+
+
+class TestUsageCost:
+    def test_sonnet_5_prices_the_reported_session(self):
+        from flowtool.llm import estimate_cost
+
+        # 2,198 in / 5,523 out / 6,880 cached at $2 / $10 per MTok, cache read at 10%
+        assert estimate_cost("claude-sonnet-5", 2198, 5523, 6880) == pytest.approx(0.0610, abs=1e-4)
+
+    def test_cache_writes_bill_above_plain_input(self):
+        from flowtool.llm import estimate_cost
+
+        plain = estimate_cost("claude-sonnet-5", 1_000_000, 0)
+        written = estimate_cost("claude-sonnet-5", 0, 0, 0, 1_000_000)
+        assert written == pytest.approx(plain * 1.25)
+
+    def test_unknown_model_is_unpriced_not_free(self):
+        from flowtool.llm import Usage
+
+        usage = Usage()
+        usage.add(100, 50, model="gemini-something")
+        usage.add(100, 50, model="claude-sonnet-5")
+        assert usage.unpriced_calls == 1
+        assert usage.cost_usd > 0
+        assert usage.as_dict()["unpriced_calls"] == 1

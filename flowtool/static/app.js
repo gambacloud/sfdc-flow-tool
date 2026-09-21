@@ -426,8 +426,19 @@ function usageText(usage) {
   if (usage.cached_input_tokens) {
     bits.push(`${usage.cached_input_tokens.toLocaleString()} cached`);
   }
+  if (usage.cache_write_tokens) {
+    bits.push(`${usage.cache_write_tokens.toLocaleString()} cache-write`);
+  }
   if (usage.thinking_tokens) {
     bits.push(`${usage.thinking_tokens.toLocaleString()} thinking`);
+  }
+  // An estimate from list prices, and only for models flowtool/llm.py knows
+  // the price of - so say when some calls could not be priced.
+  if (usage.cost_usd) {
+    const unpriced = usage.unpriced_calls
+      ? ` + ${usage.unpriced_calls} unpriced call${usage.unpriced_calls === 1 ? "" : "s"}`
+      : "";
+    bits.push(`~$${usage.cost_usd.toFixed(3)}${unpriced}`);
   }
   return bits.join("  ·  ");
 }
