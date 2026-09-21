@@ -192,6 +192,8 @@ const state = {
   org: null, // { accessToken, instanceUrl } once logged into Salesforce directly
   usage: null, // cumulative token usage for this session, refreshed on every model call
   errors: [], // every error message shown to the user this session, newest first
+  activity: [], // server log lines for this browser (model calls, repairs, ...), oldest first
+  activitySeq: 0, // highest server log seq already pulled
   orgSummaryMarkdown: null, // the approved org-summary knowledge base, never rendered editable
   orgSummaryPending: null, // generated but not yet approved
   orgSummaryStatus: null, // null | "working" | "ready" - guards against starting a second retrieve
@@ -241,10 +243,25 @@ async function loadMermaid() {
   }
 }
 
+// Identifies this browser to the server so /api/activity returns only its own
+// log lines. Not a credential - just a random per-tab label.
+const CLIENT_ID = (() => {
+  try {
+    let id = sessionStorage.getItem("flowtoolClientId");
+    if (!id) {
+      id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      sessionStorage.setItem("flowtoolClientId", id);
+    }
+    return id;
+  } catch {
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+})();
+
 async function api(path, body) {
   const response = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Client-Id": CLIENT_ID },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
@@ -276,12 +293,56 @@ async function poll(path, params) {
     for (;;) {
       const data = await api(`${path}?${query}`);
       showRetryNotice(data.retry);
+      await pullActivity();
       if (data.done) return data;
       await sleep(1500);
     }
   } finally {
     showRetryNotice(null);
   }
+}
+
+// Pulls this browser's new server log lines into the Logs panel's Activity
+// console. Best effort: a failure here must never fail the poll it rides on.
+async function pullActivity() {
+  try {
+    const data = await api(`api/activity?after=${state.activitySeq}`);
+    state.activitySeq = data.next;
+    if (data.entries.length) {
+      state.activity.push(...data.entries);
+      if (state.activity.length > 500) state.activity.splice(0, state.activity.length - 500);
+      renderActivity(data.entries);
+    }
+  } catch {
+    /* the console is a convenience */
+  }
+}
+
+function renderActivity(fresh) {
+  const box = $("logsActivity");
+  if (!box) return;
+  if (fresh === undefined) {
+    box.textContent = "";
+    fresh = state.activity;
+  }
+  if (!state.activity.length) {
+    box.textContent = "Nothing yet - model calls and repair attempts show up here.";
+    return;
+  }
+  if (box.classList.contains("dim")) {
+    box.classList.remove("dim");
+    box.textContent = "";
+  }
+  const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
+  fresh.forEach((entry) => {
+    const line = document.createElement("div");
+    line.className = `logline ${entry.level.toLowerCase()}`;
+    const t = new Date(entry.time * 1000).toLocaleTimeString();
+    line.textContent = `${t}  ${entry.message}`;
+    box.appendChild(line);
+  });
+  while (box.childElementCount > 500) box.removeChild(box.firstChild);
+  if (stick) box.scrollTop = box.scrollHeight;
 }
 
 function busy(button, on, label) {
@@ -3232,6 +3293,12 @@ async function boot() {
   });
 
   wireDropdown($("logsBtn"), $("logsPanel"));
+  $("logsActivityClear").onclick = () => {
+    state.activity = [];
+    const box = $("logsActivity");
+    box.classList.add("dim");
+    renderActivity();
+  };
   renderLogs();
 
   wireDropdown($("manualBtn"), $("manualPanel"));

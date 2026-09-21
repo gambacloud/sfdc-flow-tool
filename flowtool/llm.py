@@ -1658,11 +1658,17 @@ class IRGenerator(Generic[T]):
 
         for attempt in range(self.max_repairs + 1):
             log.info(
-                "attempt %s/%s (%s messages)",
-                attempt + 1, self.max_repairs + 1, len(conversation),
+                "attempt %s/%s: asking %s for a %s (%s messages)",
+                attempt + 1, self.max_repairs + 1, getattr(self.provider, "name", "the model"),
+                self.model_cls.__name__, len(conversation),
             )
+            started = time.monotonic()
             payload = self.provider.complete_json(
                 self.system_prompt, conversation, self._schema
+            )
+            log.info(
+                "attempt %s: model replied in %.1fs, validating",
+                attempt + 1, time.monotonic() - started,
             )
 
             # A model repairing a reachability error can "win" by deleting the

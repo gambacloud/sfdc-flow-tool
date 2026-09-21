@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from flowtool import activity
 from flowtool.config import load_env
 from flowtool.ir import Flow
 from flowtool.ir_apex import ApexClass, ApexTrigger
@@ -117,12 +118,27 @@ CSP = (
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    # Tag everything this request kicks off with the browser's id, so the
+    # activity feed (flowtool/activity.py) is served back only to its owner.
+    activity.client_id.set(request.headers.get("x-client-id", "")[:64] or None)
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = CSP
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+activity.install()
+
+
+@app.get("/api/activity")
+async def activity_feed(request: Request, after: int = 0) -> Dict[str, Any]:
+    """This browser's log lines (model calls, repair attempts, ...) since `after`."""
+    cid = request.headers.get("x-client-id", "")[:64]
+    if not cid:
+        return {"entries": [], "next": after}
+    return activity.since(cid, after)
 
 
 PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider, "ollama": OllamaProvider}

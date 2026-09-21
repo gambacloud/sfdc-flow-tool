@@ -17,6 +17,7 @@ behaviour working through this same path rather than needing a separate one.
 
 from __future__ import annotations
 
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Type, Union
@@ -446,8 +447,12 @@ def execute_plan(
     for layer in plan.layers():
         workers = min(len(layer), _MAX_PARALLEL_STEPS) if parallel else 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
+            # Pool threads don't inherit the request's context by themselves;
+            # run each step in a copy so its log lines still reach the
+            # requesting client's activity feed.
             futures = {
                 pool.submit(
+                    contextvars.copy_context().run,
                     _run_one_step, provider, step, max_repairs,
                     _dependency_facts(step, by_name),
                 ): step
