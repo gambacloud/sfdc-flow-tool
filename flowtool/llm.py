@@ -752,6 +752,10 @@ call, what it was and why. Never deployed - only for the person reviewing this s
 # --------------------------------------------------------------------------
 
 
+class _SchemaTooComplex(LLMError):
+    """Anthropic's schema compiler refused the response schema (400)."""
+
+
 class AnthropicProvider:
     """Uses schema-constrained structured outputs, so the shape is guaranteed."""
 
@@ -778,6 +782,9 @@ class AnthropicProvider:
         self.effort = effort
         self.max_tokens = max_tokens
         self.usage = Usage()
+        # Schemas the API already refused as too complex, so later calls (and
+        # repair rounds) skip straight to the prompt-text fallback.
+        self._too_complex: set = set()
 
     def _record(self, response) -> None:
         usage = getattr(response, "usage", None)
@@ -838,27 +845,72 @@ class AnthropicProvider:
         except anthropic.APIConnectionError as exc:
             raise LLMError(f"Could not reach the Anthropic API: {exc}") from exc
         except anthropic.APIStatusError as exc:
+            if exc.status_code == 400 and "too complex" in str(exc.message).lower():
+                raise _SchemaTooComplex(
+                    f"Anthropic API error 400: {exc.message}"
+                ) from exc
             raise LLMError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
 
     def complete_json(
         self, system: str, messages: List[Message], schema: Dict[str, Any]
     ) -> Dict[str, Any]:
-        response = self._create(
-            # The system prompt is byte-identical across requests, so it caches.
-            system=[
-                {
-                    "type": "text",
-                    "text": system,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
+        dialect = strict_schema(schema)
+        schema_key = json.dumps(dialect, sort_keys=True)
+        common = dict(
             messages=[{"role": m.role, "content": m.content} for m in messages],
             thinking={"type": "adaptive"},
-            output_config={
-                "effort": self.effort,
-                "format": {"type": "json_schema", "schema": strict_schema(schema)},
-            },
         )
+
+        def text_system() -> list:
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"{system}\n\n## The exact shape to return\n\n"
+                        "Return a single JSON object matching this JSON Schema. "
+                        "Return nothing else - no prose, no code fence.\n\n"
+                        f"{schema_key}"
+                    ),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+
+        response = None
+        if schema_key not in self._too_complex:
+            try:
+                response = self._create(
+                    # The system prompt is byte-identical across requests, so it caches.
+                    system=[
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    output_config={
+                        "effort": self.effort,
+                        "format": {"type": "json_schema", "schema": dialect},
+                    },
+                    **common,
+                )
+            except _SchemaTooComplex:
+                # The structured-outputs compiler has a complexity cap the
+                # docs don't quantify. The schema can't be pruned without
+                # making parts of the IR unrepresentable, so send it as prompt
+                # text instead: a weaker guarantee, but everything is still
+                # validated against the real IR and repaired on mismatch.
+                self._too_complex.add(schema_key)
+                log.warning(
+                    "schema rejected as too complex by Anthropic - sending it as "
+                    "text instead of a response schema. Output is validated and "
+                    "repaired as usual, but expect more repair rounds."
+                )
+        if response is None:
+            response = self._create(
+                system=text_system(),
+                output_config={"effort": self.effort},
+                **common,
+            )
         self._record(response)
 
         if response.stop_reason == "refusal":
@@ -874,7 +926,7 @@ class AnthropicProvider:
             raise LLMError("The model returned no JSON.")
 
         try:
-            return json.loads(text)
+            return json.loads(_unfenced(text))
         except json.JSONDecodeError as exc:
             raise LLMError(f"The model returned malformed JSON: {exc}") from exc
 
