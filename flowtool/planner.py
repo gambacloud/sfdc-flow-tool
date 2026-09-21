@@ -20,7 +20,7 @@ from __future__ import annotations
 import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Type, Union
+from typing import Dict, List, Literal, Optional, Type, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -66,9 +66,20 @@ class PlanStep(BaseModel):
         "for example a field step depends on the object step that creates its "
         "object, and a flow step depends on any field it reads or writes",
     )
+    flow_type: Optional[Literal["autolaunched", "screen", "orchestrator"]] = Field(
+        default=None,
+        description="Flow steps only: autolaunched (record-triggered, scheduled, "
+        "platform-event or plain autolaunched - no user interface), screen "
+        "(a user runs it and sees screens), or orchestrator. Leave out for "
+        "every other step type.",
+    )
 
     @model_validator(mode="after")
     def valid_shape(self) -> "PlanStep":
+        # Meaningless on anything but a flow; dropped rather than rejected so
+        # a stray value does not cost a repair round.
+        if self.artifact_type != "flow":
+            self.flow_type = None
         if self.artifact_type not in _KNOWN_STEP_TYPES:
             raise ValueError(
                 f"step {self.name!r}: artifact_type must be one of "
@@ -208,6 +219,16 @@ reasoning as `mdt`: a platform event's fields are part of this one step, \
 never a separate `field` step. A platform event's fields only support Text, \
 Number, Checkbox, Date, DateTime, LongTextArea - never Picklist, Lookup, or \
 Master-Detail.
+
+## Flow type
+
+Every `flow` step sets `flow_type`, which decides what the Flow generator is \
+shown, so choose it from what the request describes: `autolaunched` for a flow \
+that runs by itself - record-triggered, scheduled, started by a platform event, \
+or called from other automation; `screen` when a person runs it and has to see \
+or type something; `orchestrator` for a multi-stage orchestration. When a \
+request needs both a screen and background work, that is a `screen` flow. Leave \
+`flow_type` out on every step that is not a `flow`.
 
 ## Writing a brief
 
@@ -400,11 +421,18 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
     )
 
 
+def _generator_for(step: PlanStep, provider: Provider, max_repairs: int) -> IRGenerator:
+    """A step's generator; a Flow's is narrowed to the type the planner chose."""
+    generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
+    if step.artifact_type == "flow":
+        return generator_cls(provider, max_repairs=max_repairs, flow_type=step.flow_type)
+    return generator_cls(provider, max_repairs=max_repairs)
+
+
 def _run_one_step(
     provider: Provider, step: PlanStep, max_repairs: int, brief: str,
 ) -> StepResult:
-    generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
-    generator = generator_cls(provider, max_repairs=max_repairs)
+    generator = _generator_for(step, provider, max_repairs)
     raw = generator.generate(brief)
     value = raw.flow if isinstance(raw, GenerationResult) else raw.value
     return StepResult(step=step, value=value, repairs=raw.repairs, messages=raw.messages)
@@ -475,8 +503,7 @@ def _rerun_step(
     call `apply(generator, prior)` to actually continue the conversation,
     then re-wrap the answer as a StepResult.
     """
-    generator_cls = _GENERATOR_BY_TYPE[previous.step.artifact_type]
-    generator = generator_cls(provider, max_repairs=max_repairs)
+    generator = _generator_for(previous.step, provider, max_repairs)
 
     if previous.step.artifact_type == "flow":
         prior = GenerationResult(

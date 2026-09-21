@@ -1031,7 +1031,8 @@ const PLAN_ARTIFACT_LABELS = {
 function planStepSummary(step) {
   switch (step.artifact_type) {
     case "flow":
-      return `${step.element_count} element${step.element_count === 1 ? "" : "s"}`;
+      return `${step.element_count} element${step.element_count === 1 ? "" : "s"}`
+        + (step.flow_type ? `  ·  ${step.flow_type}` : "");
     case "object":
       return step.api_name;
     case "field":

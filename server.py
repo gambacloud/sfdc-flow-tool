@@ -1678,6 +1678,7 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "name": result.step.name,
         "artifact_type": result.step.artifact_type,
+        "flow_type": result.step.flow_type,
         "depends_on": result.step.depends_on,
         "repairs": result.repairs,
         "description": getattr(value, "description", None),
@@ -1930,7 +1931,7 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
     )
     steps = [
         {"name": s.name, "artifact_type": s.artifact_type, "brief": s.brief,
-         "depends_on": s.depends_on}
+         "depends_on": s.depends_on, "flow_type": s.flow_type}
         for s in result.value.steps
     ]
     return {

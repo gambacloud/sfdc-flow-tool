@@ -47,6 +47,8 @@ def render_html_fragment(steps: List[StepResult]) -> str:
         step = result.step
         parts.append(f'<article data-step-type="{_esc(step.artifact_type)}">')
         parts.append(f"<h3>{_esc(step.name)}</h3>")
+        if step.artifact_type == "flow" and step.flow_type:
+            parts.append(f'<p class="flow-type">Flow type: {_esc(step.flow_type)}</p>')
         reasoning = getattr(value, "reasoning", None)
         if reasoning:
             parts.append(f'<p class="reasoning">Why: {_esc(reasoning)}</p>')

@@ -1950,16 +1950,151 @@ class GenerationResult:
     repairs: int
 
 
+# What a Flow of each kind never needs, so its prompt and schema can leave it
+# out. `autolaunched` covers record-triggered, scheduled, platform-event and
+# plain autolaunched flows - everything that runs with no user in front of it.
+FLOW_TYPES = ("autolaunched", "screen", "orchestrator")
+
+# Element classes (by schema definition name) and Flow-level properties each
+# type drops. The `screen` type keeps everything but the orchestrator stage.
+_FLOW_TYPE_DROPS = {
+    "autolaunched": (
+        {"Screen", "OrchestratedStage"}, {"choices", "dynamic_choice_sets"},
+    ),
+    "screen": ({"OrchestratedStage"}, set()),
+    "orchestrator": (
+        {"Screen"}, {"choices", "dynamic_choice_sets"},
+    ),
+}
+
+# Prompt sections about screens: worthless to a flow that has none. "Action
+# Calls" sits among them and is not one of these - it stays.
+_SCREEN_ONLY_SECTIONS = {
+    "Screens", "Sections and columns", "Components on a screen", "Options for a picker",
+}
+
+_FLOW_TYPE_NOTES = {
+    "autolaunched": (
+        "This flow runs with no user in front of it (record-triggered, "
+        "scheduled, platform-event or autolaunched): `process_type` is "
+        "`AutoLaunchedFlow`, and there are no screens."
+    ),
+    "orchestrator": "This is an orchestration: `process_type` is `Orchestrator`.",
+}
+
+
+def _schema_refs(node: Any, found: set) -> None:
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if ref:
+            found.add(ref.split("/")[-1])
+        for key, value in node.items():
+            if key != "$defs":
+                _schema_refs(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            _schema_refs(value, found)
+
+
+def flow_schema(flow_type: Optional[str]) -> Dict[str, Any]:
+    """
+    The Flow JSON schema with the parts this kind of flow never uses cut out:
+    those element classes (and everything only they reach) and Flow-level
+    resource lists. Unknown or missing types get the full schema.
+
+    Only ever a hint to the model. Every response is still validated against
+    the full `Flow` model, so an element that was cut and used anyway is not
+    lost - it just costs a repair round if it was malformed.
+    """
+    full = Flow.model_json_schema()
+    if flow_type not in _FLOW_TYPE_DROPS:
+        return full
+    drop_elements, drop_props = _FLOW_TYPE_DROPS[flow_type]
+
+    def is_dropped(member: Any) -> bool:
+        return (
+            isinstance(member, dict)
+            and member.get("$ref", "").split("/")[-1] in drop_elements
+        )
+
+    def strip(node: Any) -> None:
+        if isinstance(node, dict):
+            for key in ("anyOf", "oneOf"):
+                if isinstance(node.get(key), list):
+                    node[key] = [m for m in node[key] if not is_dropped(m)]
+            mapping = (node.get("discriminator") or {}).get("mapping")
+            if mapping:
+                node["discriminator"]["mapping"] = {
+                    tag: ref for tag, ref in mapping.items()
+                    if ref.split("/")[-1] not in drop_elements
+                }
+            for value in node.values():
+                strip(value)
+        elif isinstance(node, list):
+            for value in node:
+                strip(value)
+
+    schema = json.loads(json.dumps(full))
+    strip(schema)
+    for prop in drop_props:
+        schema.get("properties", {}).pop(prop, None)
+        required = schema.get("required")
+        if required and prop in required:
+            required.remove(prop)
+
+    # Keep only definitions still reachable from the root.
+    defs = schema.get("$defs", {})
+    root = {k: v for k, v in schema.items() if k != "$defs"}
+    reachable: set = set()
+    frontier: set = set()
+    _schema_refs(root, frontier)
+    while frontier:
+        name = frontier.pop()
+        if name in reachable or name not in defs:
+            continue
+        reachable.add(name)
+        more: set = set()
+        _schema_refs(defs[name], more)
+        frontier |= more
+    schema["$defs"] = {k: v for k, v in defs.items() if k in reachable}
+    return schema
+
+
+def flow_system_prompt(flow_type: Optional[str]) -> str:
+    """SYSTEM_PROMPT, minus the screen sections for a flow that has no screens."""
+    if flow_type not in ("autolaunched", "orchestrator"):
+        return SYSTEM_PROMPT
+    head, *sections = re.split(r"(?m)^(?=## )", SYSTEM_PROMPT)
+    kept = [
+        section for section in sections
+        if section.split("\n", 1)[0][3:].strip() not in _SCREEN_ONLY_SECTIONS
+    ]
+    prompt = head + "".join(kept)
+    note = _FLOW_TYPE_NOTES.get(flow_type)
+    return f"{prompt.rstrip()}\n\n{note}\n" if note else prompt
+
+
 class FlowGenerator(IRGenerator[Flow]):
     """
     Turns a request into a validated Flow, repairing its own mistakes.
 
     The conversation is kept so a refinement continues from the same context
     rather than re-deriving the flow from scratch.
+
+    `flow_type` (one of FLOW_TYPES, chosen by the planner) narrows the prompt
+    and schema to what that kind of flow can contain - a smaller prompt is a
+    smaller cache write on every request. None keeps everything.
     """
 
-    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
-        super().__init__(provider, Flow, SYSTEM_PROMPT, max_repairs)
+    def __init__(
+        self,
+        provider: Provider,
+        max_repairs: int = DEFAULT_MAX_REPAIRS,
+        flow_type: Optional[str] = None,
+    ):
+        super().__init__(provider, Flow, flow_system_prompt(flow_type), max_repairs)
+        if flow_type in _FLOW_TYPE_DROPS:
+            self._schema = flow_schema(flow_type)
 
     def _tracked_names(self, payload: Dict[str, Any]) -> Optional[set]:
         return {
