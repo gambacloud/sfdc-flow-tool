@@ -259,6 +259,12 @@ platform event (`trigger_type` PlatformEvent) or publishes one (creates a \
 record of it) depends on that event's `platform_event` step when this plan \
 also creates it, for the same reason an LWC step depends on the Apex \
 controller it calls - the Flow needs the event's exact generated api_name. \
+An LWC step that embeds a Flow (a `lightning-flow` component naming it by \
+`flow-api-name`) depends on that flow's `flow` step when this plan also \
+creates it, for the same reason: without the dependency the LWC only has a \
+guess at the flow's api_name to go on, and a guessed name that doesn't match \
+what the flow step actually generated is a broken component, not a working \
+one. \
 Do not add a dependency that is not actually needed - it only slows the plan \
 down for no reason.
 
