@@ -702,11 +702,11 @@ class TestOllamaFencedJSON:
         from flowtool.llm import OllamaProvider
         return OllamaProvider(api_key="fake-key-for-test", model="gpt-oss:120b-cloud")
 
-    def _reply(self, content):
+    def _reply(self, content, done_reason="stop"):
         from types import SimpleNamespace
         return SimpleNamespace(
             message=SimpleNamespace(content=content),
-            prompt_eval_count=10, eval_count=5,
+            prompt_eval_count=10, eval_count=5, done_reason=done_reason,
         )
 
     def test_fenced_json_is_still_parsed(self, monkeypatch):
@@ -739,6 +739,28 @@ class TestOllamaFencedJSON:
         # the model what it actually wrote (see TestMalformedResponseRepair).
         assert isinstance(excinfo.value, MalformedResponse)
         assert excinfo.value.raw_text == "not json at all"
+
+    def test_truncated_reply_is_reported_as_a_token_cap_not_missing_fields(self, monkeypatch):
+        # done_reason "length" means num_predict cut generation off - even
+        # though grammar-constrained decoding still closed the JSON cleanly,
+        # so it parses fine and looks like the model just forgot some fields.
+        # That should be a clear cap error, not an opaque validation failure.
+        from flowtool.llm import LLMError
+        provider = self._provider()
+        monkeypatch.setattr(
+            provider._client, "chat",
+            lambda **kwargs: self._reply('{"elements": []}', done_reason="length"),
+        )
+        with pytest.raises(LLMError, match="output cap"):
+            provider.complete_json("sys", [], {"type": "object"})
+
+    def test_a_normal_reply_with_done_reason_stop_is_unaffected(self, monkeypatch):
+        provider = self._provider()
+        monkeypatch.setattr(
+            provider._client, "chat",
+            lambda **kwargs: self._reply('{"a": 1}', done_reason="stop"),
+        )
+        assert provider.complete_json("sys", [], {"type": "object"}) == {"a": 1}
 
 
 class TestMalformedResponseRepair:

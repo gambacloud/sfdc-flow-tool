@@ -1668,6 +1668,22 @@ class OllamaProvider:
         )
         self._record(response)
 
+        # A schema this size can still fit inside num_predict while cutting
+        # the model off mid-object - grammar-constrained decoding forces
+        # whatever it emits to close cleanly as valid JSON, so a truncated
+        # reply doesn't fail to parse; it just quietly loses whichever
+        # properties the model hadn't gotten to yet (often api_name/label, if
+        # it wrote `elements` first). That surfaces as ordinary-looking
+        # "field required" errors with no clue why, so call it out here while
+        # the actual signal (done_reason) is still available.
+        if getattr(response, "done_reason", None) == "length":
+            raise LLMError(
+                f"{self.model} hit its {self.max_tokens}-token output cap before "
+                "finishing the IR (some required fields are likely missing, not "
+                "just wrong). Raise max_tokens, lower effort, or split the "
+                "request into smaller steps."
+            )
+
         text = response.message.content
         if not text or not text.strip():
             raise LLMError("The model returned no JSON.")
