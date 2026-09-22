@@ -169,6 +169,24 @@ class LLMError(RuntimeError):
     pass
 
 
+class MalformedResponse(LLMError):
+    """
+    complete_json got a reply that is not parseable JSON at all - a model
+    ignoring its schema constraint and writing prose or Markdown instead
+    (observed from gpt-oss over Ollama Cloud, which does not always honor
+    `format`), as opposed to JSON that parses but fails Pydantic validation.
+
+    A distinct type so IRGenerator._validated can feed it back into the
+    repair loop the same way it feeds back a ValidationError, instead of
+    letting it escape the loop entirely on the first bad reply - carries the
+    raw text so the correction can show the model what it actually wrote.
+    """
+
+    def __init__(self, message: str, raw_text: str):
+        super().__init__(message)
+        self.raw_text = raw_text
+
+
 @dataclass
 class Message:
     role: str  # "user" | "assistant"
@@ -225,6 +243,20 @@ the element's name.
 is what runs after the loop finishes.
 - Conditions are structured: a left reference, an operator, and a typed right \
 value. Never write a condition as a formula string.
+
+## Typed values
+
+Every literal value in the IR - a condition's right-hand side, a field \
+assignment, an input parameter - is a `Value` object with six possible keys: \
+`string_value`, `number_value`, `boolean_value`, `date_value`, \
+`date_time_value`, `element_reference`. Set exactly one of these six, matching \
+the field's real type, and leave the rest out. `{"string_value": "Acme"}` is a \
+Value; `{"value": "Acme"}` and `{}` are not - there is no key called `value`, \
+and a Value with nothing set is always rejected. Point at another element, a \
+variable, or a `$Record` field with `element_reference` (e.g. \
+`{"element_reference": "$Record.Amount"}`), never by putting its name in \
+`string_value`. A Picklist value is text, so it goes in `string_value` \
+(e.g. `{"string_value": "High"}`), not `number_value`.
 
 ## Rules Salesforce enforces
 
@@ -1007,7 +1039,9 @@ class AnthropicProvider:
         try:
             return json.loads(_unfenced(text))
         except json.JSONDecodeError as exc:
-            raise LLMError(f"The model returned malformed JSON: {exc}") from exc
+            raise MalformedResponse(
+                f"The model returned malformed JSON: {exc}", raw_text=text
+            ) from exc
 
     def complete_text(self, system: str, messages: List[Message]) -> str:
         response = self._create(
@@ -1519,9 +1553,10 @@ class GeminiProvider:
         try:
             return json.loads(_unfenced(text))
         except json.JSONDecodeError as exc:
-            raise LLMError(
+            raise MalformedResponse(
                 f"Gemini returned malformed JSON (finish reason: {reason or 'unknown'}): "
-                f"{exc}"
+                f"{exc}",
+                raw_text=text,
             ) from exc
 
 
@@ -1647,7 +1682,9 @@ class OllamaProvider:
             # The raw text is the only way to tell a fence from real garbage -
             # log it once here rather than losing it to a bare "char 0".
             log.warning("unparseable JSON from %s: %r", self.model, text[:500])
-            raise LLMError(f"The model returned malformed JSON: {exc}") from exc
+            raise MalformedResponse(
+                f"The model returned malformed JSON: {exc}", raw_text=text
+            ) from exc
 
     def complete_text(self, system: str, messages: List[Message]) -> str:
         response = self._chat(
@@ -1746,9 +1783,42 @@ class IRGenerator(Generic[T]):
                 self.model_cls.__name__, len(conversation),
             )
             started = time.monotonic()
-            payload = self.provider.complete_json(
-                self.system_prompt, conversation, self._schema
-            )
+            try:
+                payload = self.provider.complete_json(
+                    self.system_prompt, conversation, self._schema
+                )
+            except MalformedResponse as exc:
+                # Not a validation failure - the model didn't return JSON at
+                # all (seen from gpt-oss over Ollama Cloud, which doesn't
+                # always honor the schema constraint). Feed the same
+                # generate-and-repair loop a correction instead of letting
+                # this escape on the first bad reply, exactly as a
+                # ValidationError below does.
+                last_error = str(exc)
+                log.warning("attempt %s rejected: %s", attempt + 1, last_error)
+                if attempt == self.max_repairs:
+                    break
+                # Capped: this is meant to show the model its own mistake, not
+                # replay it in full - an unbounded reply (the markdown-table
+                # case this guards against) would otherwise grow the
+                # conversation, and therefore the cache-write bill, every round.
+                echoed = exc.raw_text[:4000]
+                if len(exc.raw_text) > 4000:
+                    echoed += "\n...(truncated)"
+                conversation.append(Message(role="assistant", content=echoed))
+                conversation.append(
+                    Message(
+                        role="user",
+                        content=(
+                            "That was not valid JSON:\n\n"
+                            f"{last_error}\n\n"
+                            "Return a single JSON object matching the schema. "
+                            "Return nothing else - no prose, no headings, no "
+                            "code fence, no markdown of any kind."
+                        ),
+                    )
+                )
+                continue
             log.info(
                 "attempt %s: model replied in %.1fs, validating",
                 attempt + 1, time.monotonic() - started,

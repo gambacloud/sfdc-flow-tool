@@ -726,13 +726,71 @@ class TestOllamaFencedJSON:
 
     def test_genuine_garbage_still_raises_with_the_raw_text_logged(self, monkeypatch, caplog):
         import logging
-        from flowtool.llm import LLMError
+        from flowtool.llm import LLMError, MalformedResponse
         provider = self._provider()
         monkeypatch.setattr(
             provider._client, "chat", lambda **kwargs: self._reply("not json at all"),
         )
         with caplog.at_level(logging.WARNING, logger="flowtool"):
-            with pytest.raises(LLMError, match="malformed JSON"):
+            with pytest.raises(LLMError, match="malformed JSON") as excinfo:
                 provider.complete_json("sys", [], {"type": "object"})
         assert "not json at all" in caplog.text
+        # MalformedResponse carries the raw text so the repair loop can show
+        # the model what it actually wrote (see TestMalformedResponseRepair).
+        assert isinstance(excinfo.value, MalformedResponse)
+        assert excinfo.value.raw_text == "not json at all"
+
+
+class TestMalformedResponseRepair:
+    """
+    A model that ignores its schema constraint and returns prose (seen from
+    gpt-oss over Ollama Cloud: a markdown table instead of JSON) used to
+    escape the repair loop entirely on the first bad reply, failing the whole
+    generation even though max_repairs allowed more attempts. complete_json
+    raising MalformedResponse now feeds it back into the same loop a
+    ValidationError goes through.
+    """
+
+    def test_a_non_json_reply_is_repaired_like_a_validation_error(self):
+        from flowtool.llm import CustomFieldGenerator, MalformedResponse
+
+        calls = []
+
+        class FlakyProvider:
+            name = "fake"
+
+            def complete_json(self, system, messages, schema):
+                calls.append(messages)
+                if len(calls) == 1:
+                    raise MalformedResponse(
+                        "not JSON", raw_text="**Plan**\n\n| name | type |\n|---|---|"
+                    )
+                return {
+                    "api_name": "Score__c", "label": "Score", "type": "Number",
+                    "object_api_name": "Account", "precision": 3, "scale": 0,
+                }
+
+        generator = CustomFieldGenerator(FlakyProvider(), max_repairs=2)
+        result = generator.generate("a number field")
+        assert result.value.api_name == "Score__c"
+        assert result.repairs == 1
+        # The correction round saw the model's own markdown as context, plus
+        # an instruction to return bare JSON - not a bare retry of the
+        # original request.
+        second_call_messages = calls[1]
+        assert any("not JSON" in m.content for m in second_call_messages)
+        assert any("markdown" in m.content.lower() for m in second_call_messages)
+
+    def test_exhausting_repairs_on_non_json_still_raises_cleanly(self):
+        from flowtool.llm import CustomFieldGenerator, LLMError, MalformedResponse
+
+        class AlwaysProse:
+            name = "fake"
+
+            def complete_json(self, system, messages, schema):
+                raise MalformedResponse("not JSON", raw_text="prose, always")
+
+        generator = CustomFieldGenerator(AlwaysProse(), max_repairs=1)
+        with pytest.raises(LLMError, match="Could not get valid IR"):
+            generator.generate("a number field")
 
