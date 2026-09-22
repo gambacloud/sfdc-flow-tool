@@ -1634,11 +1634,19 @@ class OllamaProvider:
         self._record(response)
 
         text = response.message.content
-        if not text:
+        if not text or not text.strip():
             raise LLMError("The model returned no JSON.")
+        # `format` is a grammar constraint, not a hard guarantee - gpt-oss in
+        # particular still sometimes wraps its output in a ```json fence
+        # despite it, which json.loads then rejects at the first backtick
+        # ("char 0"). Strip that before parsing rather than after it fails.
+        cleaned = _unfenced(text)
         try:
-            return json.loads(text)
+            return json.loads(cleaned)
         except json.JSONDecodeError as exc:
+            # The raw text is the only way to tell a fence from real garbage -
+            # log it once here rather than losing it to a bare "char 0".
+            log.warning("unparseable JSON from %s: %r", self.model, text[:500])
             raise LLMError(f"The model returned malformed JSON: {exc}") from exc
 
     def complete_text(self, system: str, messages: List[Message]) -> str:

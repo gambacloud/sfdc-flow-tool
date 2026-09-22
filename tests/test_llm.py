@@ -689,3 +689,50 @@ class TestUsageCost:
         assert usage.unpriced_calls == 1
         assert usage.cost_usd > 0
         assert usage.as_dict()["unpriced_calls"] == 1
+
+
+class TestOllamaFencedJSON:
+    """
+    gpt-oss (and others) sometimes wrap structured output in a ```json fence
+    despite the grammar constraint - json.loads then fails at the first
+    backtick ("char 0"), which is the bug report this guards against.
+    """
+
+    def _provider(self):
+        from flowtool.llm import OllamaProvider
+        return OllamaProvider(api_key="fake-key-for-test", model="gpt-oss:120b-cloud")
+
+    def _reply(self, content):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            message=SimpleNamespace(content=content),
+            prompt_eval_count=10, eval_count=5,
+        )
+
+    def test_fenced_json_is_still_parsed(self, monkeypatch):
+        provider = self._provider()
+        fenced = "```json\n" + '{"a": 1}' + "\n```"
+        monkeypatch.setattr(
+            provider._client, "chat", lambda **kwargs: self._reply(fenced),
+        )
+        assert provider.complete_json("sys", [], {"type": "object"}) == {"a": 1}
+
+    def test_bare_json_still_works(self, monkeypatch):
+        provider = self._provider()
+        monkeypatch.setattr(
+            provider._client, "chat", lambda **kwargs: self._reply('{"a": 1}'),
+        )
+        assert provider.complete_json("sys", [], {"type": "object"}) == {"a": 1}
+
+    def test_genuine_garbage_still_raises_with_the_raw_text_logged(self, monkeypatch, caplog):
+        import logging
+        from flowtool.llm import LLMError
+        provider = self._provider()
+        monkeypatch.setattr(
+            provider._client, "chat", lambda **kwargs: self._reply("not json at all"),
+        )
+        with caplog.at_level(logging.WARNING, logger="flowtool"):
+            with pytest.raises(LLMError, match="malformed JSON"):
+                provider.complete_json("sys", [], {"type": "object"})
+        assert "not json at all" in caplog.text
+
