@@ -833,3 +833,43 @@ class TestPlannerPairing:
         planner.usage.add(100, 50, model="claude-sonnet-5")
         worker.usage.add(100, 50, model="claude-haiku-4-5")
         assert worker.usage.calls == 2
+
+
+class TestGeminiCost:
+    def test_flash_prices_and_thinking_is_billed_as_output(self):
+        from flowtool.llm import Usage, estimate_cost
+
+        # 3.5 Flash is $1.50 in / $9.00 out, whatever today's date.
+        assert estimate_cost("gemini-3.5-flash", 1_000_000, 1_000_000) == pytest.approx(10.5)
+        usage = Usage()
+        usage.add(0, 500_000, thinking_tokens=500_000, model="gemini-3.5-flash",
+                  thinking_is_extra=True)
+        assert usage.cost_usd == pytest.approx(9.0)
+        assert usage.unpriced_calls == 0
+
+    def test_flash_lite_is_not_priced_as_flash(self):
+        from flowtool.llm import estimate_cost
+
+        assert estimate_cost("gemini-3.5-flash-lite", 1_000_000, 0) == pytest.approx(0.30)
+
+    def test_pro_long_prompt_uses_the_higher_tier(self):
+        from flowtool.llm import estimate_cost
+
+        assert estimate_cost("gemini-3.1-pro-preview", 100_000, 0) == pytest.approx(0.2)
+        assert estimate_cost("gemini-3.1-pro-preview", 300_000, 0) == pytest.approx(1.2)
+
+    def test_introductory_flash_price_ends_with_2026(self, monkeypatch):
+        from datetime import date as real_date
+        import flowtool.llm as llm_module
+
+        class Day(real_date):
+            today_value = real_date(2026, 12, 31)
+
+            @classmethod
+            def today(cls):
+                return cls.today_value
+
+        monkeypatch.setattr(llm_module, "date", Day)
+        assert llm_module.estimate_cost("gemini-3.6-flash", 1_000_000, 0) == pytest.approx(0.75)
+        Day.today_value = real_date(2027, 1, 1)
+        assert llm_module.estimate_cost("gemini-3.6-flash", 1_000_000, 0) == pytest.approx(1.50)

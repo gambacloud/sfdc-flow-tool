@@ -19,8 +19,9 @@ import random
 import re
 import threading
 import time
+from datetime import date
 from dataclasses import dataclass, field
-from typing import Any, Dict, Generic, List, Optional, Protocol, Type, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Protocol, Tuple, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -45,10 +46,11 @@ GENERATED_NAME_PREFIX = "GC_"
 log = logging.getLogger("flowtool")
 
 
-# Anthropic list prices, USD per million tokens (input, output), matched by
-# model-id prefix - so a dated snapshot of a listed model is priced too.
-# Snapshot from 2026-06-24; check the pricing page if these look stale. Only
-# Anthropic is priced: Gemini and Ollama are left out rather than guessed at.
+# List prices, USD per million tokens (input, output), matched by model-id
+# prefix - so a dated snapshot of a listed model is priced too, and a more
+# specific prefix (flash-lite) must come before the shorter one (flash).
+# Anthropic snapshot from 2026-06-24, Gemini from 2026-10-01; check the pricing
+# pages if these look stale. Ollama is left out rather than guessed at.
 _ANTHROPIC_PRICES = (
     ("claude-fable-5", (10.0, 50.0)),
     ("claude-mythos-5", (10.0, 50.0)),
@@ -58,8 +60,44 @@ _ANTHROPIC_PRICES = (
     ("claude-sonnet-4", (3.0, 15.0)),
     ("claude-haiku-4", (1.0, 5.0)),
 )
+
+# Gemini's output rate already covers thinking tokens, which the API reports
+# apart from the reply text (see GeminiProvider._record). A 4-tuple is
+# (input, output, input, output) for a prompt over _GEMINI_LONG_PROMPT tokens.
+_GEMINI_LONG_PROMPT = 200_000
+_GEMINI_INTRO_END = date(2027, 1, 1)
+
+
+def _gemini_flash_intro() -> Tuple[float, float]:
+    """3.6-3.8 Flash cost half as much until the introductory pricing ends."""
+    return (0.75, 3.75) if date.today() < _GEMINI_INTRO_END else (1.50, 7.50)
+
+
+_GEMINI_PRICES: Tuple[Tuple[str, Any], ...] = (
+    ("gemini-3.8-flash", _gemini_flash_intro),
+    ("gemini-3.7-flash", _gemini_flash_intro),
+    ("gemini-3.6-flash", _gemini_flash_intro),
+    ("gemini-3.5-flash-lite", (0.30, 2.50)),
+    ("gemini-3.5-flash", (1.50, 9.00)),
+    ("gemini-3.1-flash-lite", (0.25, 1.50)),
+    ("gemini-3.1-pro", (2.00, 12.00, 4.00, 18.00)),
+    ("gemini-2.5-pro", (1.25, 10.00, 2.50, 15.00)),
+    ("gemini-2.5-flash-lite", (0.10, 0.40)),
+    ("gemini-2.5-flash", (0.30, 2.50)),
+)
 _CACHE_READ_FACTOR = 0.10   # of the input rate
 _CACHE_WRITE_FACTOR = 1.25  # of the input rate, 5-minute cache
+
+
+def _gemini_rates(model: str, prompt_tokens: int) -> Optional[Tuple[float, float]]:
+    for prefix, rates in _GEMINI_PRICES:
+        if model.startswith(prefix):
+            if callable(rates):
+                rates = rates()
+            if len(rates) == 4 and prompt_tokens > _GEMINI_LONG_PROMPT:
+                return rates[2], rates[3]
+            return rates[0], rates[1]
+    return None
 
 
 def estimate_cost(
@@ -69,18 +107,28 @@ def estimate_cost(
     cached_input_tokens: int = 0,
     cache_write_tokens: int = 0,
 ) -> Optional[float]:
-    """Dollars for one call, or None when the model has no known price."""
+    """
+    Dollars for one call, or None when the model has no known price.
+    `input_tokens` excludes cached input, and `output_tokens` includes any
+    thinking - callers whose API reports otherwise adjust before calling.
+    """
     if not model:
         return None
-    for prefix, (rate_in, rate_out) in _ANTHROPIC_PRICES:
-        if model.startswith(prefix):
-            return (
-                input_tokens * rate_in
-                + cached_input_tokens * rate_in * _CACHE_READ_FACTOR
-                + cache_write_tokens * rate_in * _CACHE_WRITE_FACTOR
-                + output_tokens * rate_out
-            ) / 1_000_000
-    return None
+    rates = _gemini_rates(model, input_tokens + cached_input_tokens)
+    if rates is None:
+        for prefix, anthropic_rates in _ANTHROPIC_PRICES:
+            if model.startswith(prefix):
+                rates = anthropic_rates
+                break
+    if rates is None:
+        return None
+    rate_in, rate_out = rates
+    return (
+        input_tokens * rate_in
+        + cached_input_tokens * rate_in * _CACHE_READ_FACTOR
+        + cache_write_tokens * rate_in * _CACHE_WRITE_FACTOR
+        + output_tokens * rate_out
+    ) / 1_000_000
 
 
 @dataclass
@@ -119,9 +167,15 @@ class Usage:
         thinking_tokens: int = 0,
         cache_write_tokens: int = 0,
         model: Optional[str] = None,
+        thinking_is_extra: bool = False,
     ) -> None:
+        # Anthropic's output_tokens already include thinking; Gemini reports
+        # thinking on top of the reply, so it has to be added to be billed.
+        billed_output = (output_tokens or 0) + (
+            (thinking_tokens or 0) if thinking_is_extra else 0
+        )
         cost = estimate_cost(
-            model, input_tokens or 0, output_tokens or 0,
+            model, input_tokens or 0, billed_output,
             cached_input_tokens or 0, cache_write_tokens or 0,
         )
         with self._lock:
@@ -1398,11 +1452,16 @@ class GeminiProvider:
         meta = getattr(response, "usage_metadata", None)
         if meta is None:
             return
+        cached = getattr(meta, "cached_content_token_count", 0) or 0
         self.usage.add(
-            input_tokens=getattr(meta, "prompt_token_count", 0) or 0,
+            # Gemini's prompt count includes the cached part; Usage keeps the
+            # two apart, as it does for Anthropic, so it isn't billed twice.
+            input_tokens=max((getattr(meta, "prompt_token_count", 0) or 0) - cached, 0),
             output_tokens=getattr(meta, "candidates_token_count", 0) or 0,
-            cached_input_tokens=getattr(meta, "cached_content_token_count", 0) or 0,
+            cached_input_tokens=cached,
             thinking_tokens=getattr(meta, "thoughts_token_count", 0) or 0,
+            model=self.model,
+            thinking_is_extra=True,
         )
         log.info("%s %s -> %s", self.name, self.model, self.usage)
 
