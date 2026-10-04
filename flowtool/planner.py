@@ -45,6 +45,7 @@ from .llm import (
     MetadataTypeGenerator,
     PlatformEventGenerator,
     Provider,
+    planner_of,
 )
 
 ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" - see PlanStep.artifact_type
@@ -591,7 +592,7 @@ def revise_plan(
     "looks similar but should regenerate" from outside the model that wrote
     both plans. Simpler and safer to treat this the same as a first execute.
     """
-    planner = PlannerGenerator(provider, max_repairs)
+    planner = PlannerGenerator(planner_of(provider), max_repairs)
     prior = IRGenerationResult(value=plan, messages=messages, repairs=0)
     revised = planner.refine(prior, instruction)
     steps = execute_plan(provider, revised.value, max_repairs, parallel=parallel)

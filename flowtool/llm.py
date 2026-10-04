@@ -165,6 +165,24 @@ class Usage:
         return ", ".join(parts)
 
 
+def pair_planner(worker: "Provider", planner: "Provider") -> "Provider":
+    """
+    Let a stronger model plan while `worker` generates each step. The pair is
+    still handed around as one provider (the worker) so nothing downstream has
+    to know; `planner_of` finds the planner when planning is what's wanted.
+    The two share one Usage, so the session's cost covers both - the price is
+    worked out per call from each call's own model.
+    """
+    planner.usage = worker.usage
+    worker.planner_provider = planner
+    return worker
+
+
+def planner_of(provider: "Provider") -> "Provider":
+    """The provider to plan with: the paired planner, else `provider` itself."""
+    return getattr(provider, "planner_provider", None) or provider
+
+
 class LLMError(RuntimeError):
     pass
 

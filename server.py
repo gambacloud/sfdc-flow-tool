@@ -47,6 +47,8 @@ from flowtool.llm import (
     LwcGenerator,
     Message,
     Provider,
+    pair_planner,
+    planner_of,
 )
 from flowtool.llm import GeminiProvider, OllamaProvider
 from flowtool.lwc_guide import to_lwc_test_guide
@@ -1535,6 +1537,9 @@ class PlanRequest(BaseModel):
     request: str
     provider: Optional[str] = None
     model: Optional[str] = None
+    # A stronger model for the planning call only; `model` still generates each
+    # step. Unset (or equal to `model`) keeps one model for everything.
+    planner_model: Optional[str] = None
     effort: Literal["medium", "high"] = "medium"
     api_version: str = "62.0"
     api_key: Optional[str] = None
@@ -1889,6 +1894,10 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
         raise HTTPException(400, "Describe what should be built.")
     try:
         provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+        if body.planner_model and body.planner_model != body.model:
+            pair_planner(provider, build_provider(
+                provider.name, body.planner_model, body.effort, body.api_key,
+            ))
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1904,7 +1913,7 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
             api_name=body.permission_set_api_name,
         )
 
-    generator = PlannerGenerator(provider)
+    generator = PlannerGenerator(planner_of(provider))
     task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
     job_id = uuid.uuid4().hex
     PLAN_JOBS[job_id] = PendingPlan(
@@ -1920,7 +1929,7 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
     if pending is None:
         raise HTTPException(404, "Unknown plan job.")
     if not pending.task.done():
-        return waiting(pending.provider)
+        return waiting(planner_of(pending.provider))
     del PLAN_JOBS[job_id]
 
     result = llm_result(pending.task)

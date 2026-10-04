@@ -2343,6 +2343,7 @@ async function planAndBuild() {
       api_version: $("apiVersion").value.trim() || "62.0",
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
+      planner_model: $("plannerModel").value || null,
       ...planPermSetRequestFields(),
     });
     const planned = await poll("api/plan/status", { job_id });
@@ -2503,15 +2504,21 @@ function loadStoredApiKey() {
 // a daily quota: switch model, keep working.
 async function loadModels() {
   const select = $("model");
+  const plannerSelect = $("plannerModel");
   const providerName = $("provider").value;
   const remembered =
     (providerName && localStorage.getItem(`flowtool.model.${providerName}`)) || "";
+  const rememberedPlanner =
+    (providerName && localStorage.getItem(`flowtool.plannerModel.${providerName}`)) || "";
 
   select.innerHTML = "";
   select.add(new Option("provider default", ""));
+  plannerSelect.innerHTML = "";
+  plannerSelect.add(new Option("same as Model", ""));
   if (!providerName) return;
 
   select.disabled = true;
+  plannerSelect.disabled = true;
   showError($("options"), "");
   try {
     const data = await api("api/models", {
@@ -2521,10 +2528,14 @@ async function loadModels() {
     (data.models || []).forEach((name) => {
       const suffix = name === data.default ? " (default)" : "";
       select.add(new Option(name + suffix, name));
+      plannerSelect.add(new Option(name, name));
     });
     // A remembered choice the key can no longer use must not be sent silently.
     select.value = [...select.options].some((o) => o.value === remembered)
       ? remembered
+      : "";
+    plannerSelect.value = [...plannerSelect.options].some((o) => o.value === rememberedPlanner)
+      ? rememberedPlanner
       : "";
   } catch (err) {
     // Almost always a missing or bad key. Swallowing it meant the page looked
@@ -2535,7 +2546,16 @@ async function loadModels() {
     logError("Models", err.message);
   } finally {
     select.disabled = false;
+    plannerSelect.disabled = false;
   }
+}
+
+function rememberPlannerModel() {
+  const providerName = $("provider").value;
+  if (!providerName) return;
+  const value = $("plannerModel").value;
+  if (value) localStorage.setItem(`flowtool.plannerModel.${providerName}`, value);
+  else localStorage.removeItem(`flowtool.plannerModel.${providerName}`);
 }
 
 function rememberModel() {
@@ -3086,6 +3106,7 @@ async function boot() {
       loadModels();
     };
     $("model").onchange = rememberModel;
+    $("plannerModel").onchange = rememberPlannerModel;
     $("apiKey").addEventListener("input", () => {
       const name = provider.value;
       if (!name) return;

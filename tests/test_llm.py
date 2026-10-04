@@ -816,3 +816,20 @@ class TestMalformedResponseRepair:
         with pytest.raises(LLMError, match="Could not get valid IR"):
             generator.generate("a number field")
 
+
+
+class TestPlannerPairing:
+    def test_shared_usage_and_lookup(self):
+        from flowtool.llm import pair_planner, planner_of
+
+        class Fake:
+            def __init__(self):
+                self.usage = Usage()
+
+        worker, planner = Fake(), Fake()
+        assert planner_of(worker) is worker
+        assert pair_planner(worker, planner) is worker
+        assert planner_of(worker) is planner
+        planner.usage.add(100, 50, model="claude-sonnet-5")
+        worker.usage.add(100, 50, model="claude-haiku-4-5")
+        assert worker.usage.calls == 2
