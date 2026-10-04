@@ -46,6 +46,7 @@ from .llm import (
     PlatformEventGenerator,
     Provider,
     planner_of,
+    provider_for_step,
 )
 
 ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" - see PlanStep.artifact_type
@@ -431,6 +432,7 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
 def _generator_for(step: PlanStep, provider: Provider, max_repairs: int) -> IRGenerator:
     """A step's generator; a Flow's is narrowed to the type the planner chose."""
     generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
+    provider = provider_for_step(provider, step.artifact_type)
     if step.artifact_type == "flow":
         return generator_cls(provider, max_repairs=max_repairs, flow_type=step.flow_type)
     return generator_cls(provider, max_repairs=max_repairs)

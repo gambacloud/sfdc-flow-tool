@@ -882,21 +882,73 @@ class TestAutoWorkers:
         P.name, P.model, P.list_models = name, model, lambda self: models
         return P()
 
-    def test_picks_newest_haiku_and_flash_non_lite(self):
+    def test_picks_midtier_and_cheapest(self):
         import server
 
-        assert server.pick_worker_model(self._fake(
-            "anthropic", "claude-sonnet-5", ["claude-opus-5", "claude-haiku-4-5", "claude-haiku-3"],
-        )) == "claude-haiku-4-5"
-        assert server.pick_worker_model(self._fake(
-            "gemini", "gemini-3.1-pro", ["gemini-3.1-pro", "gemini-3.8-flash-lite", "gemini-3.8-flash"],
-        )) == "gemini-3.8-flash"
+        assert server.pick_worker_models(self._fake(
+            "anthropic", "claude-opus-5-5",
+            ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-haiku-4-5"],
+        )) == ("claude-sonnet-5-5", "claude-haiku-4-5")
+        assert server.pick_worker_models(self._fake(
+            "gemini", "gemini-3.1-pro",
+            ["gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview"],
+        )) == ("gemini-3.1-pro-preview", "gemini-3.8-flash")
 
-    def test_ollama_and_no_match_are_errors(self):
+    def test_ollama_and_missing_tier_are_errors(self):
         import server
         from flowtool.llm import LLMError
 
         with pytest.raises(LLMError):
-            server.pick_worker_model(self._fake("ollama", "x", ["x"]))
+            server.pick_worker_models(self._fake("ollama", "x", ["x"]))
         with pytest.raises(LLMError):
-            server.pick_worker_model(self._fake("anthropic", "claude-opus-5", ["claude-opus-5"]))
+            server.pick_worker_models(self._fake("anthropic", "claude-opus-5", ["claude-opus-5"]))
+
+    def test_steps_route_by_type(self, monkeypatch):
+        import server
+        from flowtool.llm import planner_of, provider_for_step
+
+        built = {}
+
+        def build(name, model, effort, key=None):
+            built[model] = effort
+            return type("W", (), {"usage": Usage(), "name": name, "model": model})()
+
+        monkeypatch.setattr(server, "build_provider", build)
+        planner = self._fake(
+            "anthropic", "claude-opus-5-5",
+            ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
+        )
+        provider = server.with_auto_workers(planner, "high", None)
+        assert planner_of(provider) is planner
+        assert provider.model == "claude-haiku-4-5"
+        for kind in ("apex", "flow", "lwc"):
+            assert provider_for_step(provider, kind).model == "claude-sonnet-5-5"
+        for kind in ("object", "field", "mdt"):
+            assert provider_for_step(provider, kind).model == "claude-haiku-4-5"
+        assert built == {"claude-haiku-4-5": "medium", "claude-sonnet-5-5": "medium"}
+        assert provider_for_step(provider, "flow").usage is planner.usage
+
+
+class TestHaikuParams:
+    def test_haiku_gets_no_thinking_or_effort(self):
+        from flowtool.llm import AnthropicProvider
+
+        sent = {}
+
+        class Messages:
+            def create(self, **kwargs):
+                sent.clear()
+                sent.update(kwargs)
+                return "ok"
+
+        provider = AnthropicProvider.__new__(AnthropicProvider)
+        provider.model, provider.max_tokens = "claude-haiku-4-5", 100
+        provider._client = type("C", (), {"messages": Messages()})()
+        provider._create(
+            thinking={"type": "adaptive"},
+            output_config={"effort": "medium", "format": {"type": "json_schema"}},
+        )
+        assert "thinking" not in sent
+        assert sent["output_config"] == {"format": {"type": "json_schema"}}
+        provider._create(thinking={"type": "adaptive"}, output_config={"effort": "medium"})
+        assert "output_config" not in sent

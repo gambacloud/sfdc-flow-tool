@@ -219,22 +219,35 @@ class Usage:
         return ", ".join(parts)
 
 
-def pair_planner(worker: "Provider", planner: "Provider") -> "Provider":
+def pair_planner(
+    worker: "Provider", planner: "Provider",
+    step_providers: Optional[Dict[str, "Provider"]] = None,
+) -> "Provider":
     """
-    Let a stronger model plan while `worker` generates each step. The pair is
-    still handed around as one provider (the worker) so nothing downstream has
-    to know; `planner_of` finds the planner when planning is what's wanted.
-    The two share one Usage, so the session's cost covers both - the price is
-    worked out per call from each call's own model.
+    Let a stronger model plan while `worker` generates each step, and
+    `step_providers` (artifact type -> provider) take over the step types that
+    need more than `worker`. The set is still handed around as one provider
+    (the worker) so nothing downstream has to know; `planner_of` and
+    `provider_for_step` find the others. All share one Usage, so the session's
+    cost covers every model - the price is worked out per call from its own.
     """
+    step_providers = step_providers or {}
     planner.usage = worker.usage
+    for provider in step_providers.values():
+        provider.usage = worker.usage
     worker.planner_provider = planner
+    worker.step_providers = step_providers
     return worker
 
 
 def planner_of(provider: "Provider") -> "Provider":
     """The provider to plan with: the paired planner, else `provider` itself."""
     return getattr(provider, "planner_provider", None) or provider
+
+
+def provider_for_step(provider: "Provider", artifact_type: str) -> "Provider":
+    """The provider to build a step of `artifact_type` with."""
+    return getattr(provider, "step_providers", {}).get(artifact_type, provider)
 
 
 class LLMError(RuntimeError):
@@ -998,6 +1011,14 @@ class AnthropicProvider:
         """
         import anthropic
 
+        if self.model.startswith("claude-haiku"):
+            # Haiku 4.5 rejects both adaptive thinking and `effort` (400).
+            kwargs.pop("thinking", None)
+            config = {k: v for k, v in kwargs.get("output_config", {}).items() if k != "effort"}
+            if config:
+                kwargs["output_config"] = config
+            else:
+                kwargs.pop("output_config", None)
         try:
             return self._client.messages.create(
                 model=self.model, max_tokens=self.max_tokens, **kwargs

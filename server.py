@@ -508,32 +508,54 @@ def build_provider(
     return PROVIDERS[name](**options)
 
 
-# What a provider's cheaper "worker" model looks like, matched against the
-# models its key can use (newest first). Ollama has no such tier.
-_WORKER_MODEL_MARKERS = {
-    "anthropic": lambda name: "haiku" in name,
-    "gemini": lambda name: "flash" in name and "lite" not in name,
+# The models a plan's steps are built with, matched against what the key can
+# use (newest first): `complex` for the step types that need judgement, `simple`
+# for the mechanical rest. Ollama has no such tiers.
+_WORKER_TIERS = {
+    "anthropic": (lambda name: "sonnet" in name, lambda name: "haiku" in name),
+    "gemini": (
+        lambda name: "pro" in name,
+        lambda name: "flash" in name and "lite" not in name,
+    ),
 }
+_COMPLEX_STEP_TYPES = ("apex", "flow", "lwc")
 
 
-def pick_worker_model(planner: Provider) -> str:
-    matches = _WORKER_MODEL_MARKERS.get(planner.name)
-    if matches is None:
+def pick_worker_models(planner: Provider) -> tuple[str, str]:
+    """(complex, simple) model names for `planner`'s provider."""
+    tiers = _WORKER_TIERS.get(planner.name)
+    if tiers is None:
         raise LLMError(f"Auto-select for workers isn't available for {planner.name}.")
-    for name in planner.list_models():
-        if matches(name):
-            return name
-    raise LLMError(f"No cheaper model for workers was found for this {planner.name} key.")
+    available = planner.list_models()
+    picked = []
+    for matches in tiers:
+        found = next((name for name in available if matches(name)), None)
+        if found is None:
+            raise LLMError(f"No suitable model for workers was found for this {planner.name} key.")
+        picked.append(found)
+    return picked[0], picked[1]
 
 
 def with_auto_workers(planner: Provider, effort: str, api_key: Optional[str]) -> Provider:
-    """`planner` plans; the returned provider builds each step with a cheaper model."""
-    worker_model = pick_worker_model(planner)
-    if worker_model == planner.model:
-        return planner
-    worker = build_provider(planner.name, worker_model, effort, api_key)
-    logging.getLogger("flowtool").info("Planning with %s, building with %s", planner.model, worker_model)
-    return pair_planner(worker, planner)
+    """
+    `planner` plans; the returned provider builds Apex, Flow and LWC steps with
+    the provider's mid-tier model and everything else with its cheapest, both
+    at medium effort.
+    """
+    complex_model, simple_model = pick_worker_models(planner)
+
+    def worker(model: str) -> Provider:
+        if model == planner.model:
+            return planner
+        return build_provider(planner.name, model, "medium", api_key)
+
+    simple = worker(simple_model)
+    complex_ = simple if complex_model == simple_model else worker(complex_model)
+    logging.getLogger("flowtool").info(
+        "Planning with %s, building with %s (Apex/Flow/LWC: %s)",
+        planner.model, simple_model, complex_model,
+    )
+    return pair_planner(simple, planner, {t: complex_ for t in _COMPLEX_STEP_TYPES})
 
 
 def credentials(
