@@ -873,3 +873,30 @@ class TestGeminiCost:
         assert llm_module.estimate_cost("gemini-3.6-flash", 1_000_000, 0) == pytest.approx(0.75)
         Day.today_value = real_date(2027, 1, 1)
         assert llm_module.estimate_cost("gemini-3.6-flash", 1_000_000, 0) == pytest.approx(1.50)
+
+
+class TestAutoWorkers:
+    def _fake(self, name, model, models):
+        class P:
+            usage = Usage()
+        P.name, P.model, P.list_models = name, model, lambda self: models
+        return P()
+
+    def test_picks_newest_haiku_and_flash_non_lite(self):
+        import server
+
+        assert server.pick_worker_model(self._fake(
+            "anthropic", "claude-sonnet-5", ["claude-opus-5", "claude-haiku-4-5", "claude-haiku-3"],
+        )) == "claude-haiku-4-5"
+        assert server.pick_worker_model(self._fake(
+            "gemini", "gemini-3.1-pro", ["gemini-3.1-pro", "gemini-3.8-flash-lite", "gemini-3.8-flash"],
+        )) == "gemini-3.8-flash"
+
+    def test_ollama_and_no_match_are_errors(self):
+        import server
+        from flowtool.llm import LLMError
+
+        with pytest.raises(LLMError):
+            server.pick_worker_model(self._fake("ollama", "x", ["x"]))
+        with pytest.raises(LLMError):
+            server.pick_worker_model(self._fake("anthropic", "claude-opus-5", ["claude-opus-5"]))

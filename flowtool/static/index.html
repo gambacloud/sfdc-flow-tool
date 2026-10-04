@@ -228,11 +228,6 @@
               <option value="">provider default</option>
             </select>
           </label>
-          <label>Planner model <span class="dim">(Build multiple things only)</span>
-            <select id="plannerModel">
-              <option value="">same as Model</option>
-            </select>
-          </label>
           <label>Effort
             <select id="effort">
               <option selected>medium</option><option>high</option>
@@ -244,6 +239,11 @@
           <label class="check">
             <input type="checkbox" id="activate">
             Deploy Active <span class="warn-inline">(runs on live records)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="autoWorkers">
+            Auto-select for workers
+            <span class="dim">(Build multiple things only - the Model plans, a cheaper one builds each step)</span>
           </label>
           <label class="check">
             <input type="checkbox" id="planParallel">
