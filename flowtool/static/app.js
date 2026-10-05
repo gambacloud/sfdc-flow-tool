@@ -3061,6 +3061,7 @@ async function boot() {
     const config = await api("api/config");
     state.showIrSubtab = !!config.show_ir_subtab;
     $("irTab").hidden = !state.showIrSubtab;
+    $("autoWorkers").closest("label").hidden = !config.show_auto_workers;
     if (config.highlight_plan_mode) highlightPlanMode();
     state.shareEnabled = !!config.share_enabled;
 
