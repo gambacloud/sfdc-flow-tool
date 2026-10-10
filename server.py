@@ -486,6 +486,17 @@ def available_providers() -> List[str]:
     ]
 
 
+def default_provider(found: List[str]) -> Optional[str]:
+    """
+    The provider the Options panel opens on: DEFAULT_TOKEN_PROVIDER (gemini
+    unless set) when it has a key, otherwise whichever provider does.
+    """
+    preferred = os.environ.get("DEFAULT_TOKEN_PROVIDER", "").strip().lower() or "gemini"
+    if preferred in found:
+        return preferred
+    return found[0] if found else None
+
+
 def build_provider(
     name: Optional[str], model: Optional[str], effort: str, api_key: Optional[str] = None
 ) -> Provider:
@@ -497,7 +508,7 @@ def build_provider(
                 f"put GEMINI_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_API_KEY in a "
                 f"{ROOT / '.env'} file and restart the server."
             )
-        name = found[0]
+        name = default_provider(found)
     if name not in PROVIDERS:
         raise LLMError(f"Unknown provider {name!r}.")
     options: Dict[str, Any] = {"effort": effort}
@@ -735,7 +746,7 @@ def config() -> Dict[str, Any]:
     return {
         "providers": providers,
         "all_providers": list(PROVIDERS),
-        "default_provider": providers[0] if providers else None,
+        "default_provider": default_provider(providers),
         "orgs": orgs,
         "sf_cli": cli,
         "env_file": str(ROOT / ".env"),

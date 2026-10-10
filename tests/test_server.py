@@ -622,6 +622,21 @@ class TestProviderDefault:
         config = client.get("/api/config").json()
         assert set(config["all_providers"]) == set(server.PROVIDERS)
 
+    def test_gemini_wins_when_several_providers_have_keys(self, client, monkeypatch, no_cli):
+        monkeypatch.delenv("DEFAULT_TOKEN_PROVIDER", raising=False)
+        monkeypatch.setattr(server, "available_providers", lambda: ["anthropic", "gemini"])
+        assert client.get("/api/config").json()["default_provider"] == "gemini"
+
+    def test_default_token_provider_var_picks_the_default(self, client, monkeypatch, no_cli):
+        monkeypatch.setenv("DEFAULT_TOKEN_PROVIDER", "Anthropic")
+        monkeypatch.setattr(server, "available_providers", lambda: ["anthropic", "gemini"])
+        assert client.get("/api/config").json()["default_provider"] == "anthropic"
+
+    def test_default_token_provider_without_a_key_falls_back(self, client, monkeypatch, no_cli):
+        monkeypatch.setenv("DEFAULT_TOKEN_PROVIDER", "ollama")
+        monkeypatch.setattr(server, "available_providers", lambda: ["anthropic"])
+        assert client.get("/api/config").json()["default_provider"] == "anthropic"
+
     def test_no_key_anywhere_leaves_no_default(self, client, monkeypatch, no_cli):
         monkeypatch.setattr(server, "available_providers", lambda: [])
         config = client.get("/api/config").json()
