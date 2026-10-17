@@ -21,6 +21,7 @@ from flowtool.llm import (
     MDT_SYSTEM_PROMPT,
     Message,
     OBJECT_SYSTEM_PROMPT,
+    AGENT_SYSTEM_PROMPT,
     PLATFORM_EVENT_SYSTEM_PROMPT,
     PROMPT_TEMPLATE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -139,6 +140,7 @@ class TypedScriptedProvider:
         MDT_RECORD_SYSTEM_PROMPT: "mdt_record",
         PLATFORM_EVENT_SYSTEM_PROMPT: "platform_event",
         PROMPT_TEMPLATE_SYSTEM_PROMPT: "prompt_template",
+        AGENT_SYSTEM_PROMPT: "agent",
     }
 
     def __init__(self, **payloads_by_type):

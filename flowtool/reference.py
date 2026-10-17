@@ -24,6 +24,7 @@ from .ir_lwc import LightningComponent
 from .ir_mdt import MetadataType
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .ir_agent import Agent
 from .ir_prompt_template import PromptTemplate
 
 # Deliberately narrow: this text is written into XML and into source comments
@@ -74,7 +75,7 @@ def tag_value(value: Any, reference: Optional[str]) -> Any:
             if "description" in type(element).model_fields:
                 element.description = tag_description(element.description, reference)
         return flow
-    if isinstance(value, (CustomObject, CustomField, MetadataType, PlatformEvent, PromptTemplate)):
+    if isinstance(value, (CustomObject, CustomField, MetadataType, PlatformEvent, PromptTemplate, Agent)):
         copy = value.model_copy(deep=True)
         copy.description = tag_description(copy.description, reference)
         return copy

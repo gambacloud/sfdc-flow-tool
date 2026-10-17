@@ -1031,6 +1031,7 @@ const PLAN_ARTIFACT_LABELS = {
   mdt: "Custom Metadata Type", mdt_record: "Custom Metadata Record",
   platform_event: "Platform Event",
   prompt_template: "Prompt Template",
+  agent: "Agentforce Agent",
 };
 
 function planStepSummary(step) {
@@ -1054,6 +1055,10 @@ function planStepSummary(step) {
       return `${step.field_count} field${step.field_count === 1 ? "" : "s"}`;
     case "prompt_template":
       return `${step.inputs.length} input${step.inputs.length === 1 ? "" : "s"}  ·  ${step.response_format}`;
+    case "agent": {
+      const actions = step.topics.reduce((n, t) => n + t.actions.length, 0);
+      return `${step.topics.length} topic${step.topics.length === 1 ? "" : "s"}  ·  ${actions} action${actions === 1 ? "" : "s"}`;
+    }
     default:
       return "";
   }
@@ -1260,6 +1265,18 @@ function renderPlanStep(step) {
       ["Publish behavior", step.publish_behavior],
     ]));
     body.appendChild(planStepFieldList(step.fields));
+  } else if (step.artifact_type === "agent") {
+    body.appendChild(planStepTable([
+      ["API name", step.api_name],
+      ["Label", step.label],
+      ...step.topics.map((t) => [
+        `Topic: ${t.label}`,
+        t.description + (t.actions.length ? `  (actions: ${t.actions.map((a) => `${a.api_name} -> ${a.target}`).join(", ")})` : ""),
+      ]),
+    ]));
+    const instructions = document.createElement("pre");
+    instructions.textContent = step.instructions;
+    body.appendChild(instructions);
   } else if (step.artifact_type === "prompt_template") {
     body.appendChild(planStepTable([
       ["API name", step.api_name],
@@ -2391,6 +2408,7 @@ async function planAndBuildOnce(button) {
     api_key: $("apiKey").value.trim() || null,
     model: $("model").value || null,
     auto_workers: $("autoWorkers").checked,
+    agent_user: $("planAgentUser").value.trim() || null,
     ...planPermSetRequestFields(),
   });
   const planned = await poll("api/plan/status", { job_id });

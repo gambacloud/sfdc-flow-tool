@@ -34,6 +34,7 @@ from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.ir_platform_event import PlatformEvent
+from flowtool.ir_agent import Agent
 from flowtool.ir_prompt_template import PromptTemplate
 from flowtool.ir_permset import PermissionSetGrant, build_grant_from_steps, sanitize_api_name
 from flowtool.llm import (
@@ -89,6 +90,7 @@ from flowtool.xmlgen_mdt import generate_mdt_record, generate_mdt_type
 from flowtool.xmlgen_object import generate_field_delta, generate_object
 from flowtool.xmlgen_platform_event import generate_platform_event
 from flowtool.xmlgen_prompt_template import generate_prompt_template
+from flowtool.xmlgen_agent import MissingAgentUser, generate_agent_files
 from flowtool.xmlgen_permset import generate_permission_set, merge_permission_set_xml
 from survey import Survey, text_report
 
@@ -1613,6 +1615,9 @@ class PlanRequest(BaseModel):
     grant_permission_set: Optional[Literal["new", "existing"]] = None
     permission_set_label: Optional[str] = None
     permission_set_api_name: Optional[str] = None
+    # Username of the user an Agentforce agent runs as ("Einstein Agent User"
+    # profile). Only needed when the plan builds an agent.
+    agent_user: Optional[str] = None
 
 
 class PlanExecuteRequest(BaseModel):
@@ -1654,6 +1659,7 @@ class PendingPlan:
     provider: Provider
     api_version: str
     permission_set_config: Optional[PermissionSetConfig] = None
+    agent_user: Optional[str] = None
 
 
 PLAN_JOBS: Dict[str, PendingPlan] = {}
@@ -1812,6 +1818,24 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "field_count": len(value.fields),
             "fields": [{"api_name": f.api_name, "type": f.type} for f in value.fields],
         })
+    elif isinstance(value, Agent):
+        entry.update({
+            "api_name": value.api_name,
+            "label": value.label,
+            "instructions": value.instructions,
+            "topics": [
+                {
+                    "api_name": t.api_name,
+                    "label": t.label,
+                    "description": t.description,
+                    "actions": [
+                        {"api_name": a.api_name, "target": f"{a.target_type}://{a.target}"}
+                        for a in t.actions
+                    ],
+                }
+                for t in value.topics
+            ],
+        })
     elif isinstance(value, PromptTemplate):
         entry.update({
             "api_name": value.api_name,
@@ -1862,7 +1886,7 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
 
 
 def _bundle_files_and_types(
-    steps: List[StepResult], reference: Optional[str] = None,
+    steps: List[StepResult], reference: Optional[str] = None, agent_user: Optional[str] = None,
 ) -> tuple[Dict[str, str], Dict[str, List[str]]]:
     """
     Every step's generated IR, compiled to the metadata files and package.xml
@@ -1949,6 +1973,9 @@ def _bundle_files_and_types(
                 generate_prompt_template(value)
             )
             types.setdefault("GenAiPromptTemplate", []).append(value.api_name)
+        elif isinstance(value, Agent):
+            files.update(generate_agent_files(value, agent_user))
+            types.setdefault("AiAuthoringBundle", []).append(value.api_name)
         elif isinstance(value, LightningComponent):
             files.update(generate_lwc(value))
             types.setdefault("LightningComponentBundle", []).append(value.api_name)
@@ -1997,6 +2024,7 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
     PLAN_JOBS[job_id] = PendingPlan(
         task=task, provider=provider, api_version=body.api_version,
         permission_set_config=permission_set_config,
+        agent_user=(body.agent_user or "").strip() or None,
     )
     return {"job_id": job_id}
 
@@ -2011,6 +2039,7 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
     del PLAN_JOBS[job_id]
 
     result = llm_result(pending.task)
+    result.value.agent_user = pending.agent_user  # a build option, never the model's to choose
     plan_id = uuid.uuid4().hex
     PLANS[plan_id] = StoredPlan(
         provider=pending.provider, plan=result.value, messages=result.messages,
@@ -2116,17 +2145,31 @@ async def _add_permission_set_files(
     types.setdefault("PermissionSet", []).append(api_name)
 
 
+# An Agentforce agent is an AiAuthoringBundle, which the Metadata API only accepts
+# from API 65.0 ("Not available for deploy for this API version" at 62 and 64).
+_AGENT_MIN_API_VERSION = "65.0"
+
+
+def _deploy_api_version(session: "PlanSession") -> str:
+    """The API version a plan's bundle deploys with: the session's, raised to the
+    minimum its newest component type needs."""
+    if any(isinstance(r.value, Agent) for r in session.steps):
+        return max(session.api_version, _AGENT_MIN_API_VERSION, key=float)
+    return session.api_version
+
+
 async def _deploy_plan_bundle(
     session: PlanSession, url: str, token: str, check_only: bool,
 ) -> Any:
-    files, types = _bundle_files_and_types(session.steps, session.reference)
+    files, types = _bundle_files_and_types(session.steps, session.reference, session.plan.agent_user)
+    api_version = _deploy_api_version(session)
     if session.permission_set_config is not None:
         await _add_permission_set_files(
             session.permission_set_config, session.steps, url, token,
-            session.api_version, files, types, session.reference,
+            api_version, files, types, session.reference,
         )
     return await validate_bundle(
-        url, token, files, types, api_version=session.api_version, check_only=check_only,
+        url, token, files, types, api_version=api_version, check_only=check_only,
     )
 
 
@@ -2139,6 +2182,13 @@ def _start_plan_deploy(
 ) -> None:
     if session.pending_deploy is not None and not session.pending_deploy.task.done():
         raise HTTPException(409, "A validate/deploy is already running for this plan.")
+    has_agent = any(isinstance(r.value, Agent) for r in session.steps)
+    if has_agent and not (session.plan.agent_user or "").strip():
+        raise HTTPException(
+            400,
+            "This plan builds an agent, which needs an agent user: the username of a user with the "
+            "'Einstein Agent User' profile. Enter it under Options (Agent user) and plan again.",
+        )
     url, token = credentials(org, instance_url, access_token)
     task = asyncio.create_task(_deploy_plan_bundle(session, url, token, check_only))
     session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
@@ -2455,7 +2505,7 @@ def _plan_package_files(
     current copy to merge with, so it is left out; a new one is included,
     since it needs nothing from an org.
     """
-    files, types = _bundle_files_and_types(session.steps, session.reference)
+    files, types = _bundle_files_and_types(session.steps, session.reference, session.plan.agent_user)
     config = session.permission_set_config
     if config is not None and config.mode == "new":
         grant = build_grant_from_steps(
@@ -2643,6 +2693,7 @@ _PLAN_STEP_IR_CLASS: Dict[str, Any] = {
     "mdt_record": CustomMetadataRecord,
     "platform_event": PlatformEvent,
     "prompt_template": PromptTemplate,
+    "agent": Agent,
 }
 
 

@@ -29,7 +29,9 @@ from .ir_lwc import LightningComponent
 from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .ir_agent import Agent
 from .ir_prompt_template import PromptTemplate
+from . import agent_facts
 from .ir import Flow
 from .llm import (
     ApexClassGenerator,
@@ -44,6 +46,7 @@ from .llm import (
     LwcGenerator,
     Message,
     MetadataTypeGenerator,
+    AgentGenerator,
     PlatformEventGenerator,
     PromptTemplateGenerator,
     Provider,
@@ -51,9 +54,9 @@ from .llm import (
     provider_for_step,
 )
 
-ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" | "prompt_template" - see PlanStep.artifact_type
+ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" | "prompt_template" | "agent" - see PlanStep.artifact_type
 
-_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record", "platform_event", "prompt_template"}
+_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record", "platform_event", "prompt_template", "agent"}
 
 
 class PlanStep(BaseModel):
@@ -114,6 +117,10 @@ class Plan(BaseModel):
         description="High-level - not per step: why the request was broken down "
         "into these steps and how they fit together. Never deployed.",
     )
+    agent_user: Optional[str] = Field(
+        default=None,
+        description="Leave out - the username of the agent user, set from the plan options.",
+    )
     how_to_test: Optional[str] = Field(
         default=None,
         description="How a person checks, after deploy, that the whole bundle "
@@ -157,6 +164,29 @@ class Plan(BaseModel):
             for template in templates:
                 if not _reaches(step.name, template, graph):
                     step.depends_on = [*step.depends_on, template]
+                    graph[step.name] = step.depends_on
+        return self
+
+    @model_validator(mode="after")
+    def agents_wait_for_what_they_call(self) -> "Plan":
+        """
+        An agent's actions call an Apex class, Flow or Prompt Template by exact
+        api_name and parameter names, which exist only once those steps have
+        run. Any agent step therefore comes after every such step in the plan
+        (an agent that does not call one of them simply ignores it).
+        """
+        callable_types = {"apex", "flow", "prompt_template"}
+        graph = {s.name: s.depends_on for s in self.steps}
+        for step in self.steps:
+            if step.artifact_type != "agent":
+                continue
+            for other in self.steps:
+                if other.artifact_type not in callable_types or other.name == step.name:
+                    continue
+                if _reaches(other.name, step.name, graph):
+                    continue  # it already depends on the agent - leave that cycle-free
+                if not _reaches(step.name, other.name, graph):
+                    step.depends_on = [*step.depends_on, other.name]
                     graph[step.name] = step.depends_on
         return self
 
@@ -265,6 +295,12 @@ has to ask a model to judge, summarise, classify or extract something (scoring a
 conversation, summarising a case, tagging sentiment). A Flow calls it with the \
 `generatePromptResponse` action. When the answer must be stored in fields, ask \
 for JSON.
+
+- `agent` - an Agentforce Service Agent for customers: its topics and the \
+actions each topic can take. The actions call Apex classes, Flows and Prompt \
+Templates, which the same request usually creates in earlier steps - an agent \
+step always comes after them, and the plan completes that ordering itself. One \
+agent is one step; do not split its topics into separate steps.
 
 ## Flow type
 
@@ -388,6 +424,7 @@ _GENERATOR_BY_TYPE: Dict[str, Type[IRGenerator]] = {
     "mdt_record": CustomMetadataRecordGenerator,
     "platform_event": PlatformEventGenerator,
     "prompt_template": PromptTemplateGenerator,
+    "agent": AgentGenerator,
 }
 
 # A cap on how many steps in one layer run at once, not "as many as fit."
@@ -456,6 +493,13 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
                 f"Its actual source, so you can call its real @InvocableMethod (if any) "
                 f"by name instead of guessing:\n{value.body}"
             )
+        elif isinstance(value, Flow) and step.artifact_type == "agent":
+            ins = ", ".join(v.name for v in value.variables if v.is_input) or "none"
+            outs = ", ".join(v.name for v in value.variables if v.is_output) or "none"
+            lines.append(
+                f"- Step {dep_name!r} created Flow api_name={value.api_name!r}; an action "
+                f"calls it with target_type 'flow', inputs named exactly: {ins}; outputs: {outs}."
+            )
         elif isinstance(value, Flow):
             lines.append(f"- Step {dep_name!r} created Flow api_name={value.api_name!r}.")
         elif isinstance(value, LightningComponent):
@@ -473,6 +517,12 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
             lines.append(
                 f"- Step {dep_name!r} created Custom Metadata record "
                 f"{value.type_api_name}.{value.developer_name!r}."
+            )
+        elif isinstance(value, PromptTemplate) and step.artifact_type == "agent":
+            lines.append(
+                f"- Step {dep_name!r} created Prompt Template api_name={value.api_name!r}; "
+                f"an action calls it with target_type 'prompt' and inputs named exactly: "
+                f"{', '.join(i.name for i in value.inputs) or 'none'}."
             )
         elif isinstance(value, PromptTemplate):
             inputs = ", ".join(f"Input:{i.name} ({i.type})" for i in value.inputs) or "none"
@@ -507,19 +557,34 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
     )
 
 
-def _generator_for(step: PlanStep, provider: Provider, max_repairs: int) -> IRGenerator:
-    """A step's generator; a Flow's is narrowed to the type the planner chose."""
+def _agent_targets(step: PlanStep, by_name: Dict[str, "StepResult"]) -> Optional[Dict]:
+    """What the steps an agent depends on declare, for checking its actions."""
+    if step.artifact_type != "agent":
+        return None
+    return agent_facts.collect(
+        {name: by_name[name].value for name in step.depends_on if name in by_name}
+    )
+
+
+def _generator_for(
+    step: PlanStep, provider: Provider, max_repairs: int, targets: Optional[Dict] = None,
+) -> IRGenerator:
+    """A step's generator; a Flow's is narrowed to the type the planner chose,
+    and an agent's is given what the steps it calls actually declare."""
     generator_cls = _GENERATOR_BY_TYPE[step.artifact_type]
     provider = provider_for_step(provider, step.artifact_type)
     if step.artifact_type == "flow":
         return generator_cls(provider, max_repairs=max_repairs, flow_type=step.flow_type)
+    if step.artifact_type == "agent":
+        return generator_cls(provider, max_repairs=max_repairs, targets=targets)
     return generator_cls(provider, max_repairs=max_repairs)
 
 
 def _run_one_step(
     provider: Provider, step: PlanStep, max_repairs: int, brief: str,
+    targets: Optional[Dict] = None,
 ) -> StepResult:
-    generator = _generator_for(step, provider, max_repairs)
+    generator = _generator_for(step, provider, max_repairs, targets)
     raw = generator.generate(brief)
     value = raw.flow if isinstance(raw, GenerationResult) else raw.value
     return StepResult(step=step, value=value, repairs=raw.repairs, messages=raw.messages)
@@ -570,6 +635,7 @@ def execute_plan(
                     contextvars.copy_context().run,
                     _run_one_step, provider, step, max_repairs,
                     _dependency_facts(step, by_name),
+                    _agent_targets(step, by_name),
                 ): step
                 for step in layer
             }
@@ -675,5 +741,6 @@ def revise_plan(
     planner = PlannerGenerator(planner_of(provider), max_repairs)
     prior = IRGenerationResult(value=plan, messages=messages, repairs=0)
     revised = planner.refine(prior, instruction)
+    revised.value.agent_user = plan.agent_user  # an option of the build, not something the model writes
     steps = execute_plan(provider, revised.value, max_repairs, parallel=parallel)
     return PlanRevision(plan=revised.value, messages=revised.messages, steps=steps)

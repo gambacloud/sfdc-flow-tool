@@ -287,6 +287,9 @@
             Auto-select for workers
             <span class="dim">(Build multiple things only)</span>
           </label>
+          <label>Agent user <span class="dim">(only if the plan builds an agent - the username of a user with the Einstein Agent User profile)</span>
+            <input id="planAgentUser" type="text" autocomplete="off" placeholder="agent.user@example.com">
+          </label>
           <label class="check">
             <input type="checkbox" id="planParallel">
             Run independent steps in parallel

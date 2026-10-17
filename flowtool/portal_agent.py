@@ -30,7 +30,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 from xml.sax.saxutils import escape
 
 METADATA_NS = "http://soap.sforce.com/2006/04/metadata"
-TargetType = Literal["apex", "flow"]
+TargetType = Literal["apex", "flow", "prompt"]
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 

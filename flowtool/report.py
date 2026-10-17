@@ -22,6 +22,7 @@ from .ir_apex import ApexClass, ApexTrigger
 from .ir_lwc import LightningComponent
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .ir_agent import Agent
 from .ir_prompt_template import PromptTemplate
 from .lwc_guide import to_lwc_test_guide
 from .mermaid import element_index, to_mermaid, to_test_guide
@@ -106,6 +107,22 @@ def render_html_fragment(steps: List[StepResult]) -> str:
                 f"{_esc(', '.join(f'{f.api_name} ({f.type})' for f in value.fields))}"
                 "</td></tr>"
                 "</tbody></table>"
+            )
+        elif isinstance(value, Agent):
+            topic_rows = "".join(
+                f"<tr><th>{_esc(t.label)}</th><td>{_esc(t.description)}"
+                + (f"<br><small>Actions: {_esc(', '.join(f'{a.api_name} ({a.target_type}://{a.target})' for a in t.actions))}</small>"
+                   if t.actions else "")
+                + "</td></tr>"
+                for t in value.topics
+            )
+            parts.append(
+                "<table><tbody>"
+                f"<tr><th>API name</th><td>{_esc(value.api_name)}</td></tr>"
+                f"<tr><th>Label</th><td>{_esc(value.label)}</td></tr>"
+                f"{topic_rows}"
+                "</tbody></table>"
+                f"<h4>Instructions</h4><pre>{_esc(value.instructions)}</pre>"
             )
         elif isinstance(value, PromptTemplate):
             parts.append(

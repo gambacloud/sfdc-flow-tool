@@ -31,8 +31,10 @@ from .ir_lwc import LightningComponent
 from .ir_lwc import heuristic_errors as lwc_heuristic_errors
 from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
+from .ir_agent import Agent
 from .ir_platform_event import PlatformEvent
 from .ir_prompt_template import PromptTemplate
+from .agent_facts import problems as agent_problems
 
 DEFAULT_MAX_REPAIRS = 3
 
@@ -803,6 +805,46 @@ what this record sets and, if you made a judgment call, what it was and why. Nev
 deployed - only for the person reviewing this step.
 """
 
+
+AGENT_SYSTEM_PROMPT = """\
+You translate a description of an AI assistant for a company's customers into a \
+Salesforce Agentforce Service Agent IR document.
+
+You produce IR only, never Agent Script - a compiler writes the script from your \
+IR.
+
+- `api_name` is letters, digits and underscores, starting with a letter. `label` \
+is the name people see.
+- `instructions` says who the agent is and how it behaves overall: tone, what it \
+may and may not do, when to hand over to a person. Write them as plain sentences \
+to the agent ("You are...", "Never...").
+- `topics` are the separate jobs the agent can do. Give each its own `api_name` \
+(lowercase snake_case, for example `order_status`), a `description` that says \
+when to use it (the agent picks a topic by this text, so make topics clearly \
+different from each other) and `instructions` for how to behave inside it. Do \
+not create topics for escalation to a person, off-topic requests or unclear \
+questions - the compiler adds those.
+- A topic's `actions` are what the agent can actually do in that topic. An \
+action calls something that already exists: an Apex class (`target_type` \
+`apex`), a Flow (`flow`) or a Prompt Template (`prompt`), named by `target`. \
+Only use targets that the request or the step details below name, and never \
+invent one. `description` says when to use the action.
+- An action's `inputs` and `outputs` use exactly the names the target declares - \
+an Apex `@InvocableVariable` field name, a Flow variable name, a Prompt Template \
+input name. When the step details give you the Apex source, copy the names from \
+it. Give every parameter a `description` the agent can use to fill it in from the \
+conversation. Use `string` unless the target clearly takes a number or boolean.
+- A topic with nothing to do but answer questions needs no actions. Prefer the \
+smallest set of topics and actions that does what was asked.
+- Leave `agent_user` out.
+
+`description` is Salesforce metadata - it deploys to the org. Only put a plain, \
+accurate description of the agent there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and any judgment call. \
+Never deployed - only for the person reviewing this step.
+"""
 
 PROMPT_TEMPLATE_SYSTEM_PROMPT = """\
 You translate a description of a question to put to a language model into a \
@@ -2531,6 +2573,27 @@ class PromptTemplateGenerator(IRGenerator[PromptTemplate]):
         return f"{template.api_name} ({len(template.inputs)} input(s), {template.response_format})"
 
     def generate(self, request: str) -> IRGenerationResult[PromptTemplate]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class AgentGenerator(IRGenerator[Agent]):
+    """Turns a description of an agent into a validated Agent, and - when the
+    steps it calls are known - checks every action's parameter names against
+    what they actually declare, sending a mismatch back for repair."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS,
+                 targets: Optional[Dict[str, Any]] = None):
+        super().__init__(provider, Agent, AGENT_SYSTEM_PROMPT, max_repairs)
+        self.targets = targets or {}
+
+    def _extra_error(self, payload: Dict[str, Any]) -> Optional[str]:
+        found = agent_problems(payload, self.targets)
+        return "\n".join(f"- {p}" for p in found) if found else None
+
+    def _describe(self, agent: Agent) -> str:
+        return f"{agent.api_name} ({len(agent.topics)} topic(s), {len(agent.action_targets())} action(s))"
+
+    def generate(self, request: str) -> IRGenerationResult[Agent]:
         return self._validated([Message(role="user", content=request)])
 
 
