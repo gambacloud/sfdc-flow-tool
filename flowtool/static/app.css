@@ -289,7 +289,13 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .mode { flex: 1; font-size: 13px; padding: 6px 8px; }
 .mode.active { border-color: var(--accent); color: var(--accent); }
 .portal-out { margin-top: 12px; font-size: 13px; }
-.portal-note { margin: 0 0 8px 24px; }
+.portal-note { margin: 0 0 8px 0; }
+label.check + .portal-note { margin-left: 24px; }
+.portal-title { margin: 4px 0 6px; font-size: 16px; }
+.portal-gets { margin: 0 0 8px; padding-left: 18px; }
+.portal-gets li { margin: 2px 0; }
+.portal-target { margin: 6px 0 12px; }
+.portal-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 6px; }
 .portal-out h4 { margin: 14px 0 6px; font-size: 13px; }
 .portal-row { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
 .portal-tag { flex: none; min-width: 52px; font-weight: 700; font-size: 11px; text-transform: uppercase; }

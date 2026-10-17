@@ -103,7 +103,7 @@
         <button class="mode active" data-mode="new">Describe a new flow</button>
         <button class="mode" data-mode="open">Open one from the org</button>
         <button class="mode" data-mode="plan">Build multiple things</button>
-        <button class="mode" data-mode="portal">New Agentforce</button>
+        <button class="mode" data-mode="portal">Customer portal</button>
       </div>
     </div>
 
@@ -214,28 +214,43 @@
     </div>
 
     <div class="pad" id="portalPane" hidden>
-      <p class="dim">A customer portal on Experience Cloud: a public landing page, self-registration that
-        creates the user, a secure My Account page, and optionally a messaging chat channel. Nothing is
-        written until you press Build. Use a sandbox or scratch org.</p>
-      <label for="portalSite">Site name</label>
+      <h3 class="portal-title">Customer portal</h3>
+      <p class="dim">Builds a ready-to-use Experience Cloud site for your customers:</p>
+      <ul class="portal-gets dim">
+        <li>a <b>public home page</b> with Register and Log in buttons</li>
+        <li><b>self-registration</b> - a visitor signs up and gets a portal user, no admin needed</li>
+        <li>a <b>My Account</b> page, only after login, where they see and edit their own details</li>
+        <li>optionally a <b>chat channel</b> with a support queue</li>
+      </ul>
+      <p class="dim portal-target" id="portalTarget"></p>
+
+      <label for="portalSite">Site name <span class="dim">(also becomes the web address)</span></label>
       <input id="portalSite" type="text" maxlength="59" placeholder="Support Hub" autocomplete="off">
-      <label for="portalHeadline">Landing page headline</label>
+      <p class="dim portal-note" id="portalUrlHint"></p>
+
+      <label for="portalHeadline">Home page headline <span class="dim">(optional)</span></label>
       <input id="portalHeadline" type="text" maxlength="120" placeholder="Welcome to Support Hub">
-      <label for="portalIntro">Short intro under it</label>
+      <label for="portalIntro">Text under the headline</label>
       <textarea id="portalIntro" rows="2" maxlength="300">Create an account to manage your details.</textarea>
-      <label for="portalLicense">Who can sign in</label>
+
+      <label for="portalLicense">Type of portal user</label>
       <select id="portalLicense">
-        <option value="customer_community">Customer Community (sharing set)</option>
-        <option value="customer_community_plus">Customer Community Plus (roles and sharing rules)</option>
+        <option value="customer_community">Customer Community - each user sees only their own records (simpler)</option>
+        <option value="customer_community_plus">Customer Community Plus - role-based sharing (advanced)</option>
       </select>
-      <label class="check"><input type="checkbox" id="portalChat"> Add a messaging chat channel</label>
-      <p class="dim portal-note">Creates the queue, channel and deployment. The chat button on the pages
-        still needs two values from Setup.</p>
-      <label class="check"><input type="checkbox" id="portalReuse"> Update a site this tool already built</label>
-      <p class="dim portal-note">Same site name as before.</p>
-      <button id="portalCheckBtn" type="button">Check the org</button>
-      <button id="portalPlanBtn" type="button">Show the plan</button>
-      <button id="portalBuildBtn" type="button" class="primary">Build</button>
+
+      <label class="check"><input type="checkbox" id="portalChat"> Add a chat channel</label>
+      <p class="dim portal-note">Creates a support queue, a messaging channel and a chat deployment. The chat
+        button on the pages still needs two values copied from Setup afterwards.</p>
+      <label class="check"><input type="checkbox" id="portalReuse"> This site already exists - update it</label>
+      <p class="dim portal-note">Tick this when re-running with the same site name.</p>
+
+      <div class="portal-steps">
+        <button id="portalCheckBtn" type="button"><b>1.</b> Check the org</button>
+        <button id="portalPlanBtn" type="button"><b>2.</b> Preview the steps</button>
+        <button id="portalBuildBtn" type="button" class="primary"><b>3.</b> Build the portal</button>
+      </div>
+      <p class="dim portal-note">1 and 2 only read - nothing is written until you press 3, and it asks you to confirm.</p>
       <div id="portalOut" class="portal-out"></div>
     </div>
 

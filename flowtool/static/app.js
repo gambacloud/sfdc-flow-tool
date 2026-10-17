@@ -2999,15 +2999,16 @@ function highlightPlanMode() {
 // buttons' own click handler and by restoreSessions() below, so a reload
 // lands on whichever mode was actually last in use, not always "new".
 // --------------------------------------------------------------------------
-// "New Agentforce" - the customer portal builder (flowtool/portal_api.py)
+// "Customer portal" - the portal builder tab (flowtool/portal_api.py)
 // --------------------------------------------------------------------------
 
 function portalBody(extra) {
   const site = $("portalSite").value.trim();
-  const headline = $("portalHeadline").value.trim();
+  // The home page is always built; a blank headline just uses the site name.
+  const headline = $("portalHeadline").value.trim() || `Welcome to ${site}`;
   return {
     site_name: site,
-    headline: headline || null,
+    headline,
     intro: $("portalIntro").value.trim() || null,
     license: $("portalLicense").value,
     chat: $("portalChat").checked,
@@ -3016,6 +3017,24 @@ function portalBody(extra) {
     ...orgCredentials(),
     ...(extra || {}),
   };
+}
+
+function portalSlug(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+}
+
+// Says which org a build would write to and what the web address will be -
+// the two things that are easy to get wrong and hard to undo.
+function refreshPortalHints() {
+  const target = state.org ? state.org.instanceUrl : ($("org")?.value || "");
+  const line = $("portalTarget");
+  line.textContent = target
+    ? `Builds in: ${target}`
+    : "No org chosen yet - pick one at the top of the page first.";
+  const slug = portalSlug($("portalSite").value);
+  $("portalUrlHint").textContent = slug ? `Web address ends with /${slug}` : "";
+  $("portalHeadline").placeholder = $("portalSite").value.trim()
+    ? `Welcome to ${$("portalSite").value.trim()}` : "Welcome to Support Hub";
 }
 
 function portalRow(tag, text, hint) {
@@ -3193,6 +3212,7 @@ function activateMode(selected) {
   $("newPane").hidden = selected !== "new";
   $("planPane").hidden = selected !== "plan";
   $("portalPane").hidden = selected !== "portal";
+  if (selected === "portal") refreshPortalHints();
   // Normally "Describe a new flow" only - "open" doesn't use it (an
   // imported flow keeps whatever status it already has), and "plan"
   // doesn't either. HIGHLIGHT_PLAN_MODE flips that: "new" is hidden, so
@@ -3384,6 +3404,8 @@ async function boot() {
 
   wireDiagramPanZoom();
 
+  $("portalSite").addEventListener("input", refreshPortalHints);
+  $("org")?.addEventListener("change", refreshPortalHints);
   $("portalCheckBtn").onclick = portalCheck;
   $("portalPlanBtn").onclick = portalPlan;
   $("portalBuildBtn").onclick = portalBuild;
