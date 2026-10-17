@@ -14,12 +14,17 @@ LEAST_ACTIVE (not LeastActive), MessagingChannel needs messagingChannelType
 EmbeddedMessaging and sessionHandlerType Queue, and EmbeddedServiceConfig.site
 must be the Picasso site (Member_Hub1), not the CustomSite (Member_Hub).
 
-NOT automated: putting the chat button on the pages. The LWR component is
+The chat button on the pages is the LWR component
 `experience_messaging:embeddedMessaging`; its public props (read from the
-runtime) include deploymentName, scrtUrl and siteEndpoint, and the last two come
-from the deployment's published Code Snippet in Setup. Without them the page
-tries to load `undefined/assets/js/bootstrap.min.js`. `chat_widget_component`
-builds the component for when you have those two values.
+runtime) include deploymentName, scrtUrl and siteEndpoint. Both URLs turn out
+to be derivable - the deployment's Code Snippet in Setup shows
+`init('<orgId>', '<deployment>', '<the site's own URL>', {scrt2URL: 'https://<mydomain>.my.salesforce-scrt.com'})`
+- so `siteEndpoint` is just the site URL and `scrt_url()` rewrites the My
+Domain host. Not proven: that the page's bootstrap script
+(`<site>/assets/js/bootstrap.min.js`) is actually served - it answered 404 in
+the scratch org for 15+ minutes after the deployment was published and the
+channel activated. Without those values the page tries
+`undefined/assets/js/bootstrap.min.js`.
 """
 
 from __future__ import annotations
@@ -145,6 +150,19 @@ def miaw_files(spec: MiawSpec, picasso_site: str) -> Tuple[Dict[str, str], Dict[
         "EmbeddedServiceConfig": [spec.deployment],
     }
     return files, types
+
+
+def scrt_url(instance_url: str) -> str:
+    """The messaging service host for an org: its My Domain host with
+    `salesforce.com` swapped for `salesforce-scrt.com` (seen on a scratch org:
+    drive-app-3557-dev-ed.scratch.my.salesforce.com ->
+    drive-app-3557-dev-ed.scratch.my.salesforce-scrt.com)."""
+    from urllib.parse import urlsplit
+
+    host = urlsplit(instance_url if "://" in instance_url else f"https://{instance_url}").hostname or ""
+    if not host.endswith("salesforce.com"):
+        raise ValueError(f"not a Salesforce My Domain host: {host!r}")
+    return "https://" + host[: -len("salesforce.com")] + "salesforce-scrt.com"
 
 
 def chat_widget_component(

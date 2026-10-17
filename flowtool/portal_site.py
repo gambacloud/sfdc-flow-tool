@@ -181,6 +181,14 @@ class OrgWriter(OrgClient):
     async def create(self, sobject: str, fields: Dict[str, Any]) -> str:
         return (await self.post_json(f"sobjects/{sobject}", fields))["id"]
 
+    async def update(self, sobject: str, record_id: str, fields: Dict[str, Any]) -> None:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.patch(
+                self._url(f"sobjects/{sobject}/{record_id}"), json=fields, headers=self._headers,
+            )
+        if resp.status_code not in (200, 204):
+            self._raise(resp)
+
     async def http_probe(self, url: str) -> tuple:
         """(status, Location) WITHOUT following redirects: a page that bounces
         every visitor to login must not read as a 200."""
@@ -313,7 +321,14 @@ async def build_site(
         # 4b. pages, guest access, sharing set, profile permissions
         content = spec.content
         if content is not None:
-            detail = await _deploy_pages(meta, spec, content)
+            chat = None
+            if spec.messaging is not None and site.get("siteUrl"):
+                chat = {
+                    "deployment_name": spec.messaging.deployment,
+                    "scrt_url": miaw.scrt_url(org.base),
+                    "site_endpoint": site["siteUrl"],
+                }
+            detail = await _deploy_pages(meta, spec, content, chat)
             add("Pages + access", "done", detail)
         else:
             add("Pages + access", "skipped", "no page content requested")
@@ -327,7 +342,14 @@ async def build_site(
                 detail = "; ".join(str(f) for f in deployed.failures) or deployed.error_message or deployed.status
                 add("Messaging", "failed", detail)
                 return result
-            add("Messaging", "done", f"channel {spec.messaging.channel}, deployment {spec.messaging.deployment}")
+            # A new channel is inactive, and an inactive one serves no chat; activating it
+            # is a plain field update, not metadata.
+            channel = await org.query(
+                f"SELECT Id FROM MessagingChannel WHERE DeveloperName = '{_q(spec.messaging.channel)}'"
+            )
+            if channel:
+                await org.update("MessagingChannel", channel[0]["Id"], {"IsActive": True})
+            add("Messaging", "done", f"channel {spec.messaging.channel} (active), deployment {spec.messaging.deployment}")
 
         # 5. publish
         await org.post_json(f"connect/communities/{site_id}/publish", {})
@@ -348,8 +370,9 @@ async def build_site(
     ] if result.register_url else []
     if spec.messaging is not None and result.register_url:
         result.manual_steps.append(
-            f"Chat button: publish the '{spec.messaging.deployment}' Embedded Service Deployment in Setup and copy its "
-            "Code Snippet values (scrtUrl, siteEndpoint) - the page component needs them; the tool does not have them."
+            f"Chat button: the pages carry it, but it only appears once Salesforce serves the deployment's script. "
+            f"If the page shows no chat after ~10 minutes, open Setup > Embedded Service Deployments > "
+            f"'{spec.messaging.deployment}' and press Publish."
         )
     return result
 
@@ -426,6 +449,12 @@ async def validate_site(org, spec: SiteSpec, site: Dict[str, Any], network_id: s
             f"SELECT Id FROM EmbeddedServiceConfig WHERE DeveloperName = '{_q(spec.messaging.deployment)}'",
             tooling=True,
         )
+        active = await org.query(
+            f"SELECT IsActive FROM MessagingChannel WHERE DeveloperName = '{_q(spec.messaging.channel)}'"
+        )
+        chk("messaging_active", "Messaging channel is active", bool(active) and bool(active[0].get("IsActive")),
+            "active" if active and active[0].get("IsActive") else "inactive",
+            "Activate the channel in Setup > Messaging Settings.")
         chk("messaging_deployment", "Embedded Service Deployment exists", bool(svc),
             spec.messaging.deployment if svc else "missing", "Deploy the EmbeddedServiceConfig.")
 
@@ -459,7 +488,9 @@ async def _bundle_name(meta, spec: SiteSpec) -> str:
     return matches[-1]
 
 
-async def _deploy_pages(meta, spec: SiteSpec, content: "pages.PortalContent") -> str:
+async def _deploy_pages(
+    meta, spec: SiteSpec, content: "pages.PortalContent", chat: Optional[Dict[str, str]] = None,
+) -> str:
     """Retrieve the generated bundle, add/replace our pages, and deploy them with
     the LWC, Sharing Set and profile permissions in one transaction."""
     bundle = await _bundle_name(meta, spec)
@@ -488,7 +519,7 @@ async def _deploy_pages(meta, spec: SiteSpec, content: "pages.PortalContent") ->
         f"{root}/sfdc_cms__view/register/content.json": json.dumps(pages.with_start_url(register_view, start_url), indent=2) + "\n",
         f"{root}/sfdc_cms__view/register/_meta.json": json.dumps({"apiName": "register", "type": "sfdc_cms__view", "path": "views"}, indent=2) + "\n",
     }
-    for path, text in pages.bundle_files(content).items():
+    for path, text in pages.bundle_files(content, chat=chat).items():
         files[f"{root}/{path}"] = text
     files.update(pages.details_files(content, spec.api_version))
     files[f"sharingSets/{spec.sharing_set_name}.sharingSet"] = pages.sharing_set_xml(spec.sharing_set_name, spec.member_profile)

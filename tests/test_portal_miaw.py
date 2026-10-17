@@ -5,6 +5,8 @@ import io
 import re
 import zipfile
 
+import pytest
+
 from flowtool.portal_miaw import (
     MiawSpec, chat_widget_component, embedded_service_config_xml, messaging_channel_xml,
     miaw_files, queue_routing_config_xml, queue_xml,
@@ -68,27 +70,30 @@ def test_chat_widget_component_carries_the_props_the_runtime_reads():
 # --- pipeline ---------------------------------------------------------------
 
 def messaging_answers():
-    a = answers()
+    a = {"SELECT IsActive FROM MessagingChannel": [{"IsActive": True}]}
+    a.update(answers())
     a["FROM MessagingChannel WHERE DeveloperName"] = [{"Id": "0Mj1"}]
     a["SELECT DeveloperName FROM EmbeddedServiceConfig"] = []      # preflight: name is free
     a["SELECT Id FROM EmbeddedServiceConfig"] = [{"Id": "04I1"}]   # validation: it now exists
     return a
 
 
-def run(org, meta, messaging):
-    spec = SiteSpec("Customer Portal", poll_seconds=0, messaging=messaging, want_miaw=messaging is not None)
+def run(org, meta, messaging, pages=False):
+    from flowtool.portal_pages import PortalContent
+    spec = SiteSpec("Customer Portal", poll_seconds=0, messaging=messaging, want_miaw=messaging is not None,
+                    content=PortalContent(site_name="Customer Portal", headline="Hi") if pages else None)
     return asyncio.run(build_site(org, meta, spec, apply=True))
 
 
-def test_pipeline_deploys_the_chain_and_asks_for_the_snippet_values():
+def test_pipeline_deploys_the_chain_and_asks_for_a_publish_if_the_chat_does_not_appear():
     meta = FakeMeta()
     result = run(FakeWriter(messaging_answers()), meta, MiawSpec())
     assert result.ok, [(s.name, s.status, s.detail) for s in result.steps]
     z = zipfile.ZipFile(io.BytesIO(meta.deployed[-1][0]))
     assert "EmbeddedServiceConfig/Portal_Chat_Deployment.EmbeddedServiceConfig" in z.namelist()
     assert b"<site>Customer_Portal1</site>" in z.read("EmbeddedServiceConfig/Portal_Chat_Deployment.EmbeddedServiceConfig")
-    assert any("Code Snippet" in m for m in result.manual_steps)
-    assert {c.id for c in result.validation} >= {"messaging_channel", "messaging_deployment"}
+    assert any("Publish" in m and "10 minutes" in m for m in result.manual_steps)
+    assert {c.id for c in result.validation} >= {"messaging_channel", "messaging_active", "messaging_deployment"}
 
 
 def test_no_messaging_means_no_messaging_step():
@@ -136,3 +141,56 @@ def test_reuse_allows_the_existing_deployment():
     org = FakeWriter(a, sites=[{"id": "0DB1", "name": "Customer Portal", "status": "Live", "siteUrl": "https://x.my.site.com/portal"}])
     result = asyncio.run(build_site(org, FakeMeta(), spec, apply=True))
     assert [c for c in result.preflight.checks if c.id == "miaw"][0].status == "pass"
+
+
+# --- the chat button -----------------------------------------------------------
+
+def test_scrt_url_rewrites_the_my_domain_host():
+    from flowtool.portal_miaw import scrt_url
+    assert scrt_url("https://drive-app-3557-dev-ed.scratch.my.salesforce.com") ==         "https://drive-app-3557-dev-ed.scratch.my.salesforce-scrt.com"
+    assert scrt_url("https://acme.my.salesforce.com/") == "https://acme.my.salesforce-scrt.com"
+    assert scrt_url("acme--dev.sandbox.my.salesforce.com") == "https://acme--dev.sandbox.my.salesforce-scrt.com"
+    with pytest.raises(ValueError):
+        scrt_url("https://example.com")
+
+
+def test_the_pipeline_activates_the_channel_it_made():
+    org = FakeWriter(messaging_answers())
+    run(org, FakeMeta(), MiawSpec())
+    assert org.updated == [("MessagingChannel", "0Mj1", {"IsActive": True})]
+
+
+def test_both_pages_carry_the_chat_button_with_derived_values():
+    import json as _json
+    meta = FakeMeta()
+    run(FakeWriter(messaging_answers()), meta, MiawSpec(), pages=True)
+    z = zipfile.ZipFile(io.BytesIO(meta.deployed[1][0]))
+    root = "digitalExperiences/site/Customer_Portal1/sfdc_cms__view"
+    for view in ("home", "my_account"):
+        text = z.read(f"{root}/{view}/content.json").decode()
+        assert "experience_messaging:embeddedMessaging" in text, view
+        data = _json.loads(text)
+
+        def components(node):
+            if isinstance(node, dict):
+                if node.get("definition") == "experience_messaging:embeddedMessaging":
+                    yield node
+                for v in node.values():
+                    yield from components(v)
+            elif isinstance(node, list):
+                for v in node:
+                    yield from components(v)
+
+        (chat,) = list(components(data))
+        assert chat["attributes"] == {
+            "deploymentName": "Portal_Chat_Deployment",
+            "scrtUrl": "https://x.my.salesforce-scrt.com",
+            "siteEndpoint": "https://x.my.site.com/portal",
+        }
+
+
+def test_no_chat_button_without_messaging():
+    meta = FakeMeta()
+    run(FakeWriter(answers()), meta, None, pages=True)
+    z = zipfile.ZipFile(io.BytesIO(meta.deployed[1][0]))
+    assert b"experience_messaging" not in z.read("digitalExperiences/site/Customer_Portal1/sfdc_cms__view/home/content.json")

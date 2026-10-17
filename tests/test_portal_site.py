@@ -92,6 +92,7 @@ class FakeWriter(FakeOrg):
         self.sites = list(sites)
         self.posts = []
         self.created = []
+        self.updated = []
         self.http = {"https://x.my.site.com/portal/my-account": (302, "https://x.my.site.com/portal/login?startURL=%2Fmy-account")}
         self.http.update(http or {})
 
@@ -109,6 +110,11 @@ class FakeWriter(FakeOrg):
     async def create(self, sobject, fields):
         self.created.append((sobject, fields))
         return "001NEW"
+
+    base = "https://x.my.salesforce.com"
+
+    async def update(self, sobject, record_id, fields):
+        self.updated.append((sobject, record_id, fields))
 
     async def http_probe(self, url):
         got = self.http.get(url, 200)

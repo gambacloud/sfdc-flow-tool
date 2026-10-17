@@ -153,15 +153,39 @@ def landing_html(headline: str, intro: str, ctas: Iterable[Cta]) -> str:
     )
 
 
-def landing_view(content: PortalContent, new_id: IdFactory = _uuid) -> Dict[str, Any]:
+def _chat_component(chat: Dict[str, str], new_id: IdFactory) -> Dict[str, Any]:
+    """The Embedded Messaging button. `chat` carries deployment_name, scrt_url and site_endpoint."""
+    return {
+        "attributes": {
+            "deploymentName": chat["deployment_name"],
+            "scrtUrl": chat["scrt_url"],
+            "siteEndpoint": chat["site_endpoint"],
+        },
+        "definition": "experience_messaging:embeddedMessaging",
+        "id": new_id(),
+        "type": "component",
+    }
+
+
+def landing_view(
+    content: PortalContent, new_id: IdFactory = _uuid, chat: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """The public home page: a message and Register / Log in buttons."""
     html = landing_html(content.headline, content.intro, [Cta("Register", "/SelfRegister"), Cta("Log in", "/login", False)])
-    return _view("Home", "home", "home", [_html_block(html, new_id)], new_id)
+    blocks = [_html_block(html, new_id)]
+    if chat:
+        blocks.append(_chat_component(chat, new_id))
+    return _view("Home", "home", "home", blocks, new_id)
 
 
-def secure_view(content: PortalContent, new_id: IdFactory = _uuid) -> Dict[str, Any]:
+def secure_view(
+    content: PortalContent, new_id: IdFactory = _uuid, chat: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     component = {"attributes": {}, "definition": f"c:{content.secure_component}", "id": new_id(), "type": "component"}
-    return _view(content.secure_title, content.secure_url, f"custom-{content.secure_url}", [component], new_id)
+    blocks = [component]
+    if chat:
+        blocks.append(_chat_component(chat, new_id))
+    return _view(content.secure_title, content.secure_url, f"custom-{content.secure_url}", blocks, new_id)
 
 
 def secure_route(content: PortalContent) -> Dict[str, Any]:
@@ -221,7 +245,9 @@ def public_site_content(existing: str) -> str:
     return json.dumps(data, indent=2) + "\n"
 
 
-def bundle_files(content: PortalContent, new_id: IdFactory = _uuid) -> Dict[str, str]:
+def bundle_files(
+    content: PortalContent, new_id: IdFactory = _uuid, chat: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """Bundle-relative path -> file text for the pages this stage adds or replaces."""
     route_dir = f"sfdc_cms__route/{content.secure_route}"
     view_dir = f"sfdc_cms__view/{view_name(content.secure_route)}"
@@ -230,9 +256,9 @@ def bundle_files(content: PortalContent, new_id: IdFactory = _uuid) -> Dict[str,
         f"{route_dir}/_meta.json": dump({"apiName": content.secure_route, "type": "sfdc_cms__route", "path": "routes"}),
         f"{route_dir}/content.json": dump(secure_route(content)),
         f"{view_dir}/_meta.json": dump({"apiName": view_name(content.secure_route), "type": "sfdc_cms__view", "path": "views"}),
-        f"{view_dir}/content.json": dump(secure_view(content, new_id)),
+        f"{view_dir}/content.json": dump(secure_view(content, new_id, chat)),
         "sfdc_cms__view/home/_meta.json": dump({"apiName": "home", "type": "sfdc_cms__view", "path": "views"}),
-        "sfdc_cms__view/home/content.json": dump(landing_view(content, new_id)),
+        "sfdc_cms__view/home/content.json": dump(landing_view(content, new_id, chat)),
     }
 
 
