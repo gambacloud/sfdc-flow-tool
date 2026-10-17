@@ -193,3 +193,55 @@ class TestCustomFieldTypeShapes:
             object_api_name="Invoice__c", reference_to="Account",
         )
         assert field.reference_to == "Account"
+
+
+# --- TextArea / LongTextArea / Formula ---------------------------------------
+
+def _field(**kw):
+    base = dict(api_name="F__c", label="F", object_api_name="QA_Audit_Review__c")
+    base.update(kw)
+    return CustomField(**base)
+
+
+def test_textarea_is_fixed_length():
+    assert _field(type="TextArea").length is None
+    with pytest.raises(ValueError, match="length only applies"):
+        _field(type="TextArea", length=100)
+
+
+def test_longtextarea_defaults_and_bounds():
+    f = _field(type="LongTextArea")
+    assert f.length == 32768 and f.visible_lines == 3
+    with pytest.raises(ValueError, match="256-131072"):
+        _field(type="LongTextArea", length=100)
+    with pytest.raises(ValueError, match="256-131072"):
+        _field(type="LongTextArea", length=200000)
+
+
+def test_visible_lines_only_for_longtextarea():
+    with pytest.raises(ValueError, match="visible_lines"):
+        _field(type="Text", visible_lines=5)
+
+
+def test_formula_requires_expression_and_return_type():
+    with pytest.raises(ValueError, match="requires a formula"):
+        _field(type="Formula", formula_returns="Checkbox")
+    with pytest.raises(ValueError, match="formula_returns"):
+        _field(type="Formula", formula="1 = 1")
+
+
+def test_formula_is_computed():
+    for extra in ({"required": True}, {"unique": True}, {"default_value": "false"}):
+        with pytest.raises(ValueError, match="computed"):
+            _field(type="Formula", formula="1 = 1", formula_returns="Checkbox", **extra)
+
+
+def test_formula_fields_only_on_formula():
+    with pytest.raises(ValueError, match="only apply to Formula"):
+        _field(type="Text", formula="1 = 1")
+
+
+def test_number_formula_gets_a_default_precision_and_others_reject_one():
+    assert _field(type="Formula", formula="1 + 1", formula_returns="Number").precision == 18
+    with pytest.raises(ValueError, match="precision/scale"):
+        _field(type="Formula", formula="1 = 1", formula_returns="Checkbox", precision=5)

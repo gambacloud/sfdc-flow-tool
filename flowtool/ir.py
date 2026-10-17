@@ -800,6 +800,32 @@ class ActionCall(FaultCapable):
     )
 
     @model_validator(mode="after")
+    def prompt_template_is_called_by_its_own_name(self) -> "ActionCall":
+        """
+        Confirmed against a real org: a Prompt Template action is
+        `actionType` generatePromptResponse with the TEMPLATE's api name as
+        `actionName`. Writing the type as the name (with a `promptTemplate`
+        input) is what the Flow Builder-less guess looks like, and the org
+        answers "We can't find the generatePromptResponse action".
+        """
+        if self.action_type == "generatePromptResponse":
+            if self.action_name == "generatePromptResponse":
+                raise ValueError(
+                    f"{self.name}: a Prompt Template action's action_name is the "
+                    "template's own api_name, not 'generatePromptResponse' - set "
+                    "action_name to the template (for example 'QA_Audit_Scoring') and "
+                    "drop any 'promptTemplate' input; pass each input as "
+                    "'Input:<input name>'."
+                )
+            bad = [p.name for p in self.input_parameters if p.name == "promptTemplate"]
+            if bad:
+                raise ValueError(
+                    f"{self.name}: remove the 'promptTemplate' input - the template is "
+                    "named by action_name."
+                )
+        return self
+
+    @model_validator(mode="after")
     def one_way_to_get_the_outputs(self) -> "ActionCall":
         if self.output_parameters and self.store_output_automatically:
             raise ValueError(
@@ -2492,7 +2518,11 @@ class Flow(BaseModel):
 
         Runs after references_resolve, so every name is already known to exist.
         """
-        if self.elements and not self.start.next:
+        # A record-triggered flow may run only its scheduled / asynchronous path
+        # and leave "Run Immediately" empty (an after-save flow that must call a
+        # prompt or a callout, for one), so a connected path counts too.
+        connected = self.start.next or any(p.next for p in self.start.scheduled_paths)
+        if self.elements and not connected:
             raise ValueError(
                 "start.next is empty, so nothing is connected to the Start element "
                 "and the flow cannot run. Set start.next to the name of the first "

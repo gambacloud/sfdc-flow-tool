@@ -34,6 +34,7 @@ from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.ir_platform_event import PlatformEvent
+from flowtool.ir_prompt_template import PromptTemplate
 from flowtool.ir_permset import PermissionSetGrant, build_grant_from_steps, sanitize_api_name
 from flowtool.llm import (
     AnthropicProvider,
@@ -87,6 +88,7 @@ from flowtool.xmlgen_lwc import generate_lwc
 from flowtool.xmlgen_mdt import generate_mdt_record, generate_mdt_type
 from flowtool.xmlgen_object import generate_field_delta, generate_object
 from flowtool.xmlgen_platform_event import generate_platform_event
+from flowtool.xmlgen_prompt_template import generate_prompt_template
 from flowtool.xmlgen_permset import generate_permission_set, merge_permission_set_xml
 from survey import Survey, text_report
 
@@ -1810,6 +1812,15 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
             "field_count": len(value.fields),
             "fields": [{"api_name": f.api_name, "type": f.type} for f in value.fields],
         })
+    elif isinstance(value, PromptTemplate):
+        entry.update({
+            "api_name": value.api_name,
+            "label": value.label,
+            "response_format": value.response_format,
+            "inputs": [{"name": i.name, "type": i.type} for i in value.inputs],
+            "output_keys": value.output_keys(),
+            "content": value.content,
+        })
     return entry
 
 
@@ -1933,6 +1944,11 @@ def _bundle_files_and_types(
             files[f"classes/{value.api_name}.cls"] = body
             files[f"classes/{value.api_name}.cls-meta.xml"] = meta
             types.setdefault("ApexClass", []).append(value.api_name)
+        elif isinstance(value, PromptTemplate):
+            files[f"genAiPromptTemplates/{value.api_name}.genAiPromptTemplate"] = (
+                generate_prompt_template(value)
+            )
+            types.setdefault("GenAiPromptTemplate", []).append(value.api_name)
         elif isinstance(value, LightningComponent):
             files.update(generate_lwc(value))
             types.setdefault("LightningComponentBundle", []).append(value.api_name)
@@ -2626,6 +2642,7 @@ _PLAN_STEP_IR_CLASS: Dict[str, Any] = {
     "mdt": MetadataType,
     "mdt_record": CustomMetadataRecord,
     "platform_event": PlatformEvent,
+    "prompt_template": PromptTemplate,
 }
 
 

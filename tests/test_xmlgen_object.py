@@ -244,3 +244,51 @@ class TestFieldDeltaXml:
         root = _root(generate_field_delta([amount, status]))
         names = [_text(f, "fullName") for f in root.findall("m:fields", NS)]
         assert names == ["Alpha__c", "Zeta__c"]
+
+
+# --- TextArea / LongTextArea / Formula ---------------------------------------
+
+def _gen(**kw):
+    from flowtool.ir_object import CustomField
+    from flowtool.xmlgen_object import generate_object
+    from flowtool.ir_object import CustomObject
+    base = dict(api_name="F__c", label="F", object_api_name="Q__c")
+    base.update(kw)
+    obj = CustomObject(api_name="Q__c", label="Q", plural_label="Qs")
+    return generate_object(obj, [CustomField(**base)])
+
+
+def _tags(xml):
+    import re
+    field = re.search(r"<fields>(.*?)</fields>", xml, re.S).group(1)
+    return re.findall(r"<(\w+)>", field), field
+
+
+def test_textarea_xml():
+    tags, field = _tags(_gen(type="TextArea"))
+    assert "<type>TextArea</type>" in field and "length" not in tags
+    assert tags == sorted(tags)
+
+
+def test_longtextarea_xml_has_length_and_visible_lines_in_order():
+    tags, field = _tags(_gen(type="LongTextArea"))
+    assert "<length>32768</length>" in field and "<visibleLines>3</visibleLines>" in field
+    assert tags == sorted(tags)
+
+
+def test_checkbox_formula_has_no_default_value():
+    tags, field = _tags(_gen(type="Formula", formula="Q > 1", formula_returns="Checkbox"))
+    assert "<type>Checkbox</type>" in field and "<formula>Q &gt; 1</formula>" in field
+    assert "defaultValue" not in tags and "required" not in tags
+    assert tags == sorted(tags)
+
+
+def test_number_formula_xml():
+    _, field = _tags(_gen(type="Formula", formula="1 + 1", formula_returns="Number"))
+    assert "<type>Number</type>" in field and "<precision>18</precision>" in field
+    assert "<formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>" in field
+
+
+def test_text_formula_has_no_length():
+    tags, field = _tags(_gen(type="Formula", formula='"a"', formula_returns="Text"))
+    assert "<type>Text</type>" in field and "length" not in tags

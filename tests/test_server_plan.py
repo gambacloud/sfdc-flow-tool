@@ -14,6 +14,7 @@ from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_ir_mdt_generator import VALID_MDT, VALID_RECORD
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_ir_platform_event_generator import VALID_EVENT as VALID_PLATFORM_EVENT
+from tests.test_ir_prompt_template_generator import VALID_PROMPT
 from tests.test_llm import ScriptedProvider, TypedScriptedProvider, VALID as VALID_FLOW
 
 ONE_STEP_PLAN = {
@@ -54,6 +55,14 @@ MDT_PLAN = {
 
 # A Platform Event + a Flow that listens for it - the shape the user asked
 # for: define the event once, react to it in the same transaction it deploys.
+PROMPT_PLAN = {
+    "steps": [
+        {"artifact_type": "prompt_template", "name": "Scoring", "brief": "score a conversation"},
+        {"artifact_type": "flow", "name": "Audit", "brief": "a flow that scores ended sessions",
+         "depends_on": ["Scoring"]},
+    ]
+}
+
 PLATFORM_EVENT_PLAN = {
     "steps": [
         {"artifact_type": "platform_event", "name": "Event", "brief": "an order placed event"},
@@ -430,6 +439,31 @@ class TestPlanDeploy:
         assert "<eventType>HighVolume</eventType>" in object_file
         assert "<publishBehavior>" in object_file
         assert "<sharingModel>" not in object_file
+
+    def test_confirmed_deploy_bundles_a_prompt_template_and_its_flow(
+        self, client, typed_scripted, monkeypatch,
+    ):
+        typed_scripted(plan=PROMPT_PLAN, prompt_template=VALID_PROMPT, flow=VALID_FLOW)
+        plan = make_plan(client)
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+
+        seen_types, seen_files = {}, {}
+
+        async def fake_validate_bundle(url, token, files, types, api_version="62.0", check_only=True):
+            seen_types.update(types)
+            seen_files.update(files)
+            return DeployResult("1", "Succeeded", True)
+
+        monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        started = client.post("/api/plan/deploy/start", json={"session_id": sid, "confirm": True})
+        assert started.status_code == 200, started.text
+        assert poll(client, "/api/plan/deploy/status", session_id=sid).json()["success"] is True
+        assert set(seen_types) == {"GenAiPromptTemplate", "Flow"}
+        assert seen_types["GenAiPromptTemplate"] == ["QA_Audit_Scoring"]
+        xml = seen_files["genAiPromptTemplates/QA_Audit_Scoring.genAiPromptTemplate"]
+        assert "<type>einstein_gpt__flex</type>" in xml and "<responseFormat>JSON</responseFormat>" in xml
 
     def test_successful_deploy_returns_a_setup_link_per_step(
         self, client, typed_scripted, monkeypatch,

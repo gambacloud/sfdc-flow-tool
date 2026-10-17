@@ -32,6 +32,7 @@ from .ir_lwc import heuristic_errors as lwc_heuristic_errors
 from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .ir_prompt_template import PromptTemplate
 
 DEFAULT_MAX_REPAIRS = 3
 
@@ -568,6 +569,21 @@ build the closest thing that will actually deploy (an Email Alert, a Create \
 Task, a Chatter post) and say so plainly in the flow's `description`, naming \
 what was substituted and for what.
 
+### Calling a Prompt Template
+
+A Prompt Template made earlier in the plan (or named by the user) is called \
+with `action_type` `generatePromptResponse` and **`action_name` set to the \
+template's own api_name** - never the word `generatePromptResponse`, and never \
+a `promptTemplate` input. Pass each input as an `input_parameters` entry named \
+exactly `Input:<input name>` (the input's name as the template declares it, \
+same capitalisation), and read the model's answer from the action's \
+`promptResponse` output - set `store_output_automatically` and use \
+`{!ActionName.promptResponse}`. The answer is one text value; a JSON answer \
+cannot be unpacked inside a Flow, so pass it to an Apex action that parses it. \
+A record-triggered Flow that calls one must do so on an asynchronous path \
+(`scheduled_paths` with `run_asynchronously`), not on the immediate path, and \
+may leave the immediate path empty.
+
 ## Options for a picker
 
 The four picker types show options, and every option must be defined as a \
@@ -697,11 +713,19 @@ creating, or one that already exists in the org - must be written with its \
 `__c` suffix ("Invoice__c"). Writing a standard object with a `__c` suffix \
 names an object that does not exist, and the deploy fails on a field that \
 looks otherwise correct.
-- `type` is one of Text, Number, Checkbox, Picklist, Lookup, MasterDetail. \
-Each carries only the properties that belong to it - do not set `length` on \
-anything but Text, `precision`/`scale` on anything but Number, \
-`picklist_values` on anything but Picklist, or `reference_to` on anything but \
-Lookup/MasterDetail.
+- `type` is one of Text, TextArea, LongTextArea, Number, Checkbox, Picklist, \
+Lookup, MasterDetail, Formula. Each carries only the properties that belong to \
+it - do not set `length` on anything but Text or LongTextArea, `visible_lines` \
+on anything but LongTextArea, `precision`/`scale` on anything but Number (or a \
+Number Formula), `picklist_values` on anything but Picklist, or `reference_to` \
+on anything but Lookup/MasterDetail.
+- Text holds up to 255 characters on one line. TextArea is a fixed 255 \
+characters over several lines - leave `length` out. LongTextArea is for long \
+free text (`length` 256-131072, default 32768).
+- A Formula is computed, never typed in: set `formula` (the expression exactly \
+as Salesforce expects it) and `formula_returns` (Text, Number or Checkbox). \
+Never set `required`, `unique` or `default_value` on one, and only reference \
+fields that exist (this request may be creating them in the same plan).
 - A Picklist needs at least one value in `picklist_values`, written exactly as \
 the user should see them.
 - A Lookup or MasterDetail needs `reference_to` naming the target object. A \
@@ -780,6 +804,42 @@ deployed - only for the person reviewing this step.
 """
 
 
+PROMPT_TEMPLATE_SYSTEM_PROMPT = """\
+You translate a description of a question to put to a language model into a \
+Salesforce Prompt Template IR document (Prompt Builder). A Flow calls the \
+template and gets the model's answer back.
+
+You produce IR only, never metadata XML - a compiler generates that from your IR.
+
+- `api_name` is letters, digits and underscores, starting with a letter.
+- `content` is the instruction text sent to the model. Refer to each input \
+exactly as `{!$Input:name}` (the name you declared in `inputs`); every \
+required input must appear in the content, and the content must not mention an \
+input you did not declare. Write the instructions so a model with no other \
+context can follow them: say what to evaluate, how to judge it, and what to do \
+when the input is empty or unclear.
+- `inputs` are what the caller passes in - usually one long text such as a \
+transcript, a case description or a record summary. `type` is String unless \
+the request clearly needs Number, Boolean, Date or DateTime.
+- `response_format` is `Text` for a free-form answer. Use `JSON` when another \
+step must read the answer (a Flow or Apex class that stores values in fields): \
+then `output_schema` is required - a JSON Schema with `type` "object", a \
+`properties` map giving each key and its type, and `required` listing the keys \
+that must always be present - and the content must tell the model to return \
+exactly those keys and nothing else.
+- Choose property names that map straight onto the fields the answer will be \
+stored in, in snake_case. Use `integer` for scores and counts, `boolean` for \
+yes/no flags, `string` for text, and an `enum` for a closed set of labels.
+- Leave `model` at its default unless the request names one.
+
+`description` is Salesforce metadata - it deploys to the org and is what an admin \
+sees in Setup. Only put a plain, accurate description of the template there.
+
+Always fill in `reasoning` instead, for your own commentary: one sentence, \
+tweet-length (under 280 characters), on what you built and, if you made a judgment \
+call, what it was and why. Never deployed - only for the person reviewing this step.
+"""
+
 PLATFORM_EVENT_SYSTEM_PROMPT = """\
 You translate a description of an event a Salesforce org should be able to \
 publish and subscribe to into a Salesforce Platform Event IR document.
@@ -836,6 +896,24 @@ handling, logging, or methods that were not requested.
 - Do not invent a reference to a field, object or another class the request \
 did not name or clearly imply - a guessed API name compiles today and breaks \
 the moment it is wrong.
+- A class a Flow calls is `public with sharing`, with exactly one \
+`@InvocableMethod(label='...' description='...')` that takes a `List` of an \
+inner `Request` class and returns a `List` of an inner `Result` class (both \
+use `@InvocableVariable` members, with `required=true` where a value must be \
+passed) - one result per request, in order, and bulk safe: no SOQL or DML \
+inside a loop.
+- The text of a Messaging conversation lives in `ConversationEntry` records. \
+Find them by `ConversationId`, which is the MessagingSession's own \
+`ConversationId` field (not the session's `Id`). Useful fields: `Message` \
+(text), `ActorType` (for example EndUser, Agent, Bot, System), `ActorName`, \
+`EntryType`, and `Seq` to order by. Skip entries with an empty `Message`. A \
+transcript is conventionally one line per entry, "<ActorType>: <Message>".
+- When Apex receives a model's JSON answer (a Prompt Template whose response \
+is JSON, handed over as one text value), parse it with `JSON.deserialize` into \
+a small inner class whose property names are exactly the JSON keys, never \
+`JSON.deserializeUntyped`. Treat the answer as untrusted: a missing or \
+malformed value must not throw - fall back to leaving the field empty - and \
+a number must be clamped to what its field can hold before it is saved.
 - No compiler runs against this output before it is checked here - only a \
 brace-balance and class-name sanity check. Write it as if it must be correct \
 the first time.
@@ -2439,6 +2517,20 @@ class PlatformEventGenerator(IRGenerator[PlatformEvent]):
         return f"{event.api_name} ({len(event.fields)} field(s))"
 
     def generate(self, request: str) -> IRGenerationResult[PlatformEvent]:
+        return self._validated([Message(role="user", content=request)])
+
+
+class PromptTemplateGenerator(IRGenerator[PromptTemplate]):
+    """Turns a description of a question for the model into a validated
+    PromptTemplate (see PROMPT_TEMPLATE_SYSTEM_PROMPT)."""
+
+    def __init__(self, provider: Provider, max_repairs: int = DEFAULT_MAX_REPAIRS):
+        super().__init__(provider, PromptTemplate, PROMPT_TEMPLATE_SYSTEM_PROMPT, max_repairs)
+
+    def _describe(self, template: PromptTemplate) -> str:
+        return f"{template.api_name} ({len(template.inputs)} input(s), {template.response_format})"
+
+    def generate(self, request: str) -> IRGenerationResult[PromptTemplate]:
         return self._validated([Message(role="user", content=request)])
 
 

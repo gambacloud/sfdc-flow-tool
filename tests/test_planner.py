@@ -17,6 +17,7 @@ from flowtool.ir_lwc import LightningComponent
 from flowtool.ir_mdt import CustomMetadataRecord, MetadataType
 from flowtool.ir_object import CustomField, CustomObject
 from flowtool.ir_platform_event import PlatformEvent
+from flowtool.ir_prompt_template import PromptTemplate
 from flowtool.llm import APEX_SYSTEM_PROMPT, FIELD_SYSTEM_PROMPT, OBJECT_SYSTEM_PROMPT
 from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, execute_plan, refine_step, repair_step,
@@ -26,6 +27,7 @@ from tests.test_ir_lwc_generator import VALID as VALID_LWC
 from tests.test_ir_mdt_generator import VALID_MDT, VALID_RECORD
 from tests.test_ir_object_generator import VALID_FIELD, VALID_OBJECT
 from tests.test_ir_platform_event_generator import VALID_EVENT as VALID_PLATFORM_EVENT
+from tests.test_ir_prompt_template_generator import VALID_PROMPT
 from tests.test_llm import VALID as VALID_FLOW, ScriptedProvider, TypedScriptedProvider
 
 
@@ -254,6 +256,28 @@ class TestExecutePlan:
         assert VALID_PLATFORM_EVENT["api_name"] + "__e" in brief
         assert "AccountId__c" in brief
 
+    def test_prompt_template_step_runs_its_generator(self):
+        plan = Plan(steps=[PlanStep(artifact_type="prompt_template", name="Scoring", brief="score a conversation")])
+        results = execute_plan(ScriptedProvider(VALID_PROMPT), plan)
+        assert isinstance(results[0].value, PromptTemplate)
+        assert results[0].value.api_name == "QA_Audit_Scoring"
+
+    def test_flow_that_calls_a_prompt_is_told_how(self):
+        # The Flow step's brief is written before the template exists; once it
+        # has run, the Flow must be told the exact action, api name and input
+        # names - and that a JSON answer arrives as one text value to be parsed.
+        plan = Plan(steps=[
+            PlanStep(artifact_type="prompt_template", name="Scoring", brief="score a conversation"),
+            PlanStep(artifact_type="flow", name="Audit", brief="a flow that scores ended sessions",
+                      depends_on=["Scoring"]),
+        ])
+        provider = TypedScriptedProvider(prompt_template=VALID_PROMPT, flow=VALID_FLOW)
+        execute_plan(provider, plan)
+        brief = [c for c in provider.calls if c[0] == "flow"][0][1][0].content
+        assert "generatePromptResponse" in brief
+        assert "QA_Audit_Scoring" in brief and "Input:transcript" in brief
+        assert "overall_score" in brief and "promptResponse" in brief
+
     def test_dependent_step_is_told_the_dependency_s_actual_name(self):
         # The planner writes every brief before any step has actually run, so
         # "name that object's api_name exactly" in a brief is only ever a
@@ -481,3 +505,36 @@ class TestRefineStep:
 
         second_call = provider.calls[-1]
         assert second_call[0].content == "an Invoice object", "lost the original brief"
+
+
+class TestFlowsWaitForPromptTemplates:
+    def test_a_flow_that_ignores_the_template_step_gets_the_dependency_added(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="prompt_template", name="T", brief="x"),
+            PlanStep(artifact_type="flow", name="F", brief="y"),
+        ])
+        assert plan.steps[1].depends_on == ["T"]
+        # ...which also puts the flow in a later layer than the template.
+        assert [[s.name for s in layer] for layer in plan.layers()] == [["T"], ["F"]]
+
+    def test_a_direct_or_transitive_dependency_is_left_alone(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="prompt_template", name="T", brief="x"),
+            PlanStep(artifact_type="apex", name="A", brief="z", depends_on=["T"]),
+            PlanStep(artifact_type="flow", name="F", brief="y", depends_on=["A"]),
+        ])
+        assert plan.steps[2].depends_on == ["A"]
+
+    def test_every_template_is_added_and_nothing_else(self):
+        plan = Plan(steps=[
+            PlanStep(artifact_type="prompt_template", name="T1", brief="x"),
+            PlanStep(artifact_type="prompt_template", name="T2", brief="x"),
+            PlanStep(artifact_type="apex", name="A", brief="z"),
+            PlanStep(artifact_type="flow", name="F", brief="y", depends_on=["T1"]),
+        ])
+        assert plan.steps[3].depends_on == ["T1", "T2"]
+        assert plan.steps[2].depends_on == []
+
+    def test_plans_without_a_template_are_unaffected(self):
+        plan = Plan(steps=[PlanStep(artifact_type="flow", name="F", brief="y")])
+        assert plan.steps[0].depends_on == []

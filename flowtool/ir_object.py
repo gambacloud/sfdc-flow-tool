@@ -7,9 +7,10 @@ flat compared to Flow - there is no element graph, just a shell (CustomObject)
 and the fields hung off it (CustomField), matching how Salesforce itself splits
 CustomObject and CustomField into separate deployable metadata types.
 
-Scope is the common subset an implementer reaches for first: Text, Number,
-Checkbox, Picklist, Lookup and MasterDetail. Roll-up summaries, formula fields
-and exotic types are deliberately out of scope until a real need shows up.
+Scope is the common subset an implementer reaches for first: Text, Text Area,
+Long Text Area, Number, Checkbox, Picklist, Lookup, MasterDetail and Formula
+(returning Text, Number or Checkbox). Roll-up summaries and exotic types are
+deliberately out of scope until a real need shows up.
 """
 
 from __future__ import annotations
@@ -21,8 +22,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .ir import _check_api_name
 
 FieldType = Literal[
-    "Text", "Number", "Checkbox", "Picklist", "Lookup", "MasterDetail"
+    "Text", "TextArea", "LongTextArea", "Number", "Checkbox", "Picklist", "Lookup",
+    "MasterDetail", "Formula",
 ]
+
+FormulaReturn = Literal["Text", "Number", "Checkbox"]
+
+LONG_TEXT_DEFAULT_LENGTH = 32768
+LONG_TEXT_MIN_LENGTH = 256
+LONG_TEXT_MAX_LENGTH = 131072
+LONG_TEXT_DEFAULT_LINES = 3
 
 SharingModel = Literal["Private", "Read", "ReadWrite", "ReadWriteTransfer", "ControlledByParent"]
 
@@ -60,7 +69,23 @@ class CustomField(BaseModel):
     )
 
     # Text
-    length: Optional[int] = Field(default=None, description="Text only, max 255")
+    length: Optional[int] = Field(
+        default=None,
+        description="Text (max 255) or LongTextArea (256-131072, default 32768) only. "
+        "TextArea has a fixed 255 limit - leave length out.",
+    )
+    visible_lines: Optional[int] = Field(
+        default=None, description="LongTextArea only: lines shown on the page layout, default 3"
+    )
+
+    # Formula
+    formula: Optional[str] = Field(
+        default=None,
+        description="Formula only: the expression, e.g. \"Overall_Score__c < 60 || Compliance_Breach__c\"",
+    )
+    formula_returns: Optional[FormulaReturn] = Field(
+        default=None, description="Formula only: Text, Number or Checkbox"
+    )
 
     # Number
     precision: Optional[int] = Field(default=None, description="Number only: total digits")
@@ -122,12 +147,46 @@ class CustomField(BaseModel):
     def type_specific_shape(self) -> "CustomField":
         if self.type == "Text" and self.length is None:
             self.length = 255
-        if self.type != "Text" and self.length is not None:
-            raise ValueError(f"field {self.api_name!r}: length only applies to Text")
+        if self.type == "LongTextArea":
+            if self.length is None:
+                self.length = LONG_TEXT_DEFAULT_LENGTH
+            if not LONG_TEXT_MIN_LENGTH <= self.length <= LONG_TEXT_MAX_LENGTH:
+                raise ValueError(
+                    f"field {self.api_name!r}: LongTextArea length must be "
+                    f"{LONG_TEXT_MIN_LENGTH}-{LONG_TEXT_MAX_LENGTH}"
+                )
+            if self.visible_lines is None:
+                self.visible_lines = LONG_TEXT_DEFAULT_LINES
+        if self.type not in ("Text", "LongTextArea") and self.length is not None:
+            raise ValueError(
+                f"field {self.api_name!r}: length only applies to Text and LongTextArea "
+                "(TextArea is fixed at 255)"
+            )
+        if self.type != "LongTextArea" and self.visible_lines is not None:
+            raise ValueError(f"field {self.api_name!r}: visible_lines only applies to LongTextArea")
 
-        if self.type == "Number" and self.precision is None:
-            raise ValueError(f"field {self.api_name!r}: Number requires precision")
-        if self.type != "Number" and (self.precision is not None or self.scale is not None):
+        if self.type == "Formula":
+            if not (self.formula and self.formula.strip()):
+                raise ValueError(f"field {self.api_name!r}: Formula requires a formula")
+            if self.formula_returns is None:
+                raise ValueError(f"field {self.api_name!r}: Formula requires formula_returns")
+            if self.required or self.unique or self.default_value is not None:
+                raise ValueError(
+                    f"field {self.api_name!r}: a Formula is computed - no required, unique or default_value"
+                )
+        elif self.formula is not None or self.formula_returns is not None:
+            raise ValueError(
+                f"field {self.api_name!r}: formula/formula_returns only apply to Formula"
+            )
+
+        # A Number formula still needs its own precision; every other type must not carry one.
+        number_like = self.type == "Number" or (self.type == "Formula" and self.formula_returns == "Number")
+        if number_like and self.precision is None:
+            if self.type == "Formula":
+                self.precision = 18
+            else:
+                raise ValueError(f"field {self.api_name!r}: Number requires precision")
+        if not number_like and (self.precision is not None or self.scale is not None):
             raise ValueError(
                 f"field {self.api_name!r}: precision/scale only apply to Number"
             )

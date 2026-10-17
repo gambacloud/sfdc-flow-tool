@@ -22,6 +22,7 @@ from flowtool.llm import (
     Message,
     OBJECT_SYSTEM_PROMPT,
     PLATFORM_EVENT_SYSTEM_PROMPT,
+    PROMPT_TEMPLATE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     Usage,
     _GEMINI_SERVER_ERROR_BACKOFF,
@@ -137,6 +138,7 @@ class TypedScriptedProvider:
         MDT_SYSTEM_PROMPT: "mdt",
         MDT_RECORD_SYSTEM_PROMPT: "mdt_record",
         PLATFORM_EVENT_SYSTEM_PROMPT: "platform_event",
+        PROMPT_TEMPLATE_SYSTEM_PROMPT: "prompt_template",
     }
 
     def __init__(self, **payloads_by_type):

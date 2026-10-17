@@ -29,6 +29,7 @@ from .ir_lwc import LightningComponent
 from .ir_mdt import CustomMetadataRecord, MetadataType
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .ir_prompt_template import PromptTemplate
 from .ir import Flow
 from .llm import (
     ApexClassGenerator,
@@ -44,14 +45,15 @@ from .llm import (
     Message,
     MetadataTypeGenerator,
     PlatformEventGenerator,
+    PromptTemplateGenerator,
     Provider,
     planner_of,
     provider_for_step,
 )
 
-ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" - see PlanStep.artifact_type
+ArtifactType = str  # "object" | "field" | "apex" | "flow" | "lwc" | "mdt" | "mdt_record" | "platform_event" | "prompt_template" - see PlanStep.artifact_type
 
-_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record", "platform_event"}
+_KNOWN_STEP_TYPES = {"object", "field", "apex", "flow", "lwc", "mdt", "mdt_record", "platform_event", "prompt_template"}
 
 
 class PlanStep(BaseModel):
@@ -92,6 +94,19 @@ class PlanStep(BaseModel):
         return self
 
 
+def _reaches(start: str, target: str, graph: Dict[str, List[str]]) -> bool:
+    seen, stack = set(), [start]
+    while stack:
+        node = stack.pop()
+        if node == target:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(graph.get(node, []))
+    return False
+
+
 class Plan(BaseModel):
     steps: List[PlanStep] = Field(min_length=1)
     reasoning: Optional[str] = Field(
@@ -120,6 +135,29 @@ class Plan(BaseModel):
                 raise ValueError(
                     f"step {step.name!r} depends on unknown step(s): {unknown}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def flows_wait_for_the_prompt_templates_they_call(self) -> "Plan":
+        """
+        A Flow calls a Prompt Template by its exact api_name and input names,
+        which only exist once that step has run, so every flow step must
+        (transitively) depend on every prompt_template step in the plan.
+
+        Added here rather than demanded of the planner: a real run planned the
+        Flow in the same layer as the template and, told twice that it must
+        depend on it, returned the same plan four times. The dependency is not
+        a judgement call, so the plan is completed instead of refused.
+        """
+        graph = {s.name: s.depends_on for s in self.steps}
+        templates = [s.name for s in self.steps if s.artifact_type == "prompt_template"]
+        for step in self.steps:
+            if step.artifact_type != "flow":
+                continue
+            for template in templates:
+                if not _reaches(step.name, template, graph):
+                    step.depends_on = [*step.depends_on, template]
+                    graph[step.name] = step.depends_on
         return self
 
     def ordered(self) -> List[PlanStep]:
@@ -221,6 +259,12 @@ reasoning as `mdt`: a platform event's fields are part of this one step, \
 never a separate `field` step. A platform event's fields only support Text, \
 Number, Checkbox, Date, DateTime, LongTextArea - never Picklist, Lookup, or \
 Master-Detail.
+- `prompt_template` - a Prompt Builder template: a question put to a language \
+model, with named inputs, returning text or JSON. Use it whenever automation \
+has to ask a model to judge, summarise, classify or extract something (scoring a \
+conversation, summarising a case, tagging sentiment). A Flow calls it with the \
+`generatePromptResponse` action. When the answer must be stored in fields, ask \
+for JSON.
 
 ## Flow type
 
@@ -261,7 +305,9 @@ platform event (`trigger_type` PlatformEvent) or publishes one (creates a \
 record of it) depends on that event's `platform_event` step when this plan \
 also creates it, for the same reason an LWC step depends on the Apex \
 controller it calls - the Flow needs the event's exact generated api_name. \
-An LWC step that embeds a Flow (a `lightning-flow` component naming it by \
+A Flow step that calls a prompt template depends on that template's \
+`prompt_template` step when this plan also creates it - the Flow needs its \
+exact api_name, input names and, for JSON, the answer's keys. An LWC step that embeds a Flow (a `lightning-flow` component naming it by \
 `flow-api-name`) depends on that flow's `flow` step when this plan also \
 creates it, for the same reason: without the dependency the LWC only has a \
 guess at the flow's api_name to go on, and a guessed name that doesn't match \
@@ -269,6 +315,23 @@ what the flow step actually generated is a broken component, not a working \
 one. \
 Do not add a dependency that is not actually needed - it only slows the plan \
 down for no reason.
+
+## Asking a model from automation
+
+When the request has automation that must judge, score, summarise or classify \
+something with a language model and keep the answer (for example reviewing a \
+finished conversation and recording a score), build it from these parts, each \
+only if the request needs it: a `prompt_template` whose response is JSON, one \
+key per value that will be stored; the Custom Object and `field` steps for the \
+record the answer lands in; an `apex` step that gathers the text to send (a \
+conversation transcript, say) and an `apex` step that parses the JSON answer \
+and writes the record - a Flow cannot parse JSON; and a `flow` that runs after \
+the triggering record is saved, on its asynchronous path, calls the first \
+Apex action, then the prompt template, then the second Apex action. The \
+parsing Apex step depends on the `prompt_template` step and on the object and \
+field steps it writes to; the Flow step depends on all of them. Name the \
+object, fields and keys from the request - never reuse names from this \
+description.
 
 ## Keep the plan minimal
 
@@ -324,6 +387,7 @@ _GENERATOR_BY_TYPE: Dict[str, Type[IRGenerator]] = {
     "mdt": MetadataTypeGenerator,
     "mdt_record": CustomMetadataRecordGenerator,
     "platform_event": PlatformEventGenerator,
+    "prompt_template": PromptTemplateGenerator,
 }
 
 # A cap on how many steps in one layer run at once, not "as many as fit."
@@ -409,6 +473,20 @@ def _dependency_facts(step: PlanStep, by_name: Dict[str, StepResult]) -> str:
             lines.append(
                 f"- Step {dep_name!r} created Custom Metadata record "
                 f"{value.type_api_name}.{value.developer_name!r}."
+            )
+        elif isinstance(value, PromptTemplate):
+            inputs = ", ".join(f"Input:{i.name} ({i.type})" for i in value.inputs) or "none"
+            answer = (
+                f" It returns JSON with the keys: {', '.join(value.output_keys())} - "
+                "the Flow receives it as one text value in the action's promptResponse "
+                "output, so something (an Apex class) must parse it before the keys land in fields."
+                if value.response_format == "JSON" else " It returns plain text in promptResponse."
+            )
+            lines.append(
+                f"- Step {dep_name!r} created Prompt Template api_name={value.api_name!r}. "
+                f"Call it from a Flow with an ActionCall whose action_type is "
+                f"'generatePromptResponse' and action_name {value.api_name!r}; pass inputs "
+                f"as input_parameters named exactly: {inputs}.{answer}"
             )
         elif isinstance(value, PlatformEvent):
             field_list = ", ".join(f"{f.api_name} ({f.type})" for f in value.fields)

@@ -40,7 +40,11 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
     <fields> inside a CustomObject document) - the schema for one field's
     own properties is identical either way, only the parent differs.
     """
-    has_required = field.type in ("Text", "Number", "Picklist", "Lookup")
+    is_formula = field.type == "Formula"
+    # A formula's metadata type is what it returns; the IR keeps "Formula" so the
+    # model cannot give it a default value or mark it required.
+    meta_type = field.formula_returns if is_formula else field.type
+    has_required = field.type in ("Text", "TextArea", "LongTextArea", "Number", "Picklist", "Lookup")
     has_unique = field.type in ("Text", "Number")
 
     # defaultValue
@@ -55,6 +59,12 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
     if field.description:
         _sub(el, "description", field.description)
 
+    # formula
+    if is_formula:
+        _sub(el, "formula", field.formula)
+        if field.formula_returns == "Number":
+            _sub(el, "formulaTreatBlanksAs", "BlankAsZero")
+
     # fullName
     _sub(el, "fullName", field.api_name)
 
@@ -62,11 +72,11 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
     _sub(el, "label", field.label)
 
     # length
-    if field.type == "Text":
+    if field.type in ("Text", "LongTextArea"):
         _sub(el, "length", str(field.length))
 
     # precision
-    if field.type == "Number":
+    if meta_type == "Number":
         _sub(el, "precision", str(field.precision))
 
     # referenceTo
@@ -86,11 +96,11 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
         _sub(el, "required", _bool(field.required))
 
     # scale
-    if field.type == "Number":
+    if meta_type == "Number":
         _sub(el, "scale", str(field.scale or 0))
 
     # type
-    _sub(el, "type", field.type)
+    _sub(el, "type", meta_type)
 
     # unique
     if has_unique and field.unique:
@@ -106,6 +116,10 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
             entry = _sub(definition, "value")
             _sub(entry, "fullName", value)
             _sub(entry, "default", "false")
+
+    # visibleLines
+    if field.type == "LongTextArea":
+        _sub(el, "visibleLines", str(field.visible_lines))
 
 
 def generate_object(obj: CustomObject, fields: Sequence[CustomField] = ()) -> str:

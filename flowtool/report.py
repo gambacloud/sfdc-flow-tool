@@ -22,6 +22,7 @@ from .ir_apex import ApexClass, ApexTrigger
 from .ir_lwc import LightningComponent
 from .ir_object import CustomField, CustomObject
 from .ir_platform_event import PlatformEvent
+from .ir_prompt_template import PromptTemplate
 from .lwc_guide import to_lwc_test_guide
 from .mermaid import element_index, to_mermaid, to_test_guide
 from .planner import Plan, StepResult
@@ -105,6 +106,17 @@ def render_html_fragment(steps: List[StepResult]) -> str:
                 f"{_esc(', '.join(f'{f.api_name} ({f.type})' for f in value.fields))}"
                 "</td></tr>"
                 "</tbody></table>"
+            )
+        elif isinstance(value, PromptTemplate):
+            parts.append(
+                "<table><tbody>"
+                f"<tr><th>API name</th><td>{_esc(value.api_name)}</td></tr>"
+                f"<tr><th>Label</th><td>{_esc(value.label)}</td></tr>"
+                f"<tr><th>Response</th><td>{_esc(value.response_format)}"
+                f"{' - keys: ' + _esc(', '.join(value.output_keys())) if value.output_keys() else ''}</td></tr>"
+                f"<tr><th>Inputs</th><td>{_esc(', '.join(f'{i.name} ({i.type})' for i in value.inputs) or 'none')}</td></tr>"
+                "</tbody></table>"
+                f"<h4>Instructions</h4><pre>{_esc(value.content)}</pre>"
             )
         elif isinstance(value, Flow):
             # A live diagram, not a screenshot - <pre class="mermaid"> is the

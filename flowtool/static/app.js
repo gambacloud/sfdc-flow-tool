@@ -271,7 +271,11 @@ async function api(path, body) {
   } catch {
     payload = { detail: text };
   }
-  if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload.detail || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return payload;
 }
 
@@ -1026,6 +1030,7 @@ const PLAN_ARTIFACT_LABELS = {
   lwc: "Lightning Web Component",
   mdt: "Custom Metadata Type", mdt_record: "Custom Metadata Record",
   platform_event: "Platform Event",
+  prompt_template: "Prompt Template",
 };
 
 function planStepSummary(step) {
@@ -1047,6 +1052,8 @@ function planStepSummary(step) {
       return step.developer_name;
     case "platform_event":
       return `${step.field_count} field${step.field_count === 1 ? "" : "s"}`;
+    case "prompt_template":
+      return `${step.inputs.length} input${step.inputs.length === 1 ? "" : "s"}  ·  ${step.response_format}`;
     default:
       return "";
   }
@@ -1253,6 +1260,16 @@ function renderPlanStep(step) {
       ["Publish behavior", step.publish_behavior],
     ]));
     body.appendChild(planStepFieldList(step.fields));
+  } else if (step.artifact_type === "prompt_template") {
+    body.appendChild(planStepTable([
+      ["API name", step.api_name],
+      ["Label", step.label],
+      ["Response", step.response_format + (step.output_keys.length ? ` (${step.output_keys.join(", ")})` : "")],
+      ["Inputs", step.inputs.map((i) => `${i.name} (${i.type})`).join(", ") || "none"],
+    ]));
+    const instructions = document.createElement("pre");
+    instructions.textContent = step.content;
+    body.appendChild(instructions);
   }
 
   if (step.depends_on && step.depends_on.length) {
@@ -2331,41 +2348,65 @@ async function deploy() {
   }
 }
 
+// Jobs and stored plans live in the server's memory, so a restart (a deploy,
+// a dyno cycle, a dev reload) mid-run makes every id it handed out 404. The
+// plan itself is gone too, so the only recovery is to plan again from scratch.
+const PLAN_RESTART_RETRIES = 1;
+
 async function planAndBuild() {
   const button = $("planBtn");
   showError(button.parentElement, "");
   busy(button, true, "Planning...");
   try {
-    const { job_id } = await api("api/plan/start", {
-      request: $("planRequest").value,
-      provider: $("provider").value || null,
-      effort: $("effort").value,
-      api_version: $("apiVersion").value.trim() || "62.0",
-      api_key: $("apiKey").value.trim() || null,
-      model: $("model").value || null,
-      auto_workers: $("autoWorkers").checked,
-      ...planPermSetRequestFields(),
-    });
-    const planned = await poll("api/plan/status", { job_id });
-    // Not another busy(button, true, ...) call: it stashes the *current*
-    // text as the label to restore, so a second call here would overwrite
-    // the real original ("Plan and build") with this stage's own text and
-    // leave the button reading it forever after busy(button, false) below.
-    button.textContent =
-      `Building ${planned.steps.length} step${planned.steps.length === 1 ? "" : "s"}...`;
-    const { job_id: execJobId } = await api(
-      "api/plan/execute/start",
-      { plan_id: planned.plan_id, parallel: $("planParallel").checked }
-    );
-    const data = await poll("api/plan/execute/status", { job_id: execJobId });
-    state.planValidatedVersion = null;
-    renderPlan(data);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await planAndBuildOnce(button);
+        return;
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        if (attempt >= PLAN_RESTART_RETRIES) {
+          throw new Error(
+            "The server restarted while this was running and the job was lost, " +
+            "even after retrying. Click Plan and build again."
+          );
+        }
+        logError("Plan", "Server restarted mid-run - planning again automatically.");
+        button.textContent = "Server restarted - retrying...";
+      }
+    }
   } catch (err) {
     showError(button.parentElement, err.message);
     logError("Plan", err.message);
   } finally {
     busy(button, false);
   }
+}
+
+async function planAndBuildOnce(button) {
+  const { job_id } = await api("api/plan/start", {
+    request: $("planRequest").value,
+    provider: $("provider").value || null,
+    effort: $("effort").value,
+    api_version: $("apiVersion").value.trim() || "62.0",
+    api_key: $("apiKey").value.trim() || null,
+    model: $("model").value || null,
+    auto_workers: $("autoWorkers").checked,
+    ...planPermSetRequestFields(),
+  });
+  const planned = await poll("api/plan/status", { job_id });
+  // Not another busy(button, true, ...) call: it stashes the *current*
+  // text as the label to restore, so a second call here would overwrite
+  // the real original ("Plan and build") with this stage's own text and
+  // leave the button reading it forever after busy(button, false) below.
+  button.textContent =
+    `Building ${planned.steps.length} step${planned.steps.length === 1 ? "" : "s"}...`;
+  const { job_id: execJobId } = await api(
+    "api/plan/execute/start",
+    { plan_id: planned.plan_id, parallel: $("planParallel").checked }
+  );
+  const data = await poll("api/plan/execute/status", { job_id: execJobId });
+  state.planValidatedVersion = null;
+  renderPlan(data);
 }
 
 async function planApprove() {
