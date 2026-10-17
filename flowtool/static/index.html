@@ -176,7 +176,7 @@
 
     <div class="pad" id="planPane" hidden>
       <label for="planRequest">What should be built?
-        <span class="info-icon" tabindex="0" title="Can be one thing or several - any mix of Custom Objects, Custom Fields, Apex Classes, Flows, and Lightning Web Components. A model first decides how many pieces the request needs and in what order, then each piece is generated on its own.">&#9432;</span>
+        <span class="info-icon" tabindex="0" title="Can be one thing or several - any mix of Custom Objects, Custom Fields (including formula and long text), Apex Classes, Flows, Lightning Web Components, Platform Events, Custom Metadata, Prompt Templates, and Agentforce Agents. A model first decides how many pieces the request needs and in what order, then each piece is generated on its own.">&#9432;</span>
       </label>
       <textarea id="planRequest" rows="4"
         placeholder="An Invoice object with an Amount field, and a flow that marks it Paid when the amount is settled"></textarea>
@@ -320,8 +320,11 @@
   <!-- Right: the flow -->
   <section class="panel" id="right">
     <div id="empty" class="empty">
-      <p>Describe a flow - or several objects, fields, and Apex classes at
-        once - and it appears here for review.</p>
+      <p>Describe what you need in plain language - a flow, or several pieces at
+        once: objects and fields, Apex, Lightning components, AI prompt templates,
+        Agentforce agents - and it appears here for review.</p>
+      <p class="dim">Want a customer portal with sign-up, a My Account page and
+        chat? Open the Customer portal tab.</p>
       <p class="dim">Nothing is sent to Salesforce until you approve it.</p>
     </div>
 

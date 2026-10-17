@@ -1,7 +1,10 @@
 # SFDC Flow Tool
 
-Describe business logic in plain language, get a Salesforce Flow that deploys.
-Or open a flow that already exists, ask what it does, and change it.
+Describe what you need in plain language and get Salesforce metadata that
+deploys: Flows, Apex, Lightning Web Components, Custom Objects and Fields,
+Platform Events, Custom Metadata, AI Prompt Templates, Agentforce agents - and
+a customer portal on Experience Cloud. Or open an existing flow, ask what it
+does, and change it.
 
 Human-in-the-loop (HITL) by design: nothing reaches the org before you approve it (see [How it works](#how-it-works)) — the model proposes, you decide.
 
@@ -11,11 +14,17 @@ description ─┐
 existing flow┘
 ```
 
-The same pipeline also builds Custom Objects, Custom Fields, and Apex
-Classes — describe several at once ("an Invoice object with an Amount field,
-and a flow that totals it") and a planner works out how many pieces the
-request needs, in what order, before generating each one. See
-[Building more than a Flow](#building-more-than-a-flow).
+The same pipeline also builds Custom Objects, Custom Fields, Apex Classes,
+Lightning Web Components, Prompt Templates and Agentforce agents — describe
+several at once ("an Invoice object with an Amount field, and a flow that totals
+it"; "when a chat ends, score it with an AI prompt and save the result") and a
+planner works out how many pieces the request needs, in what order, before
+generating each one. See [Building more than a Flow](#building-more-than-a-flow).
+
+The **Customer portal** tab builds a ready-to-use Experience Cloud site: a
+public home page, self-registration that creates the portal user, a secure My
+Account page where customers see and edit their own details, and optionally a
+messaging chat channel with a support queue.
 
 ## Install
 
