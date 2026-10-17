@@ -65,6 +65,8 @@ from flowtool.report import render_standalone_report
 from flowtool import github, share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
+    ComponentProblem,
+    MetadataClient,
     RetrieveError,
     _deploy_package_xml,
     build_deploy_package,
@@ -91,6 +93,7 @@ from flowtool.xmlgen_object import generate_field_delta, generate_object
 from flowtool.xmlgen_platform_event import generate_platform_event
 from flowtool.xmlgen_prompt_template import generate_prompt_template
 from flowtool.xmlgen_agent import MissingAgentUser, generate_agent_files
+from flowtool.prompt_activation import activate_templates
 from flowtool.xmlgen_permset import generate_permission_set, merge_permission_set_xml
 from survey import Survey, text_report
 
@@ -2168,9 +2171,24 @@ async def _deploy_plan_bundle(
             session.permission_set_config, session.steps, url, token,
             api_version, files, types, session.reference,
         )
-    return await validate_bundle(
+    result = await validate_bundle(
         url, token, files, types, api_version=api_version, check_only=check_only,
     )
+    # A real deploy leaves each Prompt Template Published but not callable: it needs
+    # its active version named, which only exists once the org has created it.
+    templates = [r.value.api_name for r in session.steps if isinstance(r.value, PromptTemplate)]
+    if result.success and not check_only and templates:
+        try:
+            async with MetadataClient(url, token, api_version) as client:
+                await activate_templates(client, templates, api_version)
+        except Exception as exc:  # noqa: BLE001 - reported, not hidden: the plan is half done
+            result.success = False
+            result.failures.append(ComponentProblem(
+                full_name=", ".join(templates), problem_type="Error",
+                problem=f"Deployed, but the prompt template could not be activated ({exc}). "
+                        "Activate its version in Prompt Builder before a Flow calls it.",
+            ))
+    return result
 
 
 def _start_plan_deploy(

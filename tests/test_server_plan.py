@@ -455,11 +455,30 @@ class TestPlanDeploy:
             seen_files.update(files)
             return DeployResult("1", "Succeeded", True)
 
+        activated = []
+
+        async def fake_activate(client_, names, api_version):
+            activated.extend(names)
+            return names
+
+        class FakeMeta:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
         monkeypatch.setattr(server, "validate_bundle", fake_validate_bundle)
+        monkeypatch.setattr(server, "activate_templates", fake_activate)
+        monkeypatch.setattr(server, "MetadataClient", FakeMeta)
         client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
         started = client.post("/api/plan/deploy/start", json={"session_id": sid, "confirm": True})
         assert started.status_code == 200, started.text
         assert poll(client, "/api/plan/deploy/status", session_id=sid).json()["success"] is True
+        assert activated == ["QA_Audit_Scoring"]  # a deployed template is made callable
         assert set(seen_types) == {"GenAiPromptTemplate", "Flow"}
         assert seen_types["GenAiPromptTemplate"] == ["QA_Audit_Scoring"]
         xml = seen_files["genAiPromptTemplates/QA_Audit_Scoring.genAiPromptTemplate"]
