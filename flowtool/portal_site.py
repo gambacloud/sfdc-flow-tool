@@ -230,8 +230,12 @@ def planned_steps(spec: "SiteSpec") -> List[tuple]:
     return steps
 
 
-async def build_site(org, meta, spec: SiteSpec, apply: bool = False) -> SiteResult:
-    """`org` is an OrgWriter, `meta` a MetadataClient. Nothing is written unless apply=True."""
+async def build_site(
+    org, meta, spec: SiteSpec, apply: bool = False,
+    progress: Optional[Callable[[Step], None]] = None,
+) -> SiteResult:
+    """`org` is an OrgWriter, `meta` a MetadataClient. Nothing is written unless apply=True.
+    `progress` is called with each Step as it is recorded, for a caller that shows a live log."""
     preflight = await run_preflight(org, spec)
     result = SiteResult(preflight=preflight)
     if not preflight.can_proceed:
@@ -241,7 +245,10 @@ async def build_site(org, meta, spec: SiteSpec, apply: bool = False) -> SiteResu
         return result
 
     def add(name: str, status: str, detail: str = "") -> None:
-        result.steps.append(Step(name, status, detail))
+        step = Step(name, status, detail)
+        result.steps.append(step)
+        if progress is not None:
+            progress(step)
 
     try:
         # 1. shell

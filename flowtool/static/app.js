@@ -2998,6 +2998,189 @@ function highlightPlanMode() {
 // state, a single Flow, a plan} the right panel shows - shared by the mode
 // buttons' own click handler and by restoreSessions() below, so a reload
 // lands on whichever mode was actually last in use, not always "new".
+// --------------------------------------------------------------------------
+// "New Agentforce" - the customer portal builder (flowtool/portal_api.py)
+// --------------------------------------------------------------------------
+
+function portalBody(extra) {
+  const site = $("portalSite").value.trim();
+  const headline = $("portalHeadline").value.trim();
+  return {
+    site_name: site,
+    headline: headline || null,
+    intro: $("portalIntro").value.trim() || null,
+    license: $("portalLicense").value,
+    chat: $("portalChat").checked,
+    reuse: $("portalReuse").checked,
+    api_version: "64.0",
+    ...orgCredentials(),
+    ...(extra || {}),
+  };
+}
+
+function portalRow(tag, text, hint) {
+  const row = document.createElement("div");
+  row.className = "portal-row";
+  const label = document.createElement("span");
+  label.className = "portal-tag " + tag;
+  label.textContent = tag;
+  const body = document.createElement("span");
+  body.textContent = text;
+  row.append(label, body);
+  if (hint) {
+    const fix = document.createElement("div");
+    fix.className = "portal-fix";
+    fix.textContent = "Fix: " + hint;
+    body.appendChild(fix);
+  }
+  return row;
+}
+
+function portalSection(out, title) {
+  const h = document.createElement("h4");
+  h.textContent = title;
+  out.appendChild(h);
+}
+
+function portalSafeUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderPortalChecks(out, report) {
+  portalSection(out, report.can_proceed ? "Checklist - ready" : "Checklist - blocked");
+  for (const c of report.checks) {
+    const tag = c.status === "pass" ? "pass" : c.status === "skip" ? "skip" : "fail";
+    const blocking = c.severity === "blocking" ? "" : " (warning)";
+    out.appendChild(portalRow(tag, `${c.title}${blocking}: ${c.message}`, tag === "fail" ? c.fix_hint : ""));
+  }
+}
+
+function renderPortalSteps(out, steps, title) {
+  portalSection(out, title);
+  for (const s of steps) {
+    out.appendChild(portalRow(s.status, s.detail ? `${s.name}: ${s.detail}` : s.name));
+  }
+}
+
+function renderPortalResult(out, data) {
+  out.textContent = "";
+  if (data.error) {
+    out.appendChild(portalRow("failed", data.error));
+  }
+  if (data.preflight) renderPortalChecks(out, data.preflight);
+  if (data.steps && data.steps.length) renderPortalSteps(out, data.steps, "Steps");
+  if (data.validation && data.validation.length) {
+    portalSection(out, "Validation");
+    for (const c of data.validation) {
+      out.appendChild(portalRow(c.status === "pass" ? "pass" : "fail", `${c.title}: ${c.message}`,
+        c.status === "pass" ? "" : c.fix_hint));
+    }
+  }
+  const links = document.createElement("div");
+  links.className = "portal-links";
+  for (const [label, url] of [["Site", data.site_url], ["Register page", data.register_url]]) {
+    const safe = url && portalSafeUrl(url);
+    if (!safe) continue;
+    const a = document.createElement("a");
+    a.href = safe;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = `${label}: ${safe}`;
+    links.appendChild(a);
+  }
+  if (links.children.length) {
+    portalSection(out, "Open it");
+    out.appendChild(links);
+  }
+  if (data.manual_steps && data.manual_steps.length) {
+    portalSection(out, "Still manual");
+    for (const m of data.manual_steps) out.appendChild(portalRow("skip", m));
+  }
+}
+
+async function portalRun(button, label, path, render) {
+  const pane = $("portalPane");
+  showError(pane, "");
+  if (!$("portalSite").value.trim()) {
+    showError(pane, "Give the site a name first.");
+    return;
+  }
+  busy(button, true, label);
+  try {
+    const data = await api(path, portalBody());
+    render(data);
+  } catch (err) {
+    showError(pane, err.message);
+    logError("Portal", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+function portalCheck() {
+  return portalRun($("portalCheckBtn"), "Checking...", "api/portal/preflight", (report) => {
+    const out = $("portalOut");
+    out.textContent = "";
+    renderPortalChecks(out, report);
+  });
+}
+
+function portalPlan() {
+  return portalRun($("portalPlanBtn"), "Planning...", "api/portal/plan", (data) => {
+    renderPortalResult($("portalOut"), data);
+  });
+}
+
+async function portalBuild() {
+  const pane = $("portalPane");
+  const button = $("portalBuildBtn");
+  showError(pane, "");
+  const site = $("portalSite").value.trim();
+  if (!site) {
+    showError(pane, "Give the site a name first.");
+    return;
+  }
+  const target = state.org ? state.org.instanceUrl : ($("org")?.value || "the default org");
+  if (!window.confirm(`Build the "${site}" portal in ${target}?\n\nThis creates a site, an Apex class, a Sharing Set, `
+      + "profile permissions and (if ticked) messaging components, and publishes the site.")) {
+    return;
+  }
+  busy(button, true, "Building...");
+  const out = $("portalOut");
+  try {
+    let started;
+    try {
+      started = await api("api/portal/apply", portalBody({ confirm: true }));
+    } catch (err) {
+      if (err.status !== 403) throw err;
+      if (!window.confirm(`${err.message}\n\nBuild it here anyway?`)) return;
+      started = await api("api/portal/apply", portalBody({ confirm: true, confirm_production: true }));
+    }
+    for (;;) {
+      await sleep(2500);
+      const data = await api(`api/portal/status?job_id=${encodeURIComponent(started.job_id)}`);
+      out.textContent = "";
+      if (!data.done) {
+        renderPortalSteps(out, data.steps, "Building...");
+        continue;
+      }
+      renderPortalResult(out, data);
+      if (!data.ok) showError(pane, "The build did not finish cleanly - see the steps above.");
+      break;
+    }
+  } catch (err) {
+    showError(pane, err.message);
+    logError("Portal", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
 function activateMode(selected) {
   // "new" may still be requested by a stale sessionStorage lastMode value
   // saved before HIGHLIGHT_PLAN_MODE was turned on - its button is hidden
@@ -3009,6 +3192,7 @@ function activateMode(selected) {
   $("openPane").hidden = selected !== "open";
   $("newPane").hidden = selected !== "new";
   $("planPane").hidden = selected !== "plan";
+  $("portalPane").hidden = selected !== "portal";
   // Normally "Describe a new flow" only - "open" doesn't use it (an
   // imported flow keeps whatever status it already has), and "plan"
   // doesn't either. HIGHLIGHT_PLAN_MODE flips that: "new" is hidden, so
@@ -3025,6 +3209,12 @@ function activateMode(selected) {
     $("flowView").hidden = true;
     $("planView").hidden = !state.planSessionId;
     $("empty").hidden = !!state.planSessionId;
+  } else if (selected === "portal") {
+    // The portal builder reports in its own pane; nothing else belongs on the right.
+    $("planView").hidden = true;
+    $("flowView").hidden = true;
+    $("refineBox").hidden = true;
+    $("empty").hidden = false;
   } else {
     $("planView").hidden = true;
     $("flowView").hidden = !state.sessionId;
@@ -3194,6 +3384,9 @@ async function boot() {
 
   wireDiagramPanZoom();
 
+  $("portalCheckBtn").onclick = portalCheck;
+  $("portalPlanBtn").onclick = portalPlan;
+  $("portalBuildBtn").onclick = portalBuild;
   $("designBtn").onclick = design;
   $("importBtn").onclick = importFlow;
   $("flowSearch").addEventListener("input", () => {

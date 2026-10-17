@@ -288,6 +288,16 @@ details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .modes { display: flex; gap: 4px; }
 .mode { flex: 1; font-size: 13px; padding: 6px 8px; }
 .mode.active { border-color: var(--accent); color: var(--accent); }
+.portal-out { margin-top: 12px; font-size: 13px; }
+.portal-note { margin: 0 0 8px 24px; }
+.portal-out h4 { margin: 14px 0 6px; font-size: 13px; }
+.portal-row { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
+.portal-tag { flex: none; min-width: 52px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
+.portal-tag.pass, .portal-tag.done { color: #1a7f37; }
+.portal-tag.fail, .portal-tag.failed, .portal-tag.error { color: #cf222e; }
+.portal-tag.skip, .portal-tag.skipped, .portal-tag.planned { color: var(--dim); }
+.portal-fix { color: var(--dim); }
+.portal-links a { display: block; margin: 2px 0; }
 /* HIGHLIGHT_PLAN_MODE config var (see server.py /api/config) - gives "Build
    multiple things" a standing accent border and weight so it reads as the
    featured mode even before it's selected, not just once .active applies. */

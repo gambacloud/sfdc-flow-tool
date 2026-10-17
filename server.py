@@ -2827,6 +2827,12 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+# The portal builder ("New Agentforce" tab) lives in its own module and borrows
+# this file's credentials() so it authenticates exactly like every other route.
+from flowtool.portal_api import make_router as _portal_router  # noqa: E402
+
+app.include_router(_portal_router(credentials))
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
