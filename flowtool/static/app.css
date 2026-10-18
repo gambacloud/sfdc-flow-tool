@@ -191,7 +191,10 @@ main {
 .meta, .dim { color: var(--dim); font-size: 13px; }
 
 label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
-label.check { display: flex; align-items: center; gap: 6px; color: var(--text); }
+/* Block, not flex: the text and the dim hint after the checkbox are separate
+   nodes, and as flex items each wrapped into its own narrow column. */
+label.check { display: block; color: var(--text); }
+label.check > input[type=checkbox] { margin-right: 6px; vertical-align: middle; }
 /* A hover/focus tooltip (native `title`) standing in for a paragraph of
    explanatory text, so the pane above the request box stays uncluttered. */
 .info-icon {
@@ -213,7 +216,7 @@ textarea, input, select {
   padding: 8px 10px;
 }
 textarea { resize: vertical; }
-input[type=checkbox] { width: auto; }
+input[type=checkbox], input[type=radio] { width: auto; }
 
 button {
   font: inherit;
@@ -370,7 +373,7 @@ dialog p { margin: 0 0 12px; }
 
 .refine { border-top: 1px solid var(--line); }
 
-.empty { color: var(--dim); padding: 40px 0; max-width: 42ch; }
+.empty { color: var(--dim); padding: 40px 0; max-width: 60ch; }
 .example-cards button {
   display: block;
   width: 100%;
@@ -635,3 +638,6 @@ pre.lwc-file-content {
   color: var(--accent);
   font-size: 14px;
 }
+
+.agent-user-field { display: block; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; }
+.agent-user-field input { margin-top: 6px; }

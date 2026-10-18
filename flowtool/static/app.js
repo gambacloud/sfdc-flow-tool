@@ -1262,7 +1262,13 @@ function setAllPlanStepsOpen(open) {
 // script without one - so the field lives on the agent's own step, not in Options.
 function agentUserField() {
   const label = document.createElement("label");
-  label.textContent = "Agent user (username of a user with the Einstein Agent User profile) ";
+  label.className = "agent-user-field";
+  const title = document.createElement("b");
+  title.textContent = "Agent user (required)";
+  const hint = document.createElement("span");
+  hint.className = "dim";
+  hint.textContent = " - the username of a user with the Einstein Agent User profile; the agent talks to customers as this user. Set it before you approve.";
+  label.append(title, hint);
   const input = document.createElement("input");
   input.type = "text";
   input.autocomplete = "off";
