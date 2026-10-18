@@ -466,33 +466,44 @@
 <dialog id="examplesDialog">
   <h3>Example requests</h3>
   <p class="dim">
-    Pick a common business process to load a ready-made request into the
-    box - you can still edit it before building. Listed simplest first,
-    growing more complex toward the bottom - a good way to try the tool
-    before combining a lot of pieces in one request.
+    Pick an example to load a ready-made request into the box - you can
+    still edit it before building. The first three groups grow from a single
+    field to a full solution; the last one uses AI (prompt templates and
+    Agentforce agents). For a public site with sign-up and a My Account page,
+    use the Customer portal tab instead.
   </p>
-  <select id="examplesSelect" size="9">
-    <optgroup label="Simple - a single field or component">
+  <select id="examplesSelect" size="12">
+    <optgroup label="Fields and components - one thing">
       <option value="lead-simple">Lead management - priority field</option>
       <option value="account-simple">Account management - tier field</option>
       <option value="acv-simple">ACV - contract value field</option>
       <option value="cs-simple">Customer Success - health score field</option>
       <option value="lwc-simple">LWC - Contact quick view component</option>
     </optgroup>
-    <optgroup label="Medium - a field plus a flow">
+    <optgroup label="Automation - a field plus a flow">
       <option value="lead-medium">Lead management - scoring flow</option>
       <option value="account-medium">Account management - auto-tiering flow</option>
       <option value="acv-medium">ACV - recalculation flow</option>
       <option value="cs-medium">Customer Success - onboarding tracking</option>
     </optgroup>
-    <optgroup label="Complex - object, Apex, flow, and more">
+    <optgroup label="Full solutions - objects, Apex and flows together">
       <option value="lead-complex">Lead management - scoring, Apex, and auto-routing</option>
       <option value="account-complex">Account management - tiering and health</option>
       <option value="acv-complex">ACV - contract tracking and Chatter alerts</option>
       <option value="cs-complex">Customer Success - health score and renewal risk</option>
       <option value="contact-complex">Contact management - round-robin assignment</option>
     </optgroup>
+    <optgroup label="AI - prompts and Agentforce agents">
+      <option value="ai-case-summary">AI Case summary - prompt template and flow</option>
+      <option value="ai-conversation-review">AI review of ended chats - prompt, Apex and flow</option>
+      <option value="agent-service-orders">Service agent - case status and new requests</option>
+      <option value="agent-employee-account-brief">Employee agent - account briefing for sales reps</option>
+    </optgroup>
   </select>
+  <div id="examplesNote" class="examples-note" hidden>
+    <div><b>You get:</b> <span id="examplesGets"></span></div>
+    <div><b>Before you start:</b> <span id="examplesBefore"></span></div>
+  </div>
   <pre id="examplesPreview" class="dim"></pre>
   <div class="row survey-actions">
     <button id="examplesUseBtn" class="primary" type="button">Use this</button>

@@ -382,6 +382,14 @@ dialog p { margin: 0 0 12px; }
 .badge.active { border-color: var(--warn); color: var(--warn); }
 .badge.draft { border-color: var(--line); color: var(--dim); }
 
+#examplesNote {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 #examplesPreview {
   font-family: inherit;
   white-space: pre-wrap;

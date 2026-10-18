@@ -171,6 +171,95 @@ Business need: Users need a way, from the Contact record, to assign it automatic
 
 4. Confirmation screen
    - Show "Contact was successfully assigned to [User Name]" and return to the record page.`,
+
+  // ---- AI: prompt templates and Agentforce agents ----
+
+  "ai-case-summary":
+`Process spec: AI Case Summary
+Business need: Support managers want a short, consistent summary on each Case instead of reading every comment.
+
+1. Data model
+   - AI Summary (long text) and AI Customer Request (text) fields on Case.
+
+2. Prompt template
+   - Takes the Case subject, description and the text of its comments, and answers in JSON with two keys: summary (at most three sentences) and request (what the customer actually wants, in one line).
+
+3. Flow logic
+   - When a Case is closed, call the prompt template and store its answer in the two new fields.`,
+
+  "ai-conversation-review":
+`Process spec: AI Review of Ended Chats
+Business need: Quality managers want every finished chat with a customer scored against the support standards, with the reasons written down, so coaching does not depend on someone reading transcripts.
+
+1. Data model
+   - A Conversation Review custom object with a lookup to Messaging Session, a Score (0-100), a Verdict picklist (Pass, Needs coaching, Fail), a Summary (long text) and an Issues (long text).
+
+2. Prompt template
+   - Takes the full transcript and answers in JSON with score, verdict, summary and issues. Judge politeness, whether the customer's problem was solved, and whether personal data such as card numbers was handled correctly.
+
+3. Apex
+   - An Apex class builds the transcript from the session's conversation entries (who said what, in order), runs the prompt template, reads the JSON and creates the Conversation Review record.
+
+4. Flow logic
+   - When a Messaging Session ends, run the Apex class once, a few minutes later.`,
+
+  "agent-service-orders":
+`Process spec: Customer Service Agent for Case Status and New Requests
+Business need: Customers should get an instant answer about an existing Case, or open a new one, without waiting for a person.
+
+1. Apex
+   - An invocable Apex class that takes a Case number and returns its status, last update and owner name.
+
+2. Flow logic
+   - An autolaunched Flow that takes a subject and description and creates a Case, returning its Case number.
+
+3. Agent
+   - A service agent named Support Concierge for customers.
+   - Topic "Case status": asks for the Case number, then looks it up with the Apex class.
+   - Topic "New request": collects a subject and description, then opens the Case with the Flow.
+   - It is polite and brief, never shares another customer's information, and offers a person when it cannot help.`,
+
+  "agent-employee-account-brief":
+`Process spec: Account Briefing Agent for Sales Reps
+Business need: Sales reps want to ask for a quick briefing on any Account before a call, and to log the outcome afterwards, without clicking through several pages.
+
+1. Apex
+   - An invocable Apex class that takes an Account name and returns its open Opportunities (name, stage, amount), its open Cases and the date of the last logged activity.
+
+2. Prompt template
+   - Turns that data into a briefing of five bullets: where the relationship stands, risks, and a suggested next step.
+
+3. Flow logic
+   - An autolaunched Flow that takes an Account Id and a note and creates a completed Task on the Account.
+
+4. Agent
+   - An employee agent named Account Briefing Assistant for the company's own sales reps (it works with the permissions of the rep who asks).
+   - Topic "Briefing": looks up the Account, then produces the briefing with the prompt template.
+   - Topic "Log a call": takes the Account and a short note and logs it with the Flow.`,
+};
+
+// For each example: what the tool produces, and what to have ready first. Shown
+// above the request text in the Examples dialog. Examples without an entry show
+// only the text.
+const PLAN_EXAMPLE_NOTES = {
+  "lead-simple": { gets: "One picklist field on Lead.", before: "Nothing." },
+  "account-simple": { gets: "One picklist field on Account.", before: "Nothing." },
+  "acv-simple": { gets: "One currency field on Opportunity.", before: "Nothing." },
+  "cs-simple": { gets: "One number field on Account.", before: "Nothing." },
+  "lwc-simple": { gets: "One Lightning Web Component for the Contact record page.", before: "Nothing. Add it to the page in Lightning App Builder after deploying." },
+  "lead-medium": { gets: "A number field and a record-triggered Flow.", before: "Nothing." },
+  "account-medium": { gets: "A picklist field and a record-triggered Flow.", before: "Nothing." },
+  "acv-medium": { gets: "Two fields and a record-triggered Flow.", before: "Nothing." },
+  "cs-medium": { gets: "A custom object with fields, a Flow that creates records and Tasks, and a Permission Set.", before: "The Customer Success Manager role or field must exist on Account for the Task assignment." },
+  "lead-complex": { gets: "Two fields, an Apex class and a record-triggered Flow that calls it.", before: "A queue named Sales for the routing." },
+  "account-complex": { gets: "Fields on Account, a custom object, and Flows that recalculate and create Tasks.", before: "Nothing." },
+  "acv-complex": { gets: "Fields on Opportunity (one a formula) and Flows for recalculation and Chatter alerts.", before: "Chatter must be enabled on Account." },
+  "cs-complex": { gets: "A custom object, a scheduled Apex class and a Flow that opens a Case and emails.", before: "A Customer Success Manager field on Account, and email deliverability on." },
+  "contact-complex": { gets: "A log object, a screen Flow for the Contact page, and the assignment logic.", before: "A Public Group named Sales_Assignees_Group with the eligible users." },
+  "ai-case-summary": { gets: "Two Case fields, a Prompt Template that answers in JSON, and a Flow that calls it.", before: "An org with Einstein generative AI and Prompt Builder enabled." },
+  "ai-conversation-review": { gets: "A review object, a Prompt Template, an Apex class that builds the transcript, and a Flow that runs after a chat ends.", before: "Messaging (Enhanced Messaging) enabled and real chats to review. The tool cannot create test chats for you." },
+  "agent-service-orders": { gets: "An Apex class, a Flow, and a draft service agent with two topics.", before: "The username of an Einstein Agent User (enter it under Options > Agent user). Publish and activate the agent in Agentforce Builder afterwards." },
+  "agent-employee-account-brief": { gets: "An Apex class, a Prompt Template, a Flow, and a draft employee agent with two topics.", before: "Nothing for the agent user - an employee agent needs none. Publish and activate it in Agentforce Builder afterwards." },
 };
 // Which mode ("new" | "open" | "plan") a reload should land back on, when a
 // single-Flow session and a plan session happen to both be stored at once
@@ -2904,6 +2993,12 @@ function restorePlanRequestText() {
 
 function updateExamplesPreview() {
   const key = $("examplesSelect").value;
+  const note = PLAN_EXAMPLE_NOTES[key];
+  $("examplesNote").hidden = !note;
+  if (note) {
+    $("examplesGets").textContent = note.gets;
+    $("examplesBefore").textContent = note.before;
+  }
   $("examplesPreview").textContent = PLAN_EXAMPLES[key] || "";
 }
 
