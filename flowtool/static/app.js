@@ -1258,6 +1258,32 @@ function setAllPlanStepsOpen(open) {
   });
 }
 
+// A service agent runs as an "Einstein Agent User" - Salesforce's compiler refuses the
+// script without one - so the field lives on the agent's own step, not in Options.
+function agentUserField() {
+  const label = document.createElement("label");
+  label.textContent = "Agent user (username of a user with the Einstein Agent User profile) ";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.autocomplete = "off";
+  input.placeholder = "agent.user@example.com";
+  input.value = state.planAgentUser || "";
+  input.onchange = async () => {
+    try {
+      const data = await api("api/plan/agent-user", {
+        session_id: state.planSessionId,
+        agent_user: input.value,
+      });
+      renderPlan(data);
+    } catch (err) {
+      showError($("planGate").parentElement, err.message);
+      logError("Agent user", err.message);
+    }
+  };
+  label.appendChild(input);
+  return label;
+}
+
 function renderPlanStep(step) {
   const card = document.createElement("details");
   card.className = "plan-step " + step.artifact_type;
@@ -1364,6 +1390,7 @@ function renderPlanStep(step) {
         t.description + (t.actions.length ? `  (actions: ${t.actions.map((a) => `${a.api_name} -> ${a.target}`).join(", ")})` : ""),
       ]),
     ]));
+    if (step.agent_type !== "employee") body.appendChild(agentUserField());
     const instructions = document.createElement("pre");
     instructions.textContent = step.instructions;
     body.appendChild(instructions);
@@ -1449,6 +1476,7 @@ function renderPlan(data) {
 
   const container = $("planSteps");
   container.innerHTML = "";
+  state.planAgentUser = data.agent_user || "";
   steps.forEach((step) => container.appendChild(renderPlanStep(step)));
 
   $("planReportLink").href = `api/plan/session/${data.session_id}/report`;

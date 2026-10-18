@@ -272,3 +272,23 @@ def test_an_unknown_agent_type_is_rejected():
 
 def test_the_prompt_tells_the_model_about_the_two_kinds():
     assert "agent_type" in AGENT_SYSTEM_PROMPT and "employee" in AGENT_SYSTEM_PROMPT
+
+
+def test_the_agent_user_is_set_on_the_plan_session_and_forces_a_new_approval():
+    from types import SimpleNamespace
+    session = server.PlanSession(
+        provider=ScriptedProvider([]), plan=Plan(steps=[PlanStep(artifact_type="agent", name="A", brief="x")]),
+        steps=step_results(),
+    )
+    session.approved_version = session.version
+    server.PLAN_SESSIONS["agent-user-test"] = session
+    try:
+        view = server.plan_set_agent_user(server.AgentUserRequest(session_id="agent-user-test", agent_user=" a@b.co "))
+        assert view["agent_user"] == "a@b.co"
+        assert session.plan.agent_user == "a@b.co"
+        assert session.approved_version != session.version  # the script changed: approve again
+        before = session.version
+        server.plan_set_agent_user(server.AgentUserRequest(session_id="agent-user-test", agent_user="a@b.co"))
+        assert session.version == before  # unchanged value, nothing to re-approve
+    finally:
+        server.PLAN_SESSIONS.pop("agent-user-test", None)

@@ -1885,6 +1885,7 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
         "reasoning": session.plan.reasoning,
         "how_to_test": session.plan.how_to_test,
         "reference": session.reference,
+        "agent_user": session.plan.agent_user,
         "steps": [_step_view(r) for r in session.steps],
         "permission_set": _permission_set_view(session),
         "usage": session.provider.usage.as_dict(),
@@ -2108,6 +2109,24 @@ async def plan_execute_status(job_id: str) -> Dict[str, Any]:
     return {"done": True, **plan_view(session_id, session)}
 
 
+class AgentUserRequest(BaseModel):
+    session_id: str
+    agent_user: str = ""
+
+
+@app.post("/api/plan/agent-user")
+def plan_set_agent_user(body: AgentUserRequest) -> Dict[str, Any]:
+    """The username a service agent runs as, entered on the agent's own step once
+    the plan exists. It is part of the generated script, so changing it means the
+    plan has to be approved and validated again."""
+    session = get_plan_session(body.session_id)
+    value = body.agent_user.strip() or None
+    if value != session.plan.agent_user:
+        session.plan.agent_user = value
+        session.version += 1
+    return plan_view(body.session_id, session)
+
+
 @app.post("/api/plan/approve")
 def plan_approve(body: ApproveRequest) -> Dict[str, Any]:
     session = get_plan_session(body.session_id)
@@ -2210,7 +2229,7 @@ def _start_plan_deploy(
         raise HTTPException(
             400,
             "This plan builds a service agent, which needs an agent user: the username of a user with the "
-            "'Einstein Agent User' profile. Enter it under Options (Agent user) and plan again.",
+            "'Einstein Agent User' profile. Enter it in the Agent user box on the agent step, then approve and validate again.",
         )
     url, token = credentials(org, instance_url, access_token)
     task = asyncio.create_task(_deploy_plan_bundle(session, url, token, check_only))
