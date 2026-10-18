@@ -141,7 +141,7 @@ def _normalise(instance_url: str) -> str:
 
 
 class MetadataClient:
-    def __init__(self, instance_url: str, session_id: str, api_version: str = "62.0"):
+    def __init__(self, instance_url: str, session_id: str, api_version: str = "64.0"):
         self.endpoint = f"{_normalise(instance_url)}/services/Soap/m/{api_version}"
         self.session_id = session_id
         self.api_version = api_version
@@ -388,7 +388,7 @@ class RetrieveError(RuntimeError):
 
 
 async def list_flows(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "64.0"
 ) -> List[FlowSummary]:
     """
     Every flow definition in the org, newest first.
@@ -425,7 +425,7 @@ async def list_flows(
 
 
 async def flow_builder_url(
-    instance_url: str, session_id: str, flow_api_name: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, flow_api_name: str, api_version: str = "64.0"
 ) -> str:
     """
     A link straight into Flow Builder for the version that was just deployed.
@@ -464,7 +464,7 @@ async def flow_builder_url(
 
 async def component_setup_url(
     instance_url: str, session_id: str, artifact_type: str, api_name: str,
-    api_version: str = "62.0", object_api_name: Optional[str] = None,
+    api_version: str = "64.0", object_api_name: Optional[str] = None,
 ) -> str:
     """
     A direct Setup link for a component that was just deployed, so a person
@@ -546,7 +546,7 @@ async def component_setup_url(
 
 
 async def retrieve_all_flows(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "64.0"
 ) -> Dict[str, str]:
     """
     Every flow in the org, in one retrieve.
@@ -655,7 +655,7 @@ async def _unmanaged_org_summary_types(
 
 
 async def retrieve_org_summary_zip(
-    instance_url: str, session_id: str, api_version: str = "62.0",
+    instance_url: str, session_id: str, api_version: str = "64.0",
     groups: Optional[List[str]] = None,
 ) -> bytes:
     """
@@ -684,7 +684,7 @@ async def retrieve_org_summary_zip(
 
 
 async def retrieve_flow(
-    instance_url: str, session_id: str, flow_api_name: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, flow_api_name: str, api_version: str = "64.0"
 ) -> str:
     """Pull one flow's metadata XML out of the org."""
     async with MetadataClient(instance_url, session_id, api_version) as client:
@@ -705,7 +705,7 @@ async def retrieve_flow(
 
 
 async def list_apex_classes(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "64.0"
 ) -> List[ApexClassSummary]:
     """
     Every Apex class in the org, newest first.
@@ -739,7 +739,7 @@ async def list_apex_classes(
 
 
 async def retrieve_apex_class(
-    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_name: str, api_version: str = "64.0"
 ) -> str:
     """Pull one Apex class's source out of the org via plain REST query."""
     base = _normalise(instance_url)
@@ -763,7 +763,7 @@ async def retrieve_apex_class(
 
 
 async def list_lwc_components(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "64.0"
 ) -> List[LwcSummary]:
     """
     Every Lightning Web Component bundle in the org, newest first - Tooling
@@ -813,7 +813,7 @@ def _parse_lwc_meta(meta_xml: str) -> Tuple[bool, List[str], Optional[str]]:
 
 
 async def retrieve_lwc_component(
-    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_name: str, api_version: str = "64.0"
 ) -> LightningComponent:
     """
     Pull one Lightning Web Component bundle out of the org. Unlike Apex's
@@ -860,7 +860,7 @@ class PermissionSetSummary:
 
 
 async def list_permission_sets(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "64.0"
 ) -> List[PermissionSetSummary]:
     """
     Every Permission Set in the org a person could actually pick as a merge
@@ -898,7 +898,7 @@ async def list_permission_sets(
 
 
 async def retrieve_permission_set(
-    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_name: str, api_version: str = "64.0"
 ) -> str:
     """
     Pull one Permission Set's current .permissionset XML out of the org, for
@@ -921,7 +921,7 @@ async def retrieve_permission_set(
 
 
 async def list_apex_triggers(
-    instance_url: str, session_id: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_version: str = "64.0"
 ) -> List[ApexTriggerSummary]:
     """Every Apex trigger in the org, newest first - same reasoning and same
     plain REST /query as list_apex_classes."""
@@ -950,7 +950,7 @@ async def list_apex_triggers(
 
 
 async def retrieve_apex_trigger(
-    instance_url: str, session_id: str, api_name: str, api_version: str = "62.0"
+    instance_url: str, session_id: str, api_name: str, api_version: str = "64.0"
 ) -> str:
     """Pull one Apex trigger's source out of the org via plain REST query."""
     base = _normalise(instance_url)
@@ -975,7 +975,7 @@ async def retrieve_apex_trigger(
 
 async def validate_flow(
     instance_url: str, session_id: str, flow_api_name: str, flow_xml: str,
-    api_version: str = "62.0", check_only: bool = True,
+    api_version: str = "64.0", check_only: bool = True,
 ) -> DeployResult:
     """One-shot helper: package a Flow and run it through the org."""
     zip_bytes = build_package(flow_api_name, flow_xml, api_version)
@@ -985,7 +985,7 @@ async def validate_flow(
 
 async def validate_bundle(
     instance_url: str, session_id: str, files: Dict[str, str], types: Dict[str, List[str]],
-    api_version: str = "62.0", check_only: bool = True,
+    api_version: str = "64.0", check_only: bool = True,
 ) -> DeployResult:
     """
     One-shot helper: package a mixed bundle - any combination of Object,

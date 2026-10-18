@@ -338,8 +338,8 @@ def main() -> int:
     parser.add_argument("--activate", action="store_true",
                         help="deploy the flow Active. Without this it deploys as "
                              "a Draft and does not run.")
-    parser.add_argument("--api-version", default="62.0",
-                        help="Salesforce API version (default 62.0)")
+    parser.add_argument("--api-version", default="64.0",
+                        help="Salesforce API version (default 64.0)")
     parser.add_argument("--no-validate", action="store_true",
                         help="design only; never contact the org")
     parser.add_argument("--provider", choices=sorted(PROVIDERS),

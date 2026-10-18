@@ -44,7 +44,7 @@ class ApexClass(BaseModel):
     description: Optional[str] = None
     # Not deployed - see CustomField.reasoning in ir_object.py.
     reasoning: Optional[str] = None
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     status: Literal["Active", "Inactive"] = "Active"
 
     @field_validator("api_name")
@@ -74,7 +74,7 @@ class ApexTrigger(BaseModel):
     description: Optional[str] = None
     # Not deployed - see CustomField.reasoning in ir_object.py.
     reasoning: Optional[str] = None
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     status: Literal["Active", "Inactive"] = "Active"
 
     @field_validator("api_name")

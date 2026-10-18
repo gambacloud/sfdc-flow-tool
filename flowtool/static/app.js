@@ -1583,7 +1583,7 @@ async function design() {
       provider: $("provider").value || null,
       effort: $("effort").value,
       activate: $("activate").checked,
-      api_version: $("apiVersion").value.trim() || "62.0",
+      api_version: $("apiVersion").value.trim() || "64.0",
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
     });
@@ -1608,7 +1608,7 @@ async function designLwc() {
       request: $("request").value,
       provider: $("provider").value || null,
       effort: $("effort").value,
-      api_version: $("apiVersion").value.trim() || "62.0",
+      api_version: $("apiVersion").value.trim() || "64.0",
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
     });
@@ -2592,7 +2592,7 @@ async function planAndBuildOnce(button) {
     request: $("planRequest").value,
     provider: $("provider").value || null,
     effort: $("effort").value,
-    api_version: $("apiVersion").value.trim() || "62.0",
+    api_version: $("apiVersion").value.trim() || "64.0",
     api_key: $("apiKey").value.trim() || null,
     model: $("model").value || null,
     auto_workers: $("autoWorkers").checked,

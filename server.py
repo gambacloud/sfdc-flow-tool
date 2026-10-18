@@ -220,7 +220,7 @@ class Session:
     result: Any
     kind: Literal["flow", "apex", "trigger", "lwc"] = "flow"
     activate: bool = False
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     # Bumped on every change; deploy compares the two.
     version: int = 1
     approved_version: int = 0
@@ -612,7 +612,7 @@ class DesignRequest(BaseModel):
     model: Optional[str] = None
     effort: Literal["medium", "high"] = "medium"
     activate: bool = False
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     api_key: Optional[str] = None
 
 
@@ -624,7 +624,7 @@ class LwcDesignRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     effort: Literal["medium", "high"] = "medium"
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     api_key: Optional[str] = None
 
 
@@ -707,7 +707,7 @@ class ImportRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     effort: Literal["medium", "high"] = "medium"
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     api_key: Optional[str] = None
 
 
@@ -1650,7 +1650,7 @@ class PlanRequest(BaseModel):
     # provider (see pick_worker_model). Off keeps one model for everything.
     auto_workers: bool = False
     effort: Literal["medium", "high"] = "medium"
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     api_key: Optional[str] = None
     # Opt-in Permission Set grant for whatever object/field steps this plan
     # produces - "new" creates one, "existing" merges into
@@ -1750,7 +1750,7 @@ class PlanSession:
     plan: Plan
     steps: List[StepResult]
     activate: bool = False
-    api_version: str = "62.0"
+    api_version: str = "64.0"
     version: int = 1
     approved_version: int = 0
     permission_set_config: Optional[PermissionSetConfig] = None

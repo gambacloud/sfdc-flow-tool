@@ -44,7 +44,7 @@ class LightningComponent(BaseModel):
     reasoning: Optional[str] = None
     is_exposed: bool = False
     targets: List[str] = Field(default_factory=list)
-    api_version: str = "62.0"
+    api_version: str = "64.0"
 
     @field_validator("api_name")
     @classmethod

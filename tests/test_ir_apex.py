@@ -16,7 +16,7 @@ class TestApexClassModel:
     def test_valid_class_is_accepted(self):
         cls = ApexClass(api_name="Invoice_Helper", body=VALID_BODY)
         assert cls.status == "Active"
-        assert cls.api_version == "62.0"
+        assert cls.api_version == "64.0"
 
     def test_empty_body_is_rejected(self):
         with pytest.raises(ValidationError, match="must not be empty"):

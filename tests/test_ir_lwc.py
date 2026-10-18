@@ -22,7 +22,7 @@ class TestLightningComponentModel:
         component = LightningComponent(api_name="contactCard", js=VALID_JS, html=VALID_HTML)
         assert component.is_exposed is False
         assert component.targets == []
-        assert component.api_version == "62.0"
+        assert component.api_version == "64.0"
 
     def test_empty_js_is_rejected(self):
         with pytest.raises(ValidationError, match="js must not be empty"):
