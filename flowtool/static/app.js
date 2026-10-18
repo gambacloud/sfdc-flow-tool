@@ -259,7 +259,7 @@ const PLAN_EXAMPLE_NOTES = {
   "ai-case-summary": { gets: "Two Case fields, a Prompt Template that answers in JSON, and a Flow that calls it.", before: "An org with Einstein generative AI and Prompt Builder enabled." },
   "ai-conversation-review": { gets: "A review object, a Prompt Template, an Apex class that builds the transcript, and a Flow that runs after a chat ends.", before: "Messaging (Enhanced Messaging) enabled and real chats to review. The tool cannot create test chats for you." },
   "agent-service-orders": { gets: "An Apex class, a Flow, and a draft service agent with two topics.", before: "The username of an Einstein Agent User (enter it under Options > Agent user). Publish and activate the agent in Agentforce Builder afterwards." },
-  "agent-employee-account-brief": { gets: "An Apex class, a Prompt Template, a Flow, and a draft employee agent with two topics.", before: "Nothing for the agent user - an employee agent needs none. Publish and activate it in Agentforce Builder afterwards." },
+  "agent-employee-account-brief": { gets: "An Apex class, a Prompt Template, a Flow, and a draft employee agent with two topics.", before: "Nothing for the agent user - an employee agent needs none. After deploying, publish and activate it from its step here." },
 };
 // Which mode ("new" | "open" | "plan") a reload should land back on, when a
 // single-Flow session and a plan session happen to both be stored at once
@@ -1293,6 +1293,73 @@ function agentUserField() {
   return label;
 }
 
+function planStepNote(text) {
+  const note = document.createElement("div");
+  note.className = "dim plan-step-note";
+  note.textContent = text;
+  return note;
+}
+
+function agentPublishText(info) {
+  return `Version ${info.version_number} published and ${info.status === "Active" ? "active" : info.status}.`;
+}
+
+// Shown on an employee agent's step once the plan deployed for real. Does what
+// `sf agent publish authoring-bundle` and `sf agent activate` do, on the server.
+function agentPublishRow(step) {
+  const row = document.createElement("div");
+  row.className = "agent-publish";
+  const button = document.createElement("button");
+  const info = (state.planAgentPublish || {})[step.api_name];
+  button.textContent = info ? "Publish a new version" : "Publish and activate";
+  const status = document.createElement("span");
+  status.className = "dim";
+  status.textContent = info
+    ? " " + agentPublishText(info)
+    : " Creates the agent's first version from the deployed draft and switches it on.";
+  button.onclick = () => planAgentPublish(step.api_name, button, status);
+  row.append(button, status);
+  return row;
+}
+
+async function planAgentPublish(agentName, button, status) {
+  busy(button, true, "Publishing...");
+  status.textContent = " Compiling, publishing and activating - this takes about half a minute.";
+  try {
+    await api("api/plan/agent/publish/start", {
+      session_id: state.planSessionId,
+      agent: agentName,
+      ...orgCredentials(),
+    });
+    const result = await poll("api/plan/agent/publish/status", { session_id: state.planSessionId });
+    if (!result.success) throw new Error(result.error);
+    state.planAgentPublish = result.plan.agent_publish || {};
+    status.textContent = " " + agentPublishText(result);
+    button.dataset.label = "Publish a new version"; // busy() restores this label
+  } catch (err) {
+    status.textContent = " Not published: " + err.message;
+    logError("Publish agent", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+function renderPlanSteps(data) {
+  state.planAgentUser = data.agent_user || "";
+  state.planDeployed = !!data.deployed;
+  state.planAgentPublish = data.agent_publish || {};
+  const container = $("planSteps");
+  const open = new Set(
+    [...container.querySelectorAll(".plan-step")].filter((c) => c.open).map((c) => c.dataset.step));
+  container.innerHTML = "";
+  (data.steps || []).forEach((step) => {
+    const card = renderPlanStep(step);
+    card.dataset.step = step.name;
+    if (open.has(step.name)) card.open = true;
+    container.appendChild(card);
+  });
+}
+
 function renderPlanStep(step) {
   const card = document.createElement("details");
   card.className = "plan-step " + step.artifact_type;
@@ -1399,7 +1466,17 @@ function renderPlanStep(step) {
         t.description + (t.actions.length ? `  (actions: ${t.actions.map((a) => `${a.api_name} -> ${a.target}`).join(", ")})` : ""),
       ]),
     ]));
-    if (step.agent_type !== "employee") body.appendChild(agentUserField());
+    if (step.agent_type === "employee") {
+      body.appendChild(planStepNote(
+        "Deploys as a draft. After a real deploy you can publish and activate it right here."));
+      if (state.planDeployed) body.appendChild(agentPublishRow(step));
+    } else {
+      body.appendChild(agentUserField());
+      body.appendChild(planStepNote(
+        "Deploys as a draft. A service agent has to be published and activated in Agentforce Builder "
+        + "(Setup > Agentforce Agents) - this tool cannot do that step for it - and it runs as the "
+        + "Einstein Agent User above."));
+    }
     const instructions = document.createElement("pre");
     instructions.textContent = step.instructions;
     body.appendChild(instructions);
@@ -1410,6 +1487,9 @@ function renderPlanStep(step) {
       ["Response", step.response_format + (step.output_keys.length ? ` (${step.output_keys.join(", ")})` : "")],
       ["Inputs", step.inputs.map((i) => `${i.name} (${i.type})`).join(", ") || "none"],
     ]));
+    body.appendChild(planStepNote(
+      "Deploys at API 64.0 or later (the plan's version is raised if needed) and its version is "
+      + "activated automatically after a real deploy, so a Flow or agent can call it straight away."));
     const instructions = document.createElement("pre");
     instructions.textContent = step.content;
     body.appendChild(instructions);
@@ -1483,10 +1563,7 @@ function renderPlan(data) {
     overview.appendChild(chip);
   });
 
-  const container = $("planSteps");
-  container.innerHTML = "";
-  state.planAgentUser = data.agent_user || "";
-  steps.forEach((step) => container.appendChild(renderPlanStep(step)));
+  renderPlanSteps(data);
 
   $("planReportLink").href = `api/plan/session/${data.session_id}/report`;
   $("planPackageLink").href = `api/plan/session/${data.session_id}/package`;
@@ -2844,6 +2921,7 @@ async function planDeploy() {
     });
     const result = await poll("api/plan/deploy/status", { session_id: state.planSessionId });
     renderPlanResult(result);
+    if (result.plan) renderPlanSteps(result.plan);
   } catch (err) {
     showError($("planGate").parentElement, err.message);
     logError("Deploy plan", err.message);

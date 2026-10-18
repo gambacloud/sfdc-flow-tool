@@ -101,6 +101,7 @@ from flowtool.xmlgen_platform_event import generate_platform_event
 from flowtool.xmlgen_prompt_template import generate_prompt_template
 from flowtool.xmlgen_agent import MissingAgentUser, generate_agent_files
 from flowtool.prompt_activation import activate_templates
+from flowtool.agent_publish import AgentPublishError, publish_employee_agent
 from flowtool.xmlgen_permset import generate_permission_set, merge_permission_set_xml
 from survey import Survey, text_report
 
@@ -1916,10 +1917,21 @@ class PlanSession:
     # instead of re-generating the whole plan - see _repair_plan.
     last_failures: List[str] = field(default_factory=list)
     last_component_failures: List[Any] = field(default_factory=list)
+    # The plan version a real deploy last succeeded for: an employee agent can be
+    # published from its step only while the deployed bundle is the one on screen.
+    deployed_version: int = 0
+    pending_publish: Optional["asyncio.Task"] = None
+    publishing_agent: Optional[str] = None
+    # Agent api name -> PublishResult.as_dict() of its last publish from here.
+    agent_publish: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     @property
     def approved(self) -> bool:
         return self.approved_version == self.version
+
+    @property
+    def deployed(self) -> bool:
+        return self.deployed_version == self.version
 
     def apply_policy(self) -> None:
         """Same call as Session.apply_policy: status/API version are the
@@ -2076,6 +2088,8 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
         "reference": session.reference,
         "agent_user": session.plan.agent_user,
         "steps": [_step_view(r) for r in session.steps],
+        "deployed": session.deployed,
+        "agent_publish": session.agent_publish,
         "permission_set": _permission_set_view(session),
         "usage": session.provider.usage.as_dict(),
     }
@@ -2487,6 +2501,7 @@ async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
     result = pending.task.result()
     urls: Dict[str, str] = {}
     if result.success:
+        session.deployed_version = session.version
         urls = await _plan_component_urls(session, pending.instance_url, pending.token)
         if session.permission_set_config is not None:
             urls["Permission Set"] = await component_setup_url(
@@ -2501,7 +2516,59 @@ async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
         "failures": _failures(result),
         "instance_url": pending.instance_url,
         "setup_urls": urls,
+        "plan": plan_view(session_id, session),
     }
+
+
+class AgentPublishRequest(OrgRequest):
+    agent: str
+
+
+@app.post("/api/plan/agent/publish/start")
+async def plan_agent_publish_start(body: AgentPublishRequest) -> Dict[str, Any]:
+    """Publish and activate an employee agent this plan just deployed - what
+    `sf agent publish authoring-bundle` + `sf agent activate` do, over HTTP (see
+    flowtool/agent_publish.py). Service agents stay manual in Agentforce Builder."""
+    session = get_plan_session(body.session_id)
+    agent = next(
+        (r.value for r in session.steps if isinstance(r.value, Agent) and r.value.api_name == body.agent), None,
+    )
+    if agent is None:
+        raise HTTPException(404, f"This plan has no agent named {body.agent}.")
+    if agent.agent_type != "employee":
+        raise HTTPException(
+            400, "Only employee agents can be published from here. Publish a service agent in Agentforce Builder.",
+        )
+    if not session.deployed:
+        raise HTTPException(403, "Deploy the plan before publishing its agent.")
+    if session.pending_publish is not None and not session.pending_publish.done():
+        raise HTTPException(409, "A publish is already running for this plan.")
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    session.pending_publish = asyncio.create_task(
+        publish_employee_agent(url, token, agent.api_name, api_version=_deploy_api_version(session)),
+    )
+    session.publishing_agent = agent.api_name
+    return {"started": True}
+
+
+@app.get("/api/plan/agent/publish/status")
+async def plan_agent_publish_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    task = session.pending_publish
+    if task is None:
+        raise HTTPException(400, "No publish in progress - call /api/plan/agent/publish/start first.")
+    if not task.done():
+        return {"done": False}
+    session.pending_publish = None
+    try:
+        result = task.result()
+    except AgentPublishError as exc:
+        return {"done": True, "success": False, "agent": session.publishing_agent, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 - a network failure is shown, not a 500
+        return {"done": True, "success": False, "agent": session.publishing_agent,
+                "error": f"{type(exc).__name__}: {exc}"}
+    session.agent_publish[result.agent] = result.as_dict()
+    return {"done": True, "success": True, **result.as_dict(), "plan": plan_view(session_id, session)}
 
 
 async def _plan_component_urls(
