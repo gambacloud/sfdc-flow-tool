@@ -245,3 +245,32 @@ def test_number_formula_gets_a_default_precision_and_others_reject_one():
     assert _field(type="Formula", formula="1 + 1", formula_returns="Number").precision == 18
     with pytest.raises(ValueError, match="precision/scale"):
         _field(type="Formula", formula="1 = 1", formula_returns="Checkbox", precision=5)
+
+
+def test_a_picklist_default_must_be_one_of_its_values():
+    import pytest
+    from flowtool.ir_object import CustomField
+    base = dict(api_name="Risk__c", object_api_name="Account", label="Risk", type="Picklist", picklist_values=["Low", "High"])
+    assert CustomField(**base, default_value="Low").default_value == "Low"
+    with pytest.raises(ValueError, match="one of its values"):
+        CustomField(**base, default_value="Medium")
+
+
+def test_a_picklist_default_is_flagged_on_the_value_not_written_as_a_formula():
+    from flowtool.ir_object import CustomField
+    from flowtool.xmlgen_object import generate_field_delta
+    xml = generate_field_delta([CustomField(api_name="Risk__c", object_api_name="Account", label="Risk", type="Picklist",
+                                     picklist_values=["Low", "High"], default_value="Low")])
+    assert "<defaultValue>" not in xml
+    assert "<fullName>Low</fullName>\n                    <default>true</default>" in xml.replace("\r\n", "\n")
+    assert "<fullName>High</fullName>\n                    <default>false</default>" in xml.replace("\r\n", "\n")
+
+
+def test_a_required_lookup_restricts_delete_and_an_optional_one_clears_the_link():
+    from flowtool.ir_object import CustomField
+    from flowtool.xmlgen_object import generate_field_delta
+    def xml(required):
+        return generate_field_delta([CustomField(api_name="Account__c", object_api_name="Score__c", label="Account",
+                                                 type="Lookup", reference_to="Account", required=required)])
+    assert "<deleteConstraint>Restrict</deleteConstraint>" in xml(True)
+    assert "<deleteConstraint>SetNull</deleteConstraint>" in xml(False)

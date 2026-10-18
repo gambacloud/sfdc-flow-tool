@@ -52,8 +52,16 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
         # A Checkbox has no `required` concept - it always holds a value - but
         # it must carry an explicit default, or the org rejects the deploy.
         _sub(el, "defaultValue", field.default_value or "false")
-    elif field.default_value is not None:
+    elif field.default_value is not None and field.type != "Picklist":
+        # A picklist's default is flagged on the value itself, below - a defaultValue
+        # formula here is read as a formula and "Low" is "not a field".
         _sub(el, "defaultValue", field.default_value)
+
+    # deleteConstraint: a required Lookup must say what deleting the parent does
+    # ("must specify either cascade delete or restrict delete"); Restrict keeps
+    # the child rows safe. An optional one just clears the link when the parent goes.
+    if field.type == "Lookup":
+        _sub(el, "deleteConstraint", "Restrict" if field.required else "SetNull")
 
     # description
     if field.description:
@@ -115,7 +123,7 @@ def _fill_field(el: ET.Element, field: CustomField) -> None:
         for value in field.picklist_values:
             entry = _sub(definition, "value")
             _sub(entry, "fullName", value)
-            _sub(entry, "default", "false")
+            _sub(entry, "default", _bool(field.default_value == value))
 
     # visibleLines
     if field.type == "LongTextArea":

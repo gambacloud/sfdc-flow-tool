@@ -112,6 +112,14 @@ def _bracket_balance_errors(body: str) -> List[str]:
     return problems
 
 
+# An inner class (declared on an indented line) that implements Database.Batchable.
+_INNER_BATCHABLE_RE = re.compile(
+    r"^[ \t]+(?:(?:public|private|global|with sharing|without sharing|inherited sharing)\s+)*"
+    r"class\s+\w+[^{]*\bDatabase\.Batchable\b",
+    re.MULTILINE,
+)
+
+
 def heuristic_errors(api_name: str, body: str) -> List[str]:
     """
     Cheap, dependency-free sanity checks on Apex source: brace/paren/bracket
@@ -125,6 +133,14 @@ def heuristic_errors(api_name: str, body: str) -> List[str]:
     straight from the JSON the model returned, not a validated ApexClass.
     """
     problems = _bracket_balance_errors(body)
+
+    if _INNER_BATCHABLE_RE.search(body):
+        problems.append(
+            "an inner class cannot implement Database.Batchable (the org rejects it: 'Only top-level "
+            "classes can implement Database.Batchable'). Make the batch the top-level class itself - "
+            "implement Database.Batchable<SObject> (and Schedulable if it must run on a schedule) on "
+            "the one class named by api_name"
+        )
 
     match = _CLASS_DECL_RE.search(body)
     if not match:

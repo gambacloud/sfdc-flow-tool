@@ -193,6 +193,11 @@ class CustomField(BaseModel):
 
         if self.type == "Picklist" and not self.picklist_values:
             raise ValueError(f"field {self.api_name!r}: Picklist requires picklist_values")
+        if self.type == "Picklist" and self.default_value is not None and self.default_value not in self.picklist_values:
+            raise ValueError(
+                f"field {self.api_name!r}: a Picklist default must be one of its values "
+                f"({', '.join(self.picklist_values)}), got {self.default_value!r}"
+            )
         if self.type != "Picklist" and self.picklist_values:
             raise ValueError(
                 f"field {self.api_name!r}: picklist_values only applies to Picklist"

@@ -270,9 +270,12 @@ specialised generator afterward, and that generator sees only the step's own \
 
 ## Step types
 
-- `object` - a new Custom Object.
+- `object` - a new Custom Object. Only the object itself: it has no fields of its \
+own, so never ask an object step for a relationship or any other field.
 - `field` - a new Custom Field, on a standard object or a custom one from \
-another step.
+another step. A relationship to another object (a Lookup or Master-Detail, for \
+example a custom object that belongs to an Account) is a field too: give it its \
+own `field` step, and make the Apex, Flows and tests that use it depend on that step.
 - `apex` - a new Apex Class. A test class (an `@isTest` class covering \
 another Apex class) is also an `apex` step - always its own separate step, \
 never folded into the class it tests as extra methods on the same file.

@@ -72,3 +72,13 @@ class TestHeuristicErrors:
         body = "public class Outer {\n    class Inner {}\n}"
         problems = heuristic_errors("Outer", body)
         assert problems == []
+
+
+def test_an_inner_class_implementing_batchable_is_rejected_with_the_fix():
+    from flowtool.ir_apex import heuristic_errors
+    inner = ("public with sharing class A implements Schedulable {\n"
+             "    public void execute(SchedulableContext sc) {}\n"
+             "    public with sharing class B implements Database.Batchable<SObject> {\n    }\n}")
+    top = "public with sharing class A implements Database.Batchable<SObject>, Schedulable {\n}"
+    assert any("top-level" in p or "inner class" in p for p in heuristic_errors("A", inner))
+    assert heuristic_errors("A", top) == []

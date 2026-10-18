@@ -939,6 +939,9 @@ class Foo { ... }`) must use exactly that name - the deployed file is named \
 after api_name, so a mismatch fails to deploy.
 - Write complete, compilable Apex: balanced braces, a real class declaration, \
 no placeholders or "TODO" left where logic belongs.
+- A class that implements `Database.Batchable` must be the top-level class itself \
+(the org rejects it as an inner class). To run a batch nightly, make that one class \
+implement both `Database.Batchable<SObject>` and `Schedulable`.
 - Prefer the smallest class that does what was asked. Do not add error \
 handling, logging, or methods that were not requested.
 - Do not invent a reference to a field, object or another class the request \
