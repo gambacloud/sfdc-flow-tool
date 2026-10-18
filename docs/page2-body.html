@@ -1,0 +1,39 @@
+<h1>Quick start</h1>
+<div class="sub">From zero to a validated deploy in about 10 minutes. Written for a Salesforce admin; no coding needed.</div>
+<div class="bar"></div>
+
+<div class="steps">
+<div class="st"><span class="n">1</span><div><b>Open it. There is nothing to set up.</b> Go to <a href="https://salesforce-debugtool.herokuapp.com/flow-tool/">salesforce-debugtool.herokuapp.com/flow-tool</a>. A model allowance for reasonable use is built in, so you can start immediately. Optional: under <b>Options</b>, paste your own Anthropic API key (BYOK) for heavier use or your own billing and data terms; it stays in your browser only. Leave Model on "provider default" and Effort on <i>medium</i>.</div></div>
+
+<div class="st"><span class="n">2</span><div><b>Connect an org (optional, use a sandbox first).</b> Without it you can design and download everything; with it you can open existing metadata, validate and deploy. Use <b>Log in (Sandbox)</b> if shown, otherwise <b>Manual entry</b>: paste the instance URL and a session ID. Fastest ways to get the session ID: a Visualforce page containing <code>{!GETSESSIONID()}</code>, or <code>sf org display</code> / <code>sf org auth show-access-token</code>. It is held in the tab only.</div></div>
+
+<div class="st"><span class="n">3</span><div><b>Pick a mode.</b>
+<span class="tag">Build multiple things</span> one request becomes an ordered plan: objects, fields, Apex, triggers, flows, LWC, platform events, prompt templates, Agentforce agents, deployed together in one transaction (a flow can use a field created in the same request). A single Flow or LWC is simply a one-step plan.
+<span class="tag">Open one from the org</span> an existing Flow, Apex class, trigger, LWC, prompt template, custom object or custom field: have it explained, then change it. An object opens as a plan, with a step per field.
+<span class="tag">Customer portal</span> builds an Experience Cloud site: public home page, self-registration, a My Account page and optional chat.</div></div>
+
+<div class="st"><span class="n">4</span><div><b>Write the request like a spec.</b> Name the object and fields, the trigger ("when a Request is set to Approved"), the conditions, and the outcome. One process per request. The <b>Examples</b> button has ready specs, from a single field to full solutions and AI examples (a prompt template, a service agent, an employee agent), each saying what you get and what to prepare. <b>Use exact API names for anything that already exists</b> (e.g. <code>Account.Tier__c</code>): the tool does not read your org's schema while designing, so a loosely named field may be guessed wrongly and only fails at Validate.
+<div class="ex">"Create a Project Request object with a Status picklist (New, Approved, Rejected). Add a flow that, when a request becomes Approved, creates a follow-up Task for the record owner."</div></div></div>
+
+<div class="st"><span class="n">5</span><div><b>Review, then refine.</b> Each step is a card. Flows show <b>Diagram, Explain, Documentation, Test</b> and <b>Flow XML</b>; objects show a field table; Apex shows the source; prompt templates show their text and answer keys; agents show their topics and actions; LWC adds a <b>Preview</b>. Not right? Type the change in <b>Change something</b> (or <b>Revise plan</b> to add or remove steps). Warnings sit above the diagram.</div></div>
+
+<div class="st"><span class="n">6</span><div><b>Approve, Validate, Deploy.</b> <b>Approve</b> unlocks <b>Validate</b> (check-only against the org, nothing created), which unlocks <b>Deploy</b>. Flows deploy as <b>Draft</b> unless you tick <i>Deploy Active</i>. New objects and fields get access on a Permission Set. Agents deploy as drafts: an employee agent can be published and activated from its own step, a service agent (which asks for the Einstein Agent User it runs as) in Agentforce Builder. Any edit after approving requires approving again. The org's own error, if any, is fed back to the model and the fix returns for approval.</div></div>
+
+<div class="st"><span class="n">7</span><div><b>Take it with you.</b> <b>Download report</b> (HTML: design, reasons, test guide), <b>Download package (.zip)</b> to deploy with sf CLI or Workbench, <b>Push to Git (PR)</b> to commit it to a new branch, or <b>Share this</b> for a 24-hour link plus password so a colleague can pick up the review.</div></div>
+</div>
+
+<div class="shots">
+<figure><img src="shot-build.jpg"><figcaption>Build multiple things: a plain-language request, or start from an example.</figcaption></figure>
+<figure><img src="shot-manual.jpg"><figcaption>Manual entry: instance URL plus session ID, no Connected App.</figcaption></figure>
+</div>
+
+<h2>Good to know</h2>
+<table>
+<tr><th style="width:30%">If you see</th><th>It means</th></tr>
+<tr><td>Validate says a field or object is missing</td><td>The request named it loosely and the model guessed. Put the exact API name in the request and revise.</td></tr>
+<tr><td>Flow refused when opening</td><td>It uses a construct the tool cannot represent exactly (it names it). Refused rather than redrawn wrongly, so nothing is lost on redeploy.</td></tr>
+<tr><td>INVALID_SESSION_ID</td><td>The session ID expired or belongs to another org. Reconnect.</td></tr>
+<tr><td>Apex fails only at Validate</td><td>Pre-checks are structural (braces, class name); the compile happens in the org, and the error comes back for a repair.</td></tr>
+<tr><td>High demand / quota error</td><td>The model provider throttled. Retry, or pick another model in Options.</td></tr>
+</table>
+<div class="note">New flows are created with a <b>GC_</b> name prefix so they are easy to find. Start in a sandbox, review the Test tab's guide, then promote the package through your normal release path.</div>

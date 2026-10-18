@@ -1,0 +1,137 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>SFDC Build Tool</title><style>
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+.pg{width:210mm;height:297mm;page-break-after:always;overflow:hidden;padding:9mm 12mm 8mm;font:8.7pt/1.3 "Segoe UI",Arial,sans-serif;color:#1d2433;position:relative}body{margin:0}
+h1{font-size:20pt;margin:0;letter-spacing:-.3px}
+.sub{color:#4a5568;font-size:10pt;margin:1px 0 4px}
+.link{font-size:9.2pt;margin-bottom:5px}.link a{color:#0b6bcb;font-weight:600;text-decoration:none}
+.bar{height:3px;background:linear-gradient(90deg,#0b6bcb,#27a3a3);margin-bottom:6px;border-radius:2px}
+h2{font-size:9.6pt;margin:7px 0 3px;color:#0b4f99;text-transform:uppercase;letter-spacing:.6px}
+.flowx{display:flex;gap:4px;align-items:stretch;margin:5px 0 1px}
+.flow div{flex:1;background:#eef4fb;border:1px solid #cfdff2;border-radius:6px;padding:3px 5px;font-size:8.2pt;text-align:center}
+.flow b{display:block;color:#0b4f99;font-size:8.6pt}
+.flow i{align-self:center;color:#7a8aa0;font-style:normal}
+.cols{display:flex;gap:8px}.cols>div{flex:1;border:1px solid #d9e1ec;border-radius:7px;padding:5px 9px}
+.cols h3{margin:0 0 2px;font-size:9.4pt}
+.a h3{color:#555}.b h3{color:#0b6b3a}.b{background:#f3faf6;border-color:#bfe3cd}
+ul{margin:1px 0 0;padding-left:13px}li{margin:0}
+table{border-collapse:collapse;width:100%;font-size:8.1pt;margin-top:2px}
+td,th{border:1px solid #d9e1ec;padding:1.5px 5px;text-align:left;vertical-align:top}
+th{background:#f1f5fa}
+.note{font-size:7.9pt;color:#5a667a;margin-top:3px}
+.two{display:flex;gap:8px}.two>div{flex:1}
+.beta{position:absolute;left:12mm;right:12mm;bottom:6mm;font-size:7.8pt;color:#4a5568;background:#fff8e6;border:1px solid #f0dca0;border-radius:5px;padding:3px 7px}
+
+.st{display:flex;gap:8px;margin:0 0 5px}.n{flex:none;width:18px;height:18px;border-radius:50%;background:#0b6bcb;color:#fff;font-weight:700;font-size:8.5pt;text-align:center;line-height:18px;margin-top:1px}
+.tag{display:inline-block;background:#f1e8fb;color:#5b2d99;border-radius:4px;padding:0 5px;font-weight:600;font-size:8pt}
+.ex{margin-top:3px;background:#f1f5fa;border-left:3px solid #0b6bcb;padding:3px 7px;font-style:italic;color:#33405a}
+code{background:#f1f3f6;padding:0 3px;border-radius:3px;font-size:8pt}
+.shots{display:flex;gap:10px;margin:6px 0 2px}.shots figure{flex:1;margin:0}.shots img{width:100%;border:1px solid #d9e1ec;border-radius:5px;display:block}
+figcaption{font-size:7.6pt;color:#5a667a;margin-top:2px}
+a{color:#0b6bcb}
+</style></head><body><div class="pg">
+<h1>SFDC Build Tool</h1>
+<div class="sub">Describe a Salesforce need in plain language. Review it. Deploy it, or take the package with you.</div>
+<div class="link">Try it: <a href="https://salesforce-debugtool.herokuapp.com/flow-tool/">salesforce-debugtool.herokuapp.com/flow-tool</a></div>
+<div class="bar"></div>
+
+<div><b>Build:</b> create Flows, Apex, LWCs, objects, fields, prompt templates and agents from one request. The model never writes raw metadata XML: it drafts a validated design, and the diagram you approve and the XML that deploys come from that same source, so they cannot disagree.</div>
+<svg viewBox="0 0 718 124" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="h" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7z" fill="#7a8aa0"/></marker>
+<marker id="h2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7z" fill="#7b3fc4"/></marker></defs>
+<style>.hum{fill:#eef4fb;stroke:#9bb9de}.ai{fill:#f1e8fb;stroke:#7b3fc4;stroke-width:1.6}.code{fill:#f1f3f6;stroke:#aab3c0}.ok{fill:#e9f6ee;stroke:#7fc29a}
+.bt{font:700 9.5px Segoe UI,Arial;text-anchor:middle;fill:#1d2433}.bs{font:8px Segoe UI,Arial;text-anchor:middle;fill:#4a5568}
+.ar{stroke:#7a8aa0;fill:none;stroke-width:1.3}.lp{stroke:#7b3fc4;fill:none;stroke-width:1.2;stroke-dasharray:4 3}.lt{font:italic 8px Segoe UI,Arial;text-anchor:middle;fill:#5b2d99;stroke:#fff;stroke-width:3;paint-order:stroke}</style>
+<rect x="0" y="6" width="108" height="46" rx="6" class="hum"/><text x="54" y="22" class="bt">Your request</text><text x="54" y="34" class="bs">plain text,</text><text x="54" y="44" class="bs">any language</text><rect x="122" y="6" width="108" height="46" rx="6" class="ai"/><text x="176" y="22" class="bt">LLM (Build)</text><text x="176" y="34" class="bs">plans the pieces,</text><text x="176" y="44" class="bs">drafts the design</text><rect x="244" y="6" width="108" height="46" rx="6" class="code"/><text x="298" y="22" class="bt">Rules checks (the tool)</text><text x="298" y="34" class="bs">schema, references,</text><text x="298" y="44" class="bs">Salesforce rules</text><rect x="366" y="6" width="108" height="46" rx="6" class="hum"/><text x="420" y="22" class="bt">You review</text><text x="420" y="34" class="bs">diagram, explanation,</text><text x="420" y="44" class="bs">test guide</text><rect x="488" y="6" width="108" height="46" rx="6" class="ok"/><text x="542" y="22" class="bt">You approve</text><text x="542" y="34" class="bs">nothing moves</text><text x="542" y="44" class="bs">without it</text><rect x="610" y="6" width="108" height="46" rx="6" class="code"/><text x="664" y="22" class="bt">You deploy</text><text x="664" y="34" class="bs">or take the package</text><text x="664" y="44" class="bs">(existing build)</text><path d="M108 29 H122" class="ar" marker-end="url(#h)"/><path d="M230 29 H244" class="ar" marker-end="url(#h)"/><path d="M352 29 H366" class="ar" marker-end="url(#h)"/><path d="M474 29 H488" class="ar" marker-end="url(#h)"/><path d="M596 29 H610" class="ar" marker-end="url(#h)"/><path d="M298 52 V70 H152 V54" class="lp" marker-end="url(#h2)"/><text x="356" y="73" class="lt">fails: LLM repairs itself</text><path d="M420 52 V88 H176 V54" class="lp" marker-end="url(#h2)"/><text x="298.0" y="98" class="lt">Refine: you ask for a change in chat</text><path d="M664 52 V106 H200 V54" class="lp" marker-end="url(#h2)"/><text x="432.0" y="116" class="lt">org rejects: its error goes back to the LLM</text></svg>
+<div class="note"><b>Where the AI is:</b> the LLM understands the request, splits it into pieces, drafts each design, explains it, and applies your changes. Everything that must be exactly right (validation, XML, approval, deploy) is deterministic code, or you.</div>
+
+<h2>Without vs. with an org connection</h2>
+<div class="cols">
+<div class="a"><h3>Not connected (design only)</h3>
+<ul><li>Generate and refine Flows, Apex, LWC, objects, fields, AI prompts, agents, in one plan</li>
+<li>Diagram, plain-English explanation, generated code, test guide</li>
+<li>Download the report and a ready Metadata API package (.zip); deploy it yourself with sf CLI / Workbench</li>
+<li>Share a review link with a colleague</li></ul>
+<div class="note">Never contacts a Salesforce org.</div></div>
+<div class="b"><h3>Connected to an org</h3>
+<ul><li>Everything on the left, plus:</li>
+<li><b>Browse and open existing</b> Flows, Apex, triggers, LWCs, objects, fields, prompts; ask what they do, change them</li>
+<li><b>Validate</b> against the real org (check-only, nothing created)</li>
+<li><b>Deploy</b> in one transaction, with a link into Flow Builder</li>
+<li>Org errors go back to the model for a fix, then return for approval</li></ul>
+<div class="note"><b>Two ways in:</b> OAuth login, or <b>manual entry</b> (paste your instance URL and session ID), which needs <b>no Connected App</b> and no admin setup.</div></div>
+</div>
+
+<h2>What it builds today</h2>
+<div class="two"><div><ul>
+<li><b>Flow types:</b> record-triggered (before or after save, before delete), scheduled, platform-event-triggered, autolaunched, screen, and orchestration.</li>
+<li><b>Flow elements:</b> decisions, loops, get/create/update/delete records, subflows, actions, scheduled paths, pause, custom errors, screens.</li></ul></div>
+<div><ul>
+<li><b>Other metadata:</b> Apex classes and triggers, LWC, custom objects and fields, platform events, custom metadata, permission sets, prompt templates, Agentforce agents.</li>
+<li><b>Preview:</b> Flows render as a diagram; LWCs get a live structural preview of the UI.</li>
+<li><b>Customer portal tab:</b> public site, sign-up, My Account, chat.</li></ul></div></div>
+
+<h2>The report: what you hand to a reviewer</h2>
+<div>One self-contained HTML file per request (print it to PDF). For every piece it contains the <b>design</b> (diagram, field table or source), the model's <b>reason</b> for the choice, the <b>LWC preview</b>, and <b>how to test it</b>: for a record-triggered flow, a ready SOQL query for a record that satisfies the entry criteria; for a screen flow, the inputs Debug will ask for.</div>
+
+<h2>Privacy: use ours, or bring your own key</h2>
+<div><b>Works out of the box:</b> a server-side model allowance covers reasonable use, so you can start immediately with nothing to set up. For heavier use, or when your data terms require it, paste <b>your company's Anthropic API key (BYOK)</b>: usage, billing and data terms are then governed by your own Anthropic agreement. (Gemini and Ollama are also supported.) No account system either way.</div>
+<table>
+<tr><th style="width:24%">What</th><th style="width:24%">Where it lives</th><th>Detail</th></tr>
+<tr><td>Your API key (BYOK)</td><td>Your browser only</td><td>Saved in that browser's local storage and sent with each request so the server can call the model. Never written to disk or a database.</td></tr>
+<tr><td>Salesforce token</td><td>Browser memory only</td><td>Held for the tab, not saved; gone on close or reload. Your org's metadata is fetched on demand and discarded.</td></tr>
+<tr><td>Work in progress</td><td>Server memory</td><td>Stateless in the sense that matters: no database, no accounts, no history. A restart forgets everything.</td></tr>
+
+<tr><td>Share link (optional)</td><td>Short-lived store</td><td>Only if you press Share: unguessable link plus 6-digit password, auto-deleted after 24 hours.</td></tr>
+</table>
+<div class="note">Hosted, your prompts pass through the server's memory on the way to Anthropic. For strict environments the same tool runs <b>self-hosted</b> (one Python package, or locally with the sf CLI), so traffic goes only from your machine to Anthropic and your org.</div>
+
+<h2>What it costs in tokens</h2>
+<table>
+<tr><th>Task</th><th>Typical model cost*</th><th>Task</th><th>Typical model cost*</th></tr>
+<tr><td>Object, field, small Apex class</td><td>about $0.01 to $0.03</td><td>Multi-piece plan (4 to 6 steps)</td><td>about $0.20 to $0.80</td></tr>
+<tr><td>One Flow, incl. a repair round</td><td>about $0.05 to $0.30</td><td>Each follow-up "change it" request</td><td>about $0.02 to $0.15</td></tr>
+</table>
+<div class="note">*Estimates from list prices and prompt sizes; a live token and cost meter in the app shows actual spend per session, which is the source of truth.</div>
+
+<div class="beta"><b>Early build:</b> free for fair use, no cost and no registration. Hosted on Heroku. Python-based; features are still being added. Human-in-the-loop by design: the model proposes, you decide.</div>
+</div><div class="pg"><h1>Quick start</h1>
+<div class="sub">From zero to a validated deploy in about 10 minutes. Written for a Salesforce admin; no coding needed.</div>
+<div class="bar"></div>
+
+<div class="steps">
+<div class="st"><span class="n">1</span><div><b>Open it. There is nothing to set up.</b> Go to <a href="https://salesforce-debugtool.herokuapp.com/flow-tool/">salesforce-debugtool.herokuapp.com/flow-tool</a>. A model allowance for reasonable use is built in, so you can start immediately. Optional: under <b>Options</b>, paste your own Anthropic API key (BYOK) for heavier use or your own billing and data terms; it stays in your browser only. Leave Model on "provider default" and Effort on <i>medium</i>.</div></div>
+
+<div class="st"><span class="n">2</span><div><b>Connect an org (optional, use a sandbox first).</b> Without it you can design and download everything; with it you can open existing metadata, validate and deploy. Use <b>Log in (Sandbox)</b> if shown, otherwise <b>Manual entry</b>: paste the instance URL and a session ID. Fastest ways to get the session ID: a Visualforce page containing <code>{!GETSESSIONID()}</code>, or <code>sf org display</code> / <code>sf org auth show-access-token</code>. It is held in the tab only.</div></div>
+
+<div class="st"><span class="n">3</span><div><b>Pick a mode.</b>
+<span class="tag">Build multiple things</span> one request becomes an ordered plan: objects, fields, Apex, triggers, flows, LWC, platform events, prompt templates, Agentforce agents, deployed together in one transaction (a flow can use a field created in the same request). A single Flow or LWC is simply a one-step plan.
+<span class="tag">Open one from the org</span> an existing Flow, Apex class, trigger, LWC, prompt template, custom object or custom field: have it explained, then change it. An object opens as a plan, with a step per field.
+<span class="tag">Customer portal</span> builds an Experience Cloud site: public home page, self-registration, a My Account page and optional chat.</div></div>
+
+<div class="st"><span class="n">4</span><div><b>Write the request like a spec.</b> Name the object and fields, the trigger ("when a Request is set to Approved"), the conditions, and the outcome. One process per request. The <b>Examples</b> button has ready specs, from a single field to full solutions and AI examples (a prompt template, a service agent, an employee agent), each saying what you get and what to prepare. <b>Use exact API names for anything that already exists</b> (e.g. <code>Account.Tier__c</code>): the tool does not read your org's schema while designing, so a loosely named field may be guessed wrongly and only fails at Validate.
+<div class="ex">"Create a Project Request object with a Status picklist (New, Approved, Rejected). Add a flow that, when a request becomes Approved, creates a follow-up Task for the record owner."</div></div></div>
+
+<div class="st"><span class="n">5</span><div><b>Review, then refine.</b> Each step is a card. Flows show <b>Diagram, Explain, Documentation, Test</b> and <b>Flow XML</b>; objects show a field table; Apex shows the source; prompt templates show their text and answer keys; agents show their topics and actions; LWC adds a <b>Preview</b>. Not right? Type the change in <b>Change something</b> (or <b>Revise plan</b> to add or remove steps). Warnings sit above the diagram.</div></div>
+
+<div class="st"><span class="n">6</span><div><b>Approve, Validate, Deploy.</b> <b>Approve</b> unlocks <b>Validate</b> (check-only against the org, nothing created), which unlocks <b>Deploy</b>. Flows deploy as <b>Draft</b> unless you tick <i>Deploy Active</i>. New objects and fields get access on a Permission Set. Agents deploy as drafts: an employee agent can be published and activated from its own step, a service agent (which asks for the Einstein Agent User it runs as) in Agentforce Builder. Any edit after approving requires approving again. The org's own error, if any, is fed back to the model and the fix returns for approval.</div></div>
+
+<div class="st"><span class="n">7</span><div><b>Take it with you.</b> <b>Download report</b> (HTML: design, reasons, test guide), <b>Download package (.zip)</b> to deploy with sf CLI or Workbench, <b>Push to Git (PR)</b> to commit it to a new branch, or <b>Share this</b> for a 24-hour link plus password so a colleague can pick up the review.</div></div>
+</div>
+
+<div class="shots">
+<figure><img src="shot-build.jpg"><figcaption>Build multiple things: a plain-language request, or start from an example.</figcaption></figure>
+<figure><img src="shot-manual.jpg"><figcaption>Manual entry: instance URL plus session ID, no Connected App.</figcaption></figure>
+</div>
+
+<h2>Good to know</h2>
+<table>
+<tr><th style="width:30%">If you see</th><th>It means</th></tr>
+<tr><td>Validate says a field or object is missing</td><td>The request named it loosely and the model guessed. Put the exact API name in the request and revise.</td></tr>
+<tr><td>Flow refused when opening</td><td>It uses a construct the tool cannot represent exactly (it names it). Refused rather than redrawn wrongly, so nothing is lost on redeploy.</td></tr>
+<tr><td>INVALID_SESSION_ID</td><td>The session ID expired or belongs to another org. Reconnect.</td></tr>
+<tr><td>Apex fails only at Validate</td><td>Pre-checks are structural (braces, class name); the compile happens in the org, and the error comes back for a repair.</td></tr>
+<tr><td>High demand / quota error</td><td>The model provider throttled. Retry, or pick another model in Options.</td></tr>
+</table>
+<div class="note">New flows are created with a <b>GC_</b> name prefix so they are easy to find. Start in a sandbox, review the Test tab's guide, then promote the package through your normal release path.</div>
+</div></body></html>

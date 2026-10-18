@@ -1,0 +1,91 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>SFDC Build Tool - overview</title>
+<style>
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+body{margin:0;width:210mm;height:297mm;padding:9mm 12mm 8mm;font:8.7pt/1.3 "Segoe UI",Arial,sans-serif;color:#1d2433;position:relative}
+h1{font-size:20pt;margin:0;letter-spacing:-.3px}
+.sub{color:#4a5568;font-size:10pt;margin:1px 0 4px}
+.link{font-size:9.2pt;margin-bottom:5px}.link a{color:#0b6bcb;font-weight:600;text-decoration:none}
+.bar{height:3px;background:linear-gradient(90deg,#0b6bcb,#27a3a3);margin-bottom:6px;border-radius:2px}
+h2{font-size:9.6pt;margin:7px 0 3px;color:#0b4f99;text-transform:uppercase;letter-spacing:.6px}
+.flowx{display:flex;gap:4px;align-items:stretch;margin:5px 0 1px}
+.flow div{flex:1;background:#eef4fb;border:1px solid #cfdff2;border-radius:6px;padding:3px 5px;font-size:8.2pt;text-align:center}
+.flow b{display:block;color:#0b4f99;font-size:8.6pt}
+.flow i{align-self:center;color:#7a8aa0;font-style:normal}
+.cols{display:flex;gap:8px}.cols>div{flex:1;border:1px solid #d9e1ec;border-radius:7px;padding:5px 9px}
+.cols h3{margin:0 0 2px;font-size:9.4pt}
+.a h3{color:#555}.b h3{color:#0b6b3a}.b{background:#f3faf6;border-color:#bfe3cd}
+ul{margin:1px 0 0;padding-left:13px}li{margin:0}
+table{border-collapse:collapse;width:100%;font-size:8.1pt;margin-top:2px}
+td,th{border:1px solid #d9e1ec;padding:1.5px 5px;text-align:left;vertical-align:top}
+th{background:#f1f5fa}
+.note{font-size:7.9pt;color:#5a667a;margin-top:3px}
+.two{display:flex;gap:8px}.two>div{flex:1}
+.beta{position:absolute;left:12mm;right:12mm;bottom:6mm;font-size:7.8pt;color:#4a5568;background:#fff8e6;border:1px solid #f0dca0;border-radius:5px;padding:3px 7px}
+</style></head><body>
+<h1>SFDC Build Tool</h1>
+<div class="sub">Describe a Salesforce need in plain language. Review it. Deploy it, or take the package with you.</div>
+<div class="link">Try it: <a href="https://salesforce-debugtool.herokuapp.com/flow-tool/">salesforce-debugtool.herokuapp.com/flow-tool</a></div>
+<div class="bar"></div>
+
+<div><b>Build:</b> create Flows, Apex, LWCs, objects, fields, prompt templates and agents from one request. The model never writes raw metadata XML: it drafts a validated design, and the diagram you approve and the XML that deploys come from that same source, so they cannot disagree.</div>
+<svg viewBox="0 0 718 124" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="h" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7z" fill="#7a8aa0"/></marker>
+<marker id="h2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7z" fill="#7b3fc4"/></marker></defs>
+<style>.hum{fill:#eef4fb;stroke:#9bb9de}.ai{fill:#f1e8fb;stroke:#7b3fc4;stroke-width:1.6}.code{fill:#f1f3f6;stroke:#aab3c0}.ok{fill:#e9f6ee;stroke:#7fc29a}
+.bt{font:700 9.5px Segoe UI,Arial;text-anchor:middle;fill:#1d2433}.bs{font:8px Segoe UI,Arial;text-anchor:middle;fill:#4a5568}
+.ar{stroke:#7a8aa0;fill:none;stroke-width:1.3}.lp{stroke:#7b3fc4;fill:none;stroke-width:1.2;stroke-dasharray:4 3}.lt{font:italic 8px Segoe UI,Arial;text-anchor:middle;fill:#5b2d99;stroke:#fff;stroke-width:3;paint-order:stroke}</style>
+<rect x="0" y="6" width="108" height="46" rx="6" class="hum"/><text x="54" y="22" class="bt">Your request</text><text x="54" y="34" class="bs">plain text,</text><text x="54" y="44" class="bs">any language</text><rect x="122" y="6" width="108" height="46" rx="6" class="ai"/><text x="176" y="22" class="bt">LLM (Build)</text><text x="176" y="34" class="bs">plans the pieces,</text><text x="176" y="44" class="bs">drafts the design</text><rect x="244" y="6" width="108" height="46" rx="6" class="code"/><text x="298" y="22" class="bt">Rules checks (the tool)</text><text x="298" y="34" class="bs">schema, references,</text><text x="298" y="44" class="bs">Salesforce rules</text><rect x="366" y="6" width="108" height="46" rx="6" class="hum"/><text x="420" y="22" class="bt">You review</text><text x="420" y="34" class="bs">diagram, explanation,</text><text x="420" y="44" class="bs">test guide</text><rect x="488" y="6" width="108" height="46" rx="6" class="ok"/><text x="542" y="22" class="bt">You approve</text><text x="542" y="34" class="bs">nothing moves</text><text x="542" y="44" class="bs">without it</text><rect x="610" y="6" width="108" height="46" rx="6" class="code"/><text x="664" y="22" class="bt">You deploy</text><text x="664" y="34" class="bs">or take the package</text><text x="664" y="44" class="bs">(existing build)</text><path d="M108 29 H122" class="ar" marker-end="url(#h)"/><path d="M230 29 H244" class="ar" marker-end="url(#h)"/><path d="M352 29 H366" class="ar" marker-end="url(#h)"/><path d="M474 29 H488" class="ar" marker-end="url(#h)"/><path d="M596 29 H610" class="ar" marker-end="url(#h)"/><path d="M298 52 V70 H152 V54" class="lp" marker-end="url(#h2)"/><text x="356" y="73" class="lt">fails: LLM repairs itself</text><path d="M420 52 V88 H176 V54" class="lp" marker-end="url(#h2)"/><text x="298.0" y="98" class="lt">Refine: you ask for a change in chat</text><path d="M664 52 V106 H200 V54" class="lp" marker-end="url(#h2)"/><text x="432.0" y="116" class="lt">org rejects: its error goes back to the LLM</text></svg>
+<div class="note"><b>Where the AI is:</b> the LLM understands the request, splits it into pieces, drafts each design, explains it, and applies your changes. Everything that must be exactly right (validation, XML, approval, deploy) is deterministic code, or you.</div>
+
+<h2>Without vs. with an org connection</h2>
+<div class="cols">
+<div class="a"><h3>Not connected (design only)</h3>
+<ul><li>Generate and refine Flows, Apex, LWC, objects, fields, AI prompts, agents, in one plan</li>
+<li>Diagram, plain-English explanation, generated code, test guide</li>
+<li>Download the report and a ready Metadata API package (.zip); deploy it yourself with sf CLI / Workbench</li>
+<li>Share a review link with a colleague</li></ul>
+<div class="note">Never contacts a Salesforce org.</div></div>
+<div class="b"><h3>Connected to an org</h3>
+<ul><li>Everything on the left, plus:</li>
+<li><b>Browse and open existing</b> Flows, Apex, triggers, LWCs, objects, fields, prompts; ask what they do, change them</li>
+<li><b>Validate</b> against the real org (check-only, nothing created)</li>
+<li><b>Deploy</b> in one transaction, with a link into Flow Builder</li>
+<li>Org errors go back to the model for a fix, then return for approval</li></ul>
+<div class="note"><b>Two ways in:</b> OAuth login, or <b>manual entry</b> (paste your instance URL and session ID), which needs <b>no Connected App</b> and no admin setup.</div></div>
+</div>
+
+<h2>What it builds today</h2>
+<div class="two"><div><ul>
+<li><b>Flow types:</b> record-triggered (before or after save, before delete), scheduled, platform-event-triggered, autolaunched, screen, and orchestration.</li>
+<li><b>Flow elements:</b> decisions, loops, get/create/update/delete records, subflows, actions, scheduled paths, pause, custom errors, screens.</li></ul></div>
+<div><ul>
+<li><b>Other metadata:</b> Apex classes and triggers, LWC, custom objects and fields, platform events, custom metadata, permission sets, prompt templates, Agentforce agents.</li>
+<li><b>Preview:</b> Flows render as a diagram; LWCs get a live structural preview of the UI.</li>
+<li><b>Customer portal tab:</b> public site, sign-up, My Account, chat.</li></ul></div></div>
+
+<h2>The report: what you hand to a reviewer</h2>
+<div>One self-contained HTML file per request (print it to PDF). For every piece it contains the <b>design</b> (diagram, field table or source), the model's <b>reason</b> for the choice, the <b>LWC preview</b>, and <b>how to test it</b>: for a record-triggered flow, a ready SOQL query for a record that satisfies the entry criteria; for a screen flow, the inputs Debug will ask for.</div>
+
+<h2>Privacy: use ours, or bring your own key</h2>
+<div><b>Works out of the box:</b> a server-side model allowance covers reasonable use, so you can start immediately with nothing to set up. For heavier use, or when your data terms require it, paste <b>your company's Anthropic API key (BYOK)</b>: usage, billing and data terms are then governed by your own Anthropic agreement. (Gemini and Ollama are also supported.) No account system either way.</div>
+<table>
+<tr><th style="width:24%">What</th><th style="width:24%">Where it lives</th><th>Detail</th></tr>
+<tr><td>Your API key (BYOK)</td><td>Your browser only</td><td>Saved in that browser's local storage and sent with each request so the server can call the model. Never written to disk or a database.</td></tr>
+<tr><td>Salesforce token</td><td>Browser memory only</td><td>Held for the tab, not saved; gone on close or reload. Your org's metadata is fetched on demand and discarded.</td></tr>
+<tr><td>Work in progress</td><td>Server memory</td><td>Stateless in the sense that matters: no database, no accounts, no history. A restart forgets everything.</td></tr>
+
+<tr><td>Share link (optional)</td><td>Short-lived store</td><td>Only if you press Share: unguessable link plus 6-digit password, auto-deleted after 24 hours.</td></tr>
+</table>
+<div class="note">Hosted, your prompts pass through the server's memory on the way to Anthropic. For strict environments the same tool runs <b>self-hosted</b> (one Python package, or locally with the sf CLI), so traffic goes only from your machine to Anthropic and your org.</div>
+
+<h2>What it costs in tokens</h2>
+<table>
+<tr><th>Task</th><th>Typical model cost*</th><th>Task</th><th>Typical model cost*</th></tr>
+<tr><td>Object, field, small Apex class</td><td>about $0.01 to $0.03</td><td>Multi-piece plan (4 to 6 steps)</td><td>about $0.20 to $0.80</td></tr>
+<tr><td>One Flow, incl. a repair round</td><td>about $0.05 to $0.30</td><td>Each follow-up "change it" request</td><td>about $0.02 to $0.15</td></tr>
+</table>
+<div class="note">*Estimates from list prices and prompt sizes; a live token and cost meter in the app shows actual spend per session, which is the source of truth.</div>
+
+<div class="beta"><b>Early build:</b> free for fair use, no cost and no registration. Hosted on Heroku. Python-based; features are still being added. Human-in-the-loop by design: the model proposes, you decide.</div>
+</body></html>

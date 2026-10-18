@@ -90,10 +90,16 @@ Approve, validate, deploy — with a link straight into Flow Builder when it
 lands.
 
 A third mode, **Build multiple things**, takes a request that needs more than
-one Flow — plus, optionally, Objects, Fields, and Apex Classes — and reviews
-every piece as one plan: an expandable card per step (a diagram for a Flow, a
-field table for an Object/Field, the source for an Apex Class), approved and
-deployed together as a single transaction.
+one Flow — plus, optionally, Objects, Fields, Apex Classes, Lightning Web
+Components, Prompt Templates and Agentforce agents — and reviews every piece as
+one plan: an expandable card per step (a diagram for a Flow, a field table for
+an Object/Field, the source for an Apex Class, the text and answer keys for a
+Prompt Template, the topics and actions for an agent), approved and deployed
+together as a single transaction. The **Examples** button lists ready requests
+grouped from a single field to full solutions, plus AI examples; each says what
+you get and what to prepare. New objects and fields get access on a Permission
+Set by default, and an employee agent can be published and activated from its
+own step once it is deployed.
 
 ### CLI
 
@@ -152,6 +158,17 @@ example. Warnings sit above the diagram in the approval document. The line
 between the two isn't taste: unreachable elements were a refusal until a live,
 Active flow in Salesforce's own sample apps turned out to have one — anything
 the org accepts has to be openable.
+
+## Opening other things from the org
+
+**Open one from the org** also opens an Apex class, an Apex trigger, a Lightning
+Web Component, a Prompt Template, a Custom Object and a Custom Field. A Prompt
+Template, a Custom Field and a Custom Object open as a plan in **Build multiple
+things** (an object as the object plus a step per custom field, with a picker
+when it has many fields), so the same review, revise, validate and deploy apply.
+Anything the IR cannot hold - a field type it does not know, a template of
+another kind - is refused with the reason, as with flows, rather than imported
+as something different.
 
 ## Checking the metadata is right
 
@@ -300,7 +317,7 @@ naming something undefined also deploys**, and the field just never appears).
 
 ## Building more than a Flow
 
-The **Build multiple things** mode adds three sibling artifact types, each
+The **Build multiple things** mode adds sibling artifact types, each
 with its own IR, validated the same way the Flow IR is — invalid shapes are
 unrepresentable before a single byte of metadata exists:
 
@@ -314,6 +331,14 @@ unrepresentable before a single byte of metadata exists:
   code, not a structural graph. Two things are still checked before a repair
   round: brace/paren/bracket balance, and that the class declared in `body`
   is actually named `api_name`.
+- **Prompt Template** — a free-form (flex) template with typed inputs and an
+  answer in text or JSON (a JSON answer carries its schema). A Flow calls it
+  with the `generatePromptResponse` action; it is activated right after a real
+  deploy so it can be called straight away. Deploys at API 64.0 or later.
+- **Agentforce agent** — a service agent for customers (runs as an Einstein
+  Agent User) or an employee agent for staff (runs as whoever asks), with
+  topics and the actions each can take: Apex classes, Flows or Prompt Templates
+  from the same plan. Action parameters are checked against what they call.
 
 A planner (`flowtool/planner.py`) reads the request first and decides how
 many steps it needs and in what order — a request that only needs one Flow
