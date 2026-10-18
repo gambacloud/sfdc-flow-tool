@@ -371,6 +371,20 @@ dialog p { margin: 0 0 12px; }
 .refine { border-top: 1px solid var(--line); }
 
 .empty { color: var(--dim); padding: 40px 0; max-width: 42ch; }
+.example-cards button {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  text-align: left;
+  background: transparent;
+  color: var(--fg, inherit);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.example-cards button:hover { border-color: var(--accent, currentColor); }
+.example-cards .card-gets { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; }
 
 .flow-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .flow-head h2 { margin: 0 0 2px; font-size: 18px; }

@@ -716,6 +716,12 @@ class TestPlanPermissionSet:
         session = execute(client, plan["plan_id"])
         assert session["permission_set"] is None
 
+    def test_a_plan_with_no_object_or_field_has_nothing_to_grant(self, client, typed_scripted):
+        typed_scripted(plan=ONE_STEP_PLAN, flow=VALID_FLOW)
+        plan = make_plan(client, grant_permission_set="new", permission_set_label="Unused_Access")
+        session = execute(client, plan["plan_id"])
+        assert session["permission_set"] is None
+
     def test_new_grant_preview_lists_the_field_and_object(self, client, typed_scripted):
         typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         plan = make_plan(

@@ -1861,6 +1861,8 @@ def _permission_set_view(session: PlanSession) -> Optional[Dict[str, Any]]:
     if config is None:
         return None
     grant = build_grant_from_steps(session.steps, config.label or config.api_name or "Generated Access")
+    if not grant.field_grants and not grant.object_grants:
+        return None  # nothing to grant (no new object or field in this plan)
     return {
         "mode": config.mode,
         "target": config.api_name,
@@ -2136,6 +2138,8 @@ async def _add_permission_set_files(
     before the bundle is complete.
     """
     grant = build_grant_from_steps(steps, config.label or config.api_name or "Generated Access")
+    if not grant.field_grants and not grant.object_grants:
+        return  # a plan with no new object or field has nothing to grant - no empty Permission Set
     if reference:
         grant.description = tag_description(grant.description, reference)
     api_name = config.api_name

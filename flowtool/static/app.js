@@ -3002,6 +3002,35 @@ function updateExamplesPreview() {
   $("examplesPreview").textContent = PLAN_EXAMPLES[key] || "";
 }
 
+// Four starting points shown on the empty Builder screen, spanning the simplest
+// to the AI ones; the full list stays in the Examples dialog.
+const EXAMPLE_CARDS = [
+  ["lead-medium", "Add a field and a flow"],
+  ["cs-complex", "A full solution: object, Apex and flow"],
+  ["ai-case-summary", "AI summary on every closed Case"],
+  ["agent-employee-account-brief", "An agent that briefs sales reps"],
+];
+
+function renderExampleCards() {
+  const box = $("exampleCards");
+  box.textContent = "";
+  for (const [key, title] of EXAMPLE_CARDS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = title;
+    const gets = document.createElement("span");
+    gets.className = "card-gets";
+    gets.textContent = (PLAN_EXAMPLE_NOTES[key] || {}).gets || "";
+    btn.appendChild(gets);
+    btn.onclick = () => {
+      $("planRequest").value = PLAN_EXAMPLES[key];
+      sessionStorage.setItem(PLAN_REQUEST_STORAGE_KEY, PLAN_EXAMPLES[key]);
+      $("planRequest").focus();
+    };
+    box.appendChild(btn);
+  }
+}
+
 function openExamplesDialog() {
   updateExamplesPreview();
   $("examplesDialog").showModal();
@@ -3032,8 +3061,8 @@ function resetPlan() {
   $("empty").hidden = false;
   showError($("planPane"), "");
 
-  $("planPermSetToggle").checked = false;
-  setPlanPermSetVisible(false);
+  $("planPermSetToggle").checked = true;
+  setPlanPermSetVisible(true);
   $("planPermSetModeNew").checked = true;
   setPlanPermSetMode("new");
   $("planPermSetLabel").value = "";
@@ -3326,6 +3355,8 @@ function activateMode(selected) {
   $("newPane").hidden = selected !== "new";
   $("planPane").hidden = selected !== "plan";
   $("portalPane").hidden = selected !== "portal";
+  $("emptyExamples").hidden = selected !== "plan";
+  if (selected === "plan") renderExampleCards();
   if (selected === "portal") refreshPortalHints();
   // Normally "Describe a new flow" only - "open" doesn't use it (an
   // imported flow keeps whatever status it already has), and "plan"
@@ -3501,11 +3532,6 @@ async function boot() {
       bits.push("no LLM key - set ANTHROPIC_API_KEY or GEMINI_API_KEY as a config var");
     } else {
       bits.push(`no LLM key - add one to ${config.env_file}`);
-    }
-    // sf CLI is only the way in when there is no OAuth login configured either -
-    // with a clientId set, the login buttons already cover validate/deploy.
-    if (!config.sf_cli && !config.clientId) {
-      bits.push("sf CLI not found - validation unavailable");
     }
     $("env").textContent = bits.join("  ·  ");
   } catch (err) {

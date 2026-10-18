@@ -182,12 +182,12 @@
         placeholder="An Invoice object with an Amount field, and a flow that marks it Paid when the amount is settled"></textarea>
 
       <label class="check">
-        <input type="checkbox" id="planPermSetToggle">
+        <input type="checkbox" id="planPermSetToggle" checked>
         Grant access on a Permission Set
-        <span class="dim">(Edit access on any new fields, Read/Create/Edit on any new objects)</span>
+        <span class="dim">(Edit access on any new fields, Read/Create/Edit on any new objects - without it nobody, not even an admin, can see them. Skipped when the plan creates none.)</span>
       </label>
 
-      <div id="planPermSetFields" hidden>
+      <div id="planPermSetFields">
         <div class="open-kind">
           <label><input type="radio" name="planPermSetMode" id="planPermSetModeNew" value="new" checked> Create new</label>
           <label><input type="radio" name="planPermSetMode" id="planPermSetModeExisting" value="existing"> Add to existing</label>
@@ -287,10 +287,10 @@
             Auto-select for workers
             <span class="dim">(Build multiple things only)</span>
           </label>
-          <label>Agent user <span class="dim">(only if the plan builds a customer-facing service agent - the username of a user with the Einstein Agent User profile; employee agents need none)</span>
+          <label hidden>Agent user <span class="dim">(only if the plan builds a customer-facing service agent - the username of a user with the Einstein Agent User profile; employee agents need none)</span>
             <input id="planAgentUser" type="text" autocomplete="off" placeholder="agent.user@example.com">
           </label>
-          <label class="check">
+          <label class="check" hidden>
             <input type="checkbox" id="planParallel">
             Run independent steps in parallel
             <span class="dim">(Build multiple things only - faster, but can trip rate limits more and cost more retries; off by default)</span>
@@ -326,6 +326,10 @@
       <p class="dim">Want a customer portal with sign-up, a My Account page and
         chat? Open the Customer portal tab.</p>
       <p class="dim">Nothing is sent to Salesforce until you approve it.</p>
+      <div id="emptyExamples" class="example-cards" hidden>
+        <p class="dim">Or start from an example:</p>
+        <div id="exampleCards"></div>
+      </div>
     </div>
 
     <div id="flowView" hidden>
