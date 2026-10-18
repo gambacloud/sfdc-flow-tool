@@ -73,6 +73,9 @@ class PromptTemplate(BaseModel):
         description="JSON only: a JSON Schema for the reply (type object, properties, required).",
     )
     model: str = DEFAULT_MODEL
+    # Set only by opening a template from the org that answers in JSON but carries no schema.
+    # Never set it when writing a new template: JSON then needs output_schema (checked below).
+    output_schema_unknown: bool = False
 
     @field_validator("api_name")
     @classmethod
@@ -109,6 +112,8 @@ class PromptTemplate(BaseModel):
 
         if self.response_format == "JSON":
             schema = self.output_schema
+            if schema is None and self.output_schema_unknown:
+                return self
             if not schema or schema.get("type") != "object" or not schema.get("properties"):
                 raise ValueError(
                     "response_format JSON needs output_schema: a JSON Schema with type "

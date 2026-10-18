@@ -31,7 +31,8 @@ def generate_prompt_template(template: PromptTemplate) -> str:
     _sub(version, "primaryModel", template.model)
     if template.response_format == "JSON":
         _sub(version, "responseFormat", "JSON")
-        _sub(version, "outputSchema", template.schema_json())
+        if template.output_schema:
+            _sub(version, "outputSchema", template.schema_json())
     # No versionIdentifier: the org rejects an invented one and assigns its own.
     _sub(version, "status", "Published")
 

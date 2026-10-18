@@ -48,6 +48,7 @@ from flowtool.llm import (
     LLMError,
     LwcGenerator,
     Message,
+    PromptTemplateGenerator,
     Provider,
     pair_planner,
     planner_of,
@@ -60,6 +61,7 @@ from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
     revise_plan,
 )
+from flowtool.prompt_import import list_prompt_templates, retrieve_prompt_template
 from flowtool.reference import clean_reference, tag_description, tag_value
 from flowtool.report import render_standalone_report
 from flowtool import github, share
@@ -696,7 +698,9 @@ class OrgSummaryRequest(SurveyRequest):
 
 class ImportRequest(BaseModel):
     api_name: str
-    kind: Literal["flow", "apex", "trigger", "lwc"] = "flow"
+    # "prompt_template" opens as a one-step plan (Build multiple things), which already
+    # reviews, revises, validates and deploys that type; the others open as a session.
+    kind: Literal["flow", "apex", "trigger", "lwc", "prompt_template"] = "flow"
     org: Optional[str] = None
     instance_url: Optional[str] = None
     access_token: Optional[str] = None
@@ -946,6 +950,17 @@ async def apex_classes(body: ApexClassesRequest) -> Dict[str, Any]:
     }
 
 
+@app.post("/api/prompt-templates")
+async def prompt_templates(body: ApexClassesRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        async with MetadataClient(url, token, "64.0") as client:
+            found = await list_prompt_templates(client)
+    except Exception as exc:
+        raise HTTPException(400, f"Could not list prompt templates: {exc}") from exc
+    return {"templates": found}
+
+
 @app.post("/api/apex-triggers")
 async def apex_triggers(body: ApexTriggersRequest) -> Dict[str, Any]:
     url, token = credentials(body.org, body.instance_url, body.access_token)
@@ -1122,6 +1137,8 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
         task = asyncio.create_task(
             retrieve_lwc_component(url, token, body.api_name, api_version=body.api_version)
         )
+    elif body.kind == "prompt_template":
+        task = asyncio.create_task(_retrieve_prompt_template(url, token, body.api_name))
     else:
         task = asyncio.create_task(
             retrieve_flow(url, token, body.api_name, api_version=body.api_version)
@@ -1129,6 +1146,11 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
     job_id = uuid.uuid4().hex
     IMPORTS[job_id] = PendingImport(task=task, instance_url=url, request=body)
     return {"job_id": job_id}
+
+
+async def _retrieve_prompt_template(url: str, token: str, api_name: str):
+    async with MetadataClient(url, token, "64.0") as client:
+        return await retrieve_prompt_template(client, api_name)
 
 
 # kind -> (IR model, generator) for the two source-only artifact types, whose
@@ -1166,6 +1188,24 @@ async def import_status(job_id: str) -> Dict[str, Any]:
         raise HTTPException(400, str(exc)) from exc
 
     session_id = uuid.uuid4().hex
+
+    if body.kind == "prompt_template":
+        template = source
+        adopted = PromptTemplateGenerator(provider).adopt(
+            template, f"the prompt template {body.api_name} from {pending.instance_url}"
+        )
+        step = PlanStep(
+            artifact_type="prompt_template", name=body.api_name,
+            brief=f"The prompt template {body.api_name}, opened from the org.",
+        )
+        plan_session = PlanSession(
+            provider=provider, plan=Plan(steps=[step]),
+            steps=[StepResult(step=step, value=template, repairs=0, messages=adopted.messages)],
+            api_version=body.api_version,
+        )
+        plan_session.apply_policy()
+        PLAN_SESSIONS[session_id] = plan_session
+        return {"done": True, "opened_as": "plan", **plan_view(session_id, plan_session)}
 
     if body.kind in _APEX_LIKE:
         model_cls, generator_cls, noun = _APEX_LIKE[body.kind]
@@ -2177,12 +2217,20 @@ async def _add_permission_set_files(
 _AGENT_MIN_API_VERSION = "65.0"
 
 
+# A prompt template's response format (JSON) only exists in the metadata from API 64.0:
+# retrieved or deployed at 62.0 it silently comes back as plain Text (checked on a scratch org).
+_PROMPT_TEMPLATE_MIN_API_VERSION = "64.0"
+
+
 def _deploy_api_version(session: "PlanSession") -> str:
     """The API version a plan's bundle deploys with: the session's, raised to the
     minimum its newest component type needs."""
+    version = session.api_version
     if any(isinstance(r.value, Agent) for r in session.steps):
-        return max(session.api_version, _AGENT_MIN_API_VERSION, key=float)
-    return session.api_version
+        version = max(version, _AGENT_MIN_API_VERSION, key=float)
+    if any(isinstance(r.value, PromptTemplate) for r in session.steps):
+        version = max(version, _PROMPT_TEMPLATE_MIN_API_VERSION, key=float)
+    return version
 
 
 async def _deploy_plan_bundle(

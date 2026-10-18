@@ -298,6 +298,7 @@ const state = {
 
   flows: [], // cached, alphabetically-sorted /api/flows result backing the search combo
   apexClasses: [], // same, for the Apex Class picker in "Open one from the org"
+  promptTemplates: [], // same, for the Prompt Template picker
   apexTriggers: [], // same, for the Apex Trigger picker
   lwcComponents: [], // same, for the Lightning Web Component picker
   permissionSets: [], // same, for the "add to existing" Permission Set picker in "Build multiple things"
@@ -1811,6 +1812,61 @@ async function loadApexClasses() {
   }
 }
 
+function renderPromptResults(query) {
+  const list = $("promptResults");
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? state.promptTemplates.filter((t) => t.api_name.toLowerCase().includes(q))
+    : state.promptTemplates;
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = "no matching templates";
+    list.appendChild(empty);
+  } else {
+    matches.forEach((tpl) => {
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = tpl.api_name;
+      row.innerHTML = `<div class="combo-item-row"><span>${highlightMatch(tpl.api_name, query)}</span></div>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $("promptSearch").value = tpl.api_name;
+        $("promptPicker").value = tpl.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+async function loadPromptTemplates() {
+  const search = $("promptSearch");
+  state.promptTemplates = [];
+  $("promptPicker").value = "";
+  $("promptResults").hidden = true;
+  if (!state.org && !state.sfCli) {
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
+    return;
+  }
+  search.disabled = true;
+  search.placeholder = "Loading...";
+  try {
+    const data = await api("api/prompt-templates", orgCredentials());
+    state.promptTemplates = data.templates;
+    search.disabled = false;
+    search.placeholder = data.templates.length ? "Search prompt templates..." : "no prompt templates in this org";
+  } catch (err) {
+    search.disabled = false;
+    search.placeholder = "could not list prompt templates";
+    showError($("openPane"), err.message);
+    logError("Load prompt templates", err.message);
+  }
+}
+
 function renderTriggerResults(query) {
   const list = $("triggerResults");
   const q = query.trim().toLowerCase();
@@ -2061,6 +2117,7 @@ function renderPermissionSetGrant(grant) {
 // Which hidden <input> holds the chosen api_name, per Open-pane kind.
 const OPEN_PICKER_IDS = {
   flow: "flowPicker", apex: "apexPicker", trigger: "triggerPicker", lwc: "lwcPicker",
+  prompt_template: "promptPicker",
 };
 
 async function importFlow() {
@@ -2081,6 +2138,13 @@ async function importFlow() {
       model: $("model").value || null,
     });
     const data = await poll("api/import/status", { job_id });
+    if (data.opened_as === "plan") {
+      // A prompt template opens as a one-step plan, in the Build multiple things pane.
+      state.planValidatedVersion = null;
+      renderPlan(data);
+      activateMode("plan");
+      return;
+    }
     state.validatedVersion = null;
     state.explanation = null;
     state.lastFlowMode = "open";
@@ -3113,6 +3177,7 @@ function setOpenKind(kind) {
   $("openApexFields").hidden = kind !== "apex";
   $("openTriggerFields").hidden = kind !== "trigger";
   $("openLwcFields").hidden = kind !== "lwc";
+  $("openPromptFields").hidden = kind !== "prompt_template";
   showError($("openPane"), "");
   loadOpenPaneList();
 }
@@ -3125,6 +3190,7 @@ const OPEN_PANE_LOADERS = {
   apex: { picker: "apexPicker", load: loadApexClasses },
   trigger: { picker: "triggerPicker", load: loadApexTriggers },
   lwc: { picker: "lwcPicker", load: loadLwcComponents },
+  prompt_template: { picker: "promptPicker", load: loadPromptTemplates },
 };
 
 function loadOpenPaneList() {
@@ -3595,6 +3661,16 @@ async function boot() {
   $("flowSearch").addEventListener("blur", () => {
     $("flowResults").hidden = true;
   });
+  $("promptSearch").addEventListener("input", () => {
+    $("promptPicker").value = "";
+    renderPromptResults($("promptSearch").value);
+  });
+  $("promptSearch").addEventListener("focus", () => {
+    if (state.promptTemplates.length) renderPromptResults($("promptSearch").value);
+  });
+  $("promptSearch").addEventListener("blur", () => {
+    $("promptResults").hidden = true;
+  });
   $("apexSearch").addEventListener("input", () => {
     $("apexPicker").value = "";
     renderApexResults($("apexSearch").value);
@@ -3629,6 +3705,7 @@ async function boot() {
   $("openKindApex").onchange = () => setOpenKind("apex");
   $("openKindTrigger").onchange = () => setOpenKind("trigger");
   $("openKindLwc").onchange = () => setOpenKind("lwc");
+  $("openKindPrompt").onchange = () => setOpenKind("prompt_template");
   $("newKindFlow").onchange = () => setNewKind("flow");
   $("newKindLwc").onchange = () => setNewKind("lwc");
   document.querySelectorAll("#lwcFileTabs .lwc-file-tab").forEach((btn) => {

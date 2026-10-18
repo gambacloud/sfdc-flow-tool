@@ -113,6 +113,7 @@
         <label><input type="radio" name="openKind" id="openKindApex" value="apex"> Apex Class</label>
         <label><input type="radio" name="openKind" id="openKindTrigger" value="trigger"> Apex Trigger</label>
         <label><input type="radio" name="openKind" id="openKindLwc" value="lwc"> Lightning Web Component</label>
+        <label><input type="radio" name="openKind" id="openKindPrompt" value="prompt_template"> Prompt Template</label>
       </div>
 
       <div id="openFlowFields">
@@ -153,6 +154,19 @@
           <input type="hidden" id="lwcPicker" value="">
           <div id="lwcResults" class="combo-list" hidden></div>
         </div>
+      </div>
+
+      <div id="openPromptFields" hidden>
+        <label for="promptSearch">Prompt Templates in the org</label>
+        <div class="combo">
+          <input id="promptSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="promptPicker" value="">
+          <div id="promptResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim">
+          Opens as a one-step plan, so you can ask for a change, review it and deploy it.
+          Only free-form (flex) templates can be opened.
+        </p>
       </div>
 
       <button id="importBtn" class="primary">Open it</button>
