@@ -641,3 +641,5 @@ pre.lwc-file-content {
 
 .agent-user-field { display: block; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; }
 .agent-user-field input { margin-top: 6px; }
+.plan-step-note { margin: 8px 0; font-size: 12px; }
+.agent-publish { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
