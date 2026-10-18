@@ -114,6 +114,8 @@
         <label><input type="radio" name="openKind" id="openKindTrigger" value="trigger"> Apex Trigger</label>
         <label><input type="radio" name="openKind" id="openKindLwc" value="lwc"> Lightning Web Component</label>
         <label><input type="radio" name="openKind" id="openKindPrompt" value="prompt_template"> Prompt Template</label>
+        <label><input type="radio" name="openKind" id="openKindObject" value="custom_object"> Custom Object</label>
+        <label><input type="radio" name="openKind" id="openKindField" value="custom_field"> Custom Field</label>
       </div>
 
       <div id="openFlowFields">
@@ -166,6 +168,45 @@
         <p class="dim">
           Opens as a one-step plan, so you can ask for a change, review it and deploy it.
           Only free-form (flex) templates can be opened.
+        </p>
+      </div>
+
+      <div id="openObjectFields" hidden>
+        <label for="objectSearch">Custom Objects in the org</label>
+        <div class="combo">
+          <input id="objectSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="objectPicker" value="">
+          <div id="objectResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim">
+          Opens as a plan: the object, then a step for each of its custom fields. Fields of a type
+          the tool cannot represent are left out and named in the plan.
+        </p>
+      </div>
+
+      <div id="openFieldChooser" hidden>
+        <p id="fieldChooserTitle"></p>
+        <p class="dim" id="fieldChooserNotes"></p>
+        <input id="fieldChooserFilter" type="text" autocomplete="off" placeholder="Filter fields...">
+        <div>
+          <button id="fieldChooserAll" class="link-btn" type="button">Select shown</button>
+          <button id="fieldChooserNone" class="link-btn" type="button">Clear</button>
+          <span id="fieldChooserCount" class="dim"></span>
+        </div>
+        <div id="fieldChooserList" style="max-height:260px;overflow:auto"></div>
+        <button id="fieldChooserOpen" class="primary" type="button">Open object with selected fields</button>
+      </div>
+
+      <div id="openFieldFields" hidden>
+        <label for="fieldSearch">Custom Fields in the org</label>
+        <div class="combo">
+          <input id="fieldSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="fieldPicker" value="">
+          <div id="fieldResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim">
+          Opens as a one-step plan. Text, number, checkbox, picklist, lookup, master-detail and
+          simple formula fields can be opened; others are refused.
         </p>
       </div>
 

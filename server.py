@@ -41,6 +41,8 @@ from flowtool.llm import (
     AnthropicProvider,
     ApexClassGenerator,
     ApexTriggerGenerator,
+    CustomFieldGenerator,
+    CustomObjectGenerator,
     FlowGenerator,
     GenerationResult,
     IRGenerationResult,
@@ -60,6 +62,9 @@ from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
     Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
     revise_plan,
+)
+from flowtool.object_import import (
+    list_custom_fields, list_custom_objects, retrieve_custom_field, retrieve_custom_object,
 )
 from flowtool.prompt_import import list_prompt_templates, retrieve_prompt_template
 from flowtool.reference import clean_reference, tag_description, tag_value
@@ -698,9 +703,10 @@ class OrgSummaryRequest(SurveyRequest):
 
 class ImportRequest(BaseModel):
     api_name: str
+    # "custom_object" opens as a plan too (the object, then a step per field); "custom_field" is "Object.Field__c".
     # "prompt_template" opens as a one-step plan (Build multiple things), which already
     # reviews, revises, validates and deploys that type; the others open as a session.
-    kind: Literal["flow", "apex", "trigger", "lwc", "prompt_template"] = "flow"
+    kind: Literal["flow", "apex", "trigger", "lwc", "prompt_template", "custom_object", "custom_field"] = "flow"
     org: Optional[str] = None
     instance_url: Optional[str] = None
     access_token: Optional[str] = None
@@ -961,6 +967,28 @@ async def prompt_templates(body: ApexClassesRequest) -> Dict[str, Any]:
     return {"templates": found}
 
 
+@app.post("/api/custom-objects")
+async def custom_objects(body: ApexClassesRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        async with MetadataClient(url, token, "64.0") as client:
+            found = await list_custom_objects(client)
+    except Exception as exc:
+        raise HTTPException(400, f"Could not list custom objects: {exc}") from exc
+    return {"objects": found}
+
+
+@app.post("/api/custom-fields")
+async def custom_fields(body: ApexClassesRequest) -> Dict[str, Any]:
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        async with MetadataClient(url, token, "64.0") as client:
+            found = await list_custom_fields(client)
+    except Exception as exc:
+        raise HTTPException(400, f"Could not list custom fields: {exc}") from exc
+    return {"fields": found}
+
+
 @app.post("/api/apex-triggers")
 async def apex_triggers(body: ApexTriggersRequest) -> Dict[str, Any]:
     url, token = credentials(body.org, body.instance_url, body.access_token)
@@ -1139,6 +1167,10 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
         )
     elif body.kind == "prompt_template":
         task = asyncio.create_task(_retrieve_prompt_template(url, token, body.api_name))
+    elif body.kind == "custom_object":
+        task = asyncio.create_task(_retrieve_custom_object(url, token, body.api_name))
+    elif body.kind == "custom_field":
+        task = asyncio.create_task(_retrieve_custom_field(url, token, body.api_name))
     else:
         task = asyncio.create_task(
             retrieve_flow(url, token, body.api_name, api_version=body.api_version)
@@ -1151,6 +1183,84 @@ async def import_start(body: ImportRequest) -> Dict[str, Any]:
 async def _retrieve_prompt_template(url: str, token: str, api_name: str):
     async with MetadataClient(url, token, "64.0") as client:
         return await retrieve_prompt_template(client, api_name)
+
+
+# An object with more custom fields than this asks which ones to bring into the plan.
+FIELD_PICK_THRESHOLD = 12
+OBJECT_PICKS: Dict[str, Any] = {}
+
+
+class ObjectFieldsRequest(BaseModel):
+    pick_id: str
+    fields: List[str]
+
+
+def _object_plan(body: ImportRequest, provider, instance_url: str, opened, chosen: List[str]) -> Dict[str, Any]:
+    """A plan of the opened object and the chosen fields (all of them when `chosen` is every one)."""
+    origin = f"from {instance_url}"
+    steps: List[StepResult] = []
+    obj_generator = CustomObjectGenerator(provider)
+    obj_step = PlanStep(
+        artifact_type="object", name=opened.object.api_name,
+        brief=f"The custom object {opened.object.api_name}, opened from the org.",
+    )
+    steps.append(StepResult(
+        step=obj_step, value=opened.object, repairs=0,
+        messages=obj_generator.adopt(opened.object, f"the custom object {opened.object.api_name} {origin}").messages,
+    ))
+    field_generator = CustomFieldGenerator(provider)
+    wanted = [f for f in opened.fields if f.api_name in set(chosen)]
+    for fld in wanted:
+        fld_step = PlanStep(
+            artifact_type="field", name=f"{fld.object_api_name}.{fld.api_name}",
+            brief=f"The custom field {fld.object_api_name}.{fld.api_name}, opened from the org.",
+            depends_on=[obj_step.name],
+        )
+        steps.append(StepResult(
+            step=fld_step, value=fld, repairs=0,
+            messages=field_generator.adopt(fld, f"the custom field {fld.object_api_name}.{fld.api_name} {origin}").messages,
+        ))
+    notes = list(opened.notes)
+    if opened.skipped:
+        notes.append(
+            "Fields left out of this plan because the tool cannot represent them (deploying leaves "
+            "them as they are in the org): " + " ".join(opened.skipped)
+        )
+    left = len(opened.fields) - len(wanted)
+    if left:
+        notes.append(f"{left} other custom field(s) were not brought into this plan; deploying leaves them as they are.")
+    plan_session = PlanSession(
+        provider=provider, plan=Plan(steps=[s.step for s in steps], reasoning=" ".join(notes) or None),
+        steps=steps, api_version=body.api_version,
+    )
+    plan_session.apply_policy()
+    session_id = uuid.uuid4().hex
+    PLAN_SESSIONS[session_id] = plan_session
+    return {"done": True, "opened_as": "plan", **plan_view(session_id, plan_session)}
+
+
+@app.post("/api/import/object-fields")
+async def import_object_fields(body: ObjectFieldsRequest) -> Dict[str, Any]:
+    """Second step of opening a large object: the fields the person ticked."""
+    pick = OBJECT_PICKS.pop(body.pick_id, None)
+    if pick is None:
+        raise HTTPException(404, "That object is no longer open; open it again.")
+    request, instance_url, opened = pick
+    try:
+        provider = build_provider(request.provider, request.model, request.effort, request.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _object_plan(request, provider, instance_url, opened, body.fields)
+
+
+async def _retrieve_custom_object(url: str, token: str, api_name: str):
+    async with MetadataClient(url, token, "64.0") as client:
+        return await retrieve_custom_object(client, api_name)
+
+
+async def _retrieve_custom_field(url: str, token: str, api_name: str):
+    async with MetadataClient(url, token, "64.0") as client:
+        return await retrieve_custom_field(client, api_name)
 
 
 # kind -> (IR model, generator) for the two source-only artifact types, whose
@@ -1202,6 +1312,45 @@ async def import_status(job_id: str) -> Dict[str, Any]:
             provider=provider, plan=Plan(steps=[step]),
             steps=[StepResult(step=step, value=template, repairs=0, messages=adopted.messages)],
             api_version=body.api_version,
+        )
+        plan_session.apply_policy()
+        PLAN_SESSIONS[session_id] = plan_session
+        return {"done": True, "opened_as": "plan", **plan_view(session_id, plan_session)}
+
+    if body.kind == "custom_object":
+        opened = source
+        if len(opened.fields) > FIELD_PICK_THRESHOLD:
+            # Too many for one plan to be readable: ask which fields to bring in.
+            pick_id = uuid.uuid4().hex
+            OBJECT_PICKS[pick_id] = (body, pending.instance_url, opened)
+            return {
+                "done": True, "opened_as": "choose_fields", "pick_id": pick_id,
+                "object": opened.object.api_name,
+                "fields": [{"api_name": f.api_name, "label": f.label, "type": f.type} for f in opened.fields],
+                "skipped": opened.skipped, "notes": opened.notes,
+            }
+        return _object_plan(body, provider, pending.instance_url, opened, [f.api_name for f in opened.fields])
+
+    if body.kind == "custom_field":
+        fld = source
+        fld_step = PlanStep(
+            artifact_type="field", name=body.api_name,
+            brief=f"The custom field {body.api_name}, opened from the org.",
+        )
+        reasoning = None
+        if fld.type == "Picklist":
+            reasoning = (
+                "If this object has record types, picklist values are enabled per record type: a value "
+                "added here is not offered on a record type until it is added there."
+            )
+        step_result = StepResult(
+            step=fld_step, value=fld, repairs=0,
+            messages=CustomFieldGenerator(provider).adopt(
+                fld, f"the custom field {body.api_name} from {pending.instance_url}").messages,
+        )
+        plan_session = PlanSession(
+            provider=provider, plan=Plan(steps=[fld_step], reasoning=reasoning),
+            steps=[step_result], api_version=body.api_version,
         )
         plan_session.apply_policy()
         PLAN_SESSIONS[session_id] = plan_session

@@ -301,6 +301,8 @@ const state = {
   promptTemplates: [], // same, for the Prompt Template picker
   apexTriggers: [], // same, for the Apex Trigger picker
   lwcComponents: [], // same, for the Lightning Web Component picker
+  openObjects: [], // Custom Object picker
+  openFields: [], // Custom Field picker, Object.Field__c
   permissionSets: [], // same, for the "add to existing" Permission Set picker in "Build multiple things"
   openKind: "flow", // "flow" | "apex" | "trigger" | "lwc" - which picker the Open pane currently shows
   newKind: "flow", // "flow" | "lwc" - which single-artifact kind "Describe a new..." creates
@@ -1867,6 +1869,68 @@ async function loadPromptTemplates() {
   }
 }
 
+// The Custom Object and Custom Field pickers share one shape: a list of {api_name}.
+const OPEN_LISTS = {
+  custom_object: { items: "openObjects", search: "objectSearch", picker: "objectPicker", results: "objectResults", url: "api/custom-objects", key: "objects", noun: "custom objects" },
+  custom_field: { items: "openFields", search: "fieldSearch", picker: "fieldPicker", results: "fieldResults", url: "api/custom-fields", key: "fields", noun: "custom fields" },
+};
+
+function renderOpenListResults(kind, query) {
+  const cfg = OPEN_LISTS[kind];
+  const list = $(cfg.results);
+  const q = query.trim().toLowerCase();
+  const all = state[cfg.items];
+  const matches = (q ? all.filter((t) => t.api_name.toLowerCase().includes(q)) : all).slice(0, 200);
+  list.innerHTML = "";
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "combo-empty";
+    empty.textContent = `no matching ${cfg.noun}`;
+    list.appendChild(empty);
+  } else {
+    matches.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "combo-item";
+      row.dataset.apiName = item.api_name;
+      row.innerHTML = `<div class="combo-item-row"><span>${highlightMatch(item.api_name, query)}</span></div>`;
+      row.addEventListener("mousedown", (evt) => {
+        evt.preventDefault();
+        $(cfg.search).value = item.api_name;
+        $(cfg.picker).value = item.api_name;
+        list.hidden = true;
+      });
+      list.appendChild(row);
+    });
+  }
+  list.hidden = false;
+}
+
+async function loadOpenList(kind) {
+  const cfg = OPEN_LISTS[kind];
+  const search = $(cfg.search);
+  state[cfg.items] = [];
+  $(cfg.picker).value = "";
+  $(cfg.results).hidden = true;
+  if (!state.org && !state.sfCli) {
+    search.disabled = true;
+    search.placeholder = "connect to an org first";
+    return;
+  }
+  search.disabled = true;
+  search.placeholder = "Loading...";
+  try {
+    const data = await api(cfg.url, orgCredentials());
+    state[cfg.items] = data[cfg.key];
+    search.disabled = false;
+    search.placeholder = data[cfg.key].length ? `Search ${cfg.noun}...` : `no ${cfg.noun} in this org`;
+  } catch (err) {
+    search.disabled = false;
+    search.placeholder = `could not list ${cfg.noun}`;
+    showError($("openPane"), err.message);
+    logError(`Load ${cfg.noun}`, err.message);
+  }
+}
+
 function renderTriggerResults(query) {
   const list = $("triggerResults");
   const q = query.trim().toLowerCase();
@@ -2117,8 +2181,63 @@ function renderPermissionSetGrant(grant) {
 // Which hidden <input> holds the chosen api_name, per Open-pane kind.
 const OPEN_PICKER_IDS = {
   flow: "flowPicker", apex: "apexPicker", trigger: "triggerPicker", lwc: "lwcPicker",
-  prompt_template: "promptPicker",
+  prompt_template: "promptPicker", custom_object: "objectPicker", custom_field: "fieldPicker",
 };
+
+// A large object asks which of its custom fields go into the plan.
+function showFieldChooser(data) {
+  const box = $("openFieldChooser");
+  const list = $("fieldChooserList");
+  const chosen = new Set();
+  const extra = [...(data.notes || []), ...(data.skipped || []).map((s) => `Not openable: ${s}`)];
+  $("fieldChooserTitle").textContent = `${data.object} has ${data.fields.length} custom fields. Pick the ones to open.`;
+  $("fieldChooserNotes").textContent = extra.join(" ");
+  $("fieldChooserFilter").value = "";
+
+  const shown = () => {
+    const q = $("fieldChooserFilter").value.trim().toLowerCase();
+    return data.fields.filter((f) => !q || f.api_name.toLowerCase().includes(q) || f.label.toLowerCase().includes(q));
+  };
+  const render = () => {
+    list.innerHTML = "";
+    shown().forEach((f) => {
+      const label = document.createElement("label");
+      label.style.display = "block";
+      const cb = document.createElement("input");
+      cb.type = "checkcb";
+      cb.checked = chosen.has(f.api_name);
+      cb.addEventListener("change", () => {
+        if (cb.checked) chosen.add(f.api_name); else chosen.delete(f.api_name);
+        $("fieldChooserCount").textContent = `${chosen.size} selected`;
+      });
+      label.append(cb, ` ${f.api_name} (${f.type})`);
+      list.appendChild(label);
+    });
+    $("fieldChooserCount").textContent = `${chosen.size} selected`;
+  };
+  $("fieldChooserFilter").oninput = render;
+  $("fieldChooserAll").onclick = () => { shown().forEach((f) => chosen.add(f.api_name)); render(); };
+  $("fieldChooserNone").onclick = () => { chosen.clear(); render(); };
+  $("fieldChooserOpen").onclick = async () => {
+    const button = $("fieldChooserOpen");
+    showError($("openPane"), "");
+    busy(button, true, "Opening...");
+    try {
+      const plan = await api("api/import/object-fields", { pick_id: data.pick_id, fields: [...chosen] });
+      box.hidden = true;
+      state.planValidatedVersion = null;
+      renderPlan(plan);
+      activateMode("plan");
+    } catch (err) {
+      showError($("openPane"), err.message);
+      logError("Import", err.message);
+    } finally {
+      busy(button, false);
+    }
+  };
+  render();
+  box.hidden = false;
+}
 
 async function importFlow() {
   const button = $("importBtn");
@@ -2137,9 +2256,14 @@ async function importFlow() {
       api_key: $("apiKey").value.trim() || null,
       model: $("model").value || null,
     });
+    $("openFieldChooser").hidden = true;
     const data = await poll("api/import/status", { job_id });
+    if (data.opened_as === "choose_fields") {
+      showFieldChooser(data);
+      return;
+    }
     if (data.opened_as === "plan") {
-      // A prompt template opens as a one-step plan, in the Build multiple things pane.
+      // A prompt template, object or field opens as a plan, in the Build multiple things pane.
       state.planValidatedVersion = null;
       renderPlan(data);
       activateMode("plan");
@@ -3178,6 +3302,8 @@ function setOpenKind(kind) {
   $("openTriggerFields").hidden = kind !== "trigger";
   $("openLwcFields").hidden = kind !== "lwc";
   $("openPromptFields").hidden = kind !== "prompt_template";
+  $("openObjectFields").hidden = kind !== "custom_object";
+  $("openFieldFields").hidden = kind !== "custom_field";
   showError($("openPane"), "");
   loadOpenPaneList();
 }
@@ -3191,6 +3317,8 @@ const OPEN_PANE_LOADERS = {
   trigger: { picker: "triggerPicker", load: loadApexTriggers },
   lwc: { picker: "lwcPicker", load: loadLwcComponents },
   prompt_template: { picker: "promptPicker", load: loadPromptTemplates },
+  custom_object: { picker: "objectPicker", load: () => loadOpenList("custom_object") },
+  custom_field: { picker: "fieldPicker", load: () => loadOpenList("custom_field") },
 };
 
 function loadOpenPaneList() {
@@ -3671,6 +3799,18 @@ async function boot() {
   $("promptSearch").addEventListener("blur", () => {
     $("promptResults").hidden = true;
   });
+  Object.entries(OPEN_LISTS).forEach(([kind, cfg]) => {
+    $(cfg.search).addEventListener("input", () => {
+      $(cfg.picker).value = "";
+      renderOpenListResults(kind, $(cfg.search).value);
+    });
+    $(cfg.search).addEventListener("focus", () => {
+      if (state[cfg.items].length) renderOpenListResults(kind, $(cfg.search).value);
+    });
+    $(cfg.search).addEventListener("blur", () => {
+      $(cfg.results).hidden = true;
+    });
+  });
   $("apexSearch").addEventListener("input", () => {
     $("apexPicker").value = "";
     renderApexResults($("apexSearch").value);
@@ -3706,6 +3846,8 @@ async function boot() {
   $("openKindTrigger").onchange = () => setOpenKind("trigger");
   $("openKindLwc").onchange = () => setOpenKind("lwc");
   $("openKindPrompt").onchange = () => setOpenKind("prompt_template");
+  $("openKindObject").onchange = () => setOpenKind("custom_object");
+  $("openKindField").onchange = () => setOpenKind("custom_field");
   $("newKindFlow").onchange = () => setNewKind("flow");
   $("newKindLwc").onchange = () => setNewKind("lwc");
   document.querySelectorAll("#lwcFileTabs .lwc-file-tab").forEach((btn) => {
