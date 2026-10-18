@@ -197,7 +197,12 @@ class AgentScriptSpec:
     api_name: str
     label: str
     description: str
-    agent_user: str                   # username of an Einstein Agent User; "NEW AGENT USER" is not accepted at publish
+    agent_user: str = ""              # service agents: an Einstein Agent User's username; "NEW AGENT USER" is not accepted at publish
+    # AgentforceServiceAgent answers customers and needs agent_user. AgentforceEmployeeAgent works
+    # for whoever calls it: the compiler wants no agent user, and the messaging variables and
+    # live-agent escalation mean nothing there. Both verified with `sf agent validate
+    # authoring-bundle` and a metadata deploy.
+    agent_type: Literal["service", "employee"] = "service"
     instructions: str = "You are an AI Agent."
     welcome: str = "Hi, I'm an AI assistant. How can I help you?"
     error: str = "Sorry, it looks like something has gone wrong."
@@ -205,6 +210,8 @@ class AgentScriptSpec:
 
     def __post_init__(self) -> None:
         _check_name(self.api_name, "agent api name")
+        if self.agent_type == "service" and not self.agent_user.strip():
+            raise ValueError("a service agent needs agent_user (an Einstein Agent User)")
 
 
 def _q(text: str) -> str:
@@ -220,8 +227,8 @@ def _pipe(text: str, indent: int) -> str:
 
 
 def agent_script(spec: AgentScriptSpec) -> str:
-    out: List[str] = []
-    out += [
+    employee = spec.agent_type == "employee"
+    out: List[str] = [
         "system:",
         f"    instructions: {_q(spec.instructions)}",
         "    messages:",
@@ -230,26 +237,31 @@ def agent_script(spec: AgentScriptSpec) -> str:
         "",
         "config:",
         f"    developer_name: {_q(spec.api_name)}",
-        f"    default_agent_user: {_q(spec.agent_user)}",
+        '    agent_type: "AgentforceEmployeeAgent"' if employee else f"    default_agent_user: {_q(spec.agent_user)}",
         f"    agent_label: {_q(spec.label)}",
         f"    description: {_q(spec.description)}",
         "",
-        "variables:",
-        "    EndUserId: linked string",
-        "        source: @MessagingSession.MessagingEndUserId",
-        '        description: "This variable may also be referred to as MessagingEndUser Id"',
-        "    RoutableId: linked string",
-        "        source: @MessagingSession.Id",
-        '        description: "This variable may also be referred to as MessagingSession Id"',
-        "    ContactId: linked string",
-        "        source: @MessagingEndUser.ContactId",
-        '        description: "This variable may also be referred to as MessagingEndUser ContactId"',
-        "    EndUserLanguage: linked string",
-        "        source: @MessagingSession.EndUserLanguage",
-        '        description: "This variable may also be referred to as MessagingSession EndUserLanguage"',
-        "    VerifiedCustomerId: mutable string",
-        '          description: "This variable may also be referred to as VerifiedCustomerId"',
-        "",
+    ]
+    if not employee:
+        out += [
+            "variables:",
+            "    EndUserId: linked string",
+            "        source: @MessagingSession.MessagingEndUserId",
+            '        description: "This variable may also be referred to as MessagingEndUser Id"',
+            "    RoutableId: linked string",
+            "        source: @MessagingSession.Id",
+            '        description: "This variable may also be referred to as MessagingSession Id"',
+            "    ContactId: linked string",
+            "        source: @MessagingEndUser.ContactId",
+            '        description: "This variable may also be referred to as MessagingEndUser ContactId"',
+            "    EndUserLanguage: linked string",
+            "        source: @MessagingSession.EndUserLanguage",
+            '        description: "This variable may also be referred to as MessagingSession EndUserLanguage"',
+            "    VerifiedCustomerId: mutable string",
+            '          description: "This variable may also be referred to as VerifiedCustomerId"',
+            "",
+        ]
+    out += [
         "language:",
         '    default_locale: "en_US"',
         '    additional_locales: ""',
@@ -266,8 +278,9 @@ def agent_script(spec: AgentScriptSpec) -> str:
     ]
     for t in spec.topics:
         out.append(f"            go_to_{t.api_name}: @utils.transition to @subagent.{t.api_name}")
+    if not employee:
+        out.append("            go_to_escalation: @utils.transition to @subagent.escalation")
     out += [
-        "            go_to_escalation: @utils.transition to @subagent.escalation",
         "            go_to_off_topic: @utils.transition to @subagent.off_topic",
         "            go_to_ambiguous_question: @utils.transition to @subagent.ambiguous_question",
         "",
@@ -296,19 +309,22 @@ def agent_script(spec: AgentScriptSpec) -> str:
                 for p in a.inputs:
                     out.append(f"                with {p.name} = ...")
         out.append("")
+    if not employee:
+        out += [
+            "subagent escalation:",
+            '    label: "Escalation"',
+            '    description: "Handles requests from users who want to transfer or escalate their conversation to a live human agent."',
+            "",
+            "    reasoning:",
+            "        instructions: ->",
+            "            | If a user explicitly asks to transfer to a live agent, escalate the conversation.",
+            "              If escalation to a live agent fails for any reason, acknowledge the issue and ask the user whether they would like to log a support case instead.",
+            "        actions:",
+            "            escalate_to_human: @utils.escalate",
+            '                description: "Call this tool to escalate to a human agent."',
+            "",
+        ]
     out += [
-        "subagent escalation:",
-        '    label: "Escalation"',
-        '    description: "Handles requests from users who want to transfer or escalate their conversation to a live human agent."',
-        "",
-        "    reasoning:",
-        "        instructions: ->",
-        "            | If a user explicitly asks to transfer to a live agent, escalate the conversation.",
-        "              If escalation to a live agent fails for any reason, acknowledge the issue and ask the user whether they would like to log a support case instead.",
-        "        actions:",
-        "            escalate_to_human: @utils.escalate",
-        '                description: "Call this tool to escalate to a human agent."',
-        "",
         "subagent off_topic:",
         '    label: "Off Topic"',
         '    description: "Redirect conversation to relevant topics when user request goes off-topic"',

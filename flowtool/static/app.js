@@ -1269,6 +1269,7 @@ function renderPlanStep(step) {
     body.appendChild(planStepTable([
       ["API name", step.api_name],
       ["Label", step.label],
+      ["Kind", step.agent_type === "employee" ? "Employee agent (staff, runs as the user who asks)" : "Service agent (customers)"],
       ...step.topics.map((t) => [
         `Topic: ${t.label}`,
         t.description + (t.actions.length ? `  (actions: ${t.actions.map((a) => `${a.api_name} -> ${a.target}`).join(", ")})` : ""),

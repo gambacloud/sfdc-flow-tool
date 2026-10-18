@@ -296,8 +296,10 @@ conversation, summarising a case, tagging sentiment). A Flow calls it with the \
 `generatePromptResponse` action. When the answer must be stored in fields, ask \
 for JSON.
 
-- `agent` - an Agentforce Service Agent for customers: its topics and the \
-actions each topic can take. The actions call Apex classes, Flows and Prompt \
+- `agent` - an Agentforce agent: its topics and the actions each topic can \
+take. It is a Service Agent when it talks to customers, or an Employee Agent \
+when it helps the company's own staff inside Salesforce (look up, summarise or \
+update records for the person asking). The actions call Apex classes, Flows and Prompt \
 Templates, which the same request usually creates in earlier steps - an agent \
 step always comes after them, and the plan completes that ordering itself. One \
 agent is one step; do not split its topics into separate steps.

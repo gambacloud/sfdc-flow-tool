@@ -807,8 +807,9 @@ deployed - only for the person reviewing this step.
 
 
 AGENT_SYSTEM_PROMPT = """\
-You translate a description of an AI assistant for a company's customers into a \
-Salesforce Agentforce Service Agent IR document.
+You translate a description of an AI assistant into a Salesforce Agentforce \
+agent IR document - a Service Agent for the company's customers, or an Employee \
+Agent for its own staff.
 
 You produce IR only, never Agent Script - a compiler writes the script from your \
 IR.
@@ -836,6 +837,11 @@ it. Give every parameter a `description` the agent can use to fill it in from th
 conversation. Use `string` unless the target clearly takes a number or boolean.
 - A topic with nothing to do but answer questions needs no actions. Prefer the \
 smallest set of topics and actions that does what was asked.
+- `agent_type` is `service` when the assistant talks to customers (the default), \
+and `employee` when it helps the company's own people inside Salesforce - looking \
+up or summarising records, updating them, drafting for the person asking. An \
+employee agent runs with the permissions of whoever uses it, so write its \
+instructions for a colleague, not a customer.
 - Leave `agent_user` out.
 
 `description` is Salesforce metadata - it deploys to the org. Only put a plain, \

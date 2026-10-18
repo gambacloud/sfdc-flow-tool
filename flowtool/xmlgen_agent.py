@@ -18,12 +18,13 @@ class MissingAgentUser(ValueError):
     is published, so it is refused here instead."""
 
 
-def to_script_spec(agent: Agent, agent_user: str) -> AgentScriptSpec:
+def to_script_spec(agent: Agent, agent_user: str = "") -> AgentScriptSpec:
     return AgentScriptSpec(
         api_name=agent.api_name,
         label=agent.label,
         description=agent.description,
         agent_user=agent_user,
+        agent_type=agent.agent_type,
         instructions=agent.instructions,
         welcome=agent.welcome_message,
         error=agent.error_message,
@@ -53,7 +54,9 @@ def to_script_spec(agent: Agent, agent_user: str) -> AgentScriptSpec:
 def generate_agent_files(agent: Agent, agent_user: str | None = None) -> Dict[str, str]:
     """Zip-path -> content for `AiAuthoringBundle` member `agent.api_name`."""
     user = (agent_user or agent.agent_user or "").strip()
-    if not user or user == PLACEHOLDER_USER:
+    if agent.agent_type == "employee":
+        user = ""  # an employee agent runs as whoever calls it
+    elif not user or user == PLACEHOLDER_USER:
         raise MissingAgentUser(
             f"Agent {agent.api_name!r} needs an agent user: the username of a user with the "
             "'Einstein Agent User' profile. Set it in the plan options and build again."

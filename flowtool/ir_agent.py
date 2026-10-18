@@ -1,5 +1,5 @@
 """
-Agentforce Service Agent IR.
+Agentforce agent IR (a Service Agent for customers, or an Employee Agent for staff).
 
 The model describes the agent - who it is, its topics and the actions each topic
 may take - and `xmlgen_agent` writes the Agent Script from that. The script is
@@ -13,7 +13,9 @@ What was established against a real scratch org (API 68, Einstein1AIPlatform):
   and a deploy rejects one that does not exist ("couldn't find the flow, prompt,
   or apex class");
 - the agent is deployed as an AiAuthoringBundle (a draft); publishing and
-  activating it is done in Agentforce Builder.
+  activating it is done in Agentforce Builder;
+- `config.agent_type` takes `AgentforceServiceAgent` (then `default_agent_user` is
+  required) or `AgentforceEmployeeAgent` (no agent user); both compile and deploy.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from .ir import _check_api_name
 
 TargetType = Literal["apex", "flow", "prompt"]
 ParamType = Literal["string", "number", "boolean"]
+AgentKind = Literal["service", "employee"]
 
 # Names the generated script already uses for its own built-in topics.
 RESERVED_TOPICS = {"agent_router", "escalation", "off_topic", "ambiguous_question"}
@@ -143,6 +146,11 @@ class Agent(BaseModel):
     welcome_message: str = "Hi, I'm an AI assistant. How can I help you?"
     error_message: str = "Sorry, it looks like something has gone wrong."
     topics: List[Topic] = Field(min_length=1)
+    agent_type: AgentKind = Field(
+        default="service",
+        description="`service` answers customers (runs as an agent user, can hand over to a person). "
+        "`employee` helps the company's own staff inside Salesforce and runs as whoever asks it.",
+    )
     agent_user: Optional[str] = Field(
         default=None,
         description="Leave out - the username of the agent user is supplied when the plan is built.",

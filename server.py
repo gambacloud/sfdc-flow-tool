@@ -1825,6 +1825,7 @@ def _step_view(result: StepResult) -> Dict[str, Any]:
         entry.update({
             "api_name": value.api_name,
             "label": value.label,
+            "agent_type": value.agent_type,
             "instructions": value.instructions,
             "topics": [
                 {
@@ -2200,11 +2201,11 @@ def _start_plan_deploy(
 ) -> None:
     if session.pending_deploy is not None and not session.pending_deploy.task.done():
         raise HTTPException(409, "A validate/deploy is already running for this plan.")
-    has_agent = any(isinstance(r.value, Agent) for r in session.steps)
-    if has_agent and not (session.plan.agent_user or "").strip():
+    needs_user = any(isinstance(r.value, Agent) and r.value.agent_type == "service" for r in session.steps)
+    if needs_user and not (session.plan.agent_user or "").strip():
         raise HTTPException(
             400,
-            "This plan builds an agent, which needs an agent user: the username of a user with the "
+            "This plan builds a service agent, which needs an agent user: the username of a user with the "
             "'Einstein Agent User' profile. Enter it under Options (Agent user) and plan again.",
         )
     url, token = credentials(org, instance_url, access_token)

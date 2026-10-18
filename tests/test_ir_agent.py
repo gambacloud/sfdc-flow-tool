@@ -239,3 +239,36 @@ def test_a_plan_with_an_agent_deploys_at_api_65_or_later():
 def test_a_plan_without_an_agent_keeps_its_version():
     from types import SimpleNamespace
     assert server._deploy_api_version(SimpleNamespace(steps=[], api_version="62.0")) == "62.0"
+
+
+def test_a_service_agent_is_the_default():
+    assert agent().agent_type == "service"
+
+
+def test_an_employee_agent_needs_no_agent_user_and_has_no_messaging_parts():
+    a = agent(agent_type="employee")
+    script = generate_agent_files(a)["aiAuthoringBundles/Help_Agent/Help_Agent.agent"]
+    assert 'agent_type: "AgentforceEmployeeAgent"' in script
+    assert "default_agent_user" not in script
+    assert "@MessagingSession" not in script and "variables:" not in script
+    assert "escalat" not in script
+    assert "subagent support_requests:" in script and "subagent off_topic:" in script
+
+
+def test_an_employee_agent_ignores_an_agent_user_that_is_passed():
+    script = generate_agent_files(agent(agent_type="employee"), "x@y.co")["aiAuthoringBundles/Help_Agent/Help_Agent.agent"]
+    assert "x@y.co" not in script
+
+
+def test_a_service_agent_script_is_unchanged_by_the_type_field():
+    script = generate_agent_files(agent(), "agent@example.com")["aiAuthoringBundles/Help_Agent/Help_Agent.agent"]
+    assert "agent_type" not in script and "subagent escalation:" in script and "MessagingSession" in script
+
+
+def test_an_unknown_agent_type_is_rejected():
+    with pytest.raises(ValidationError):
+        agent(agent_type="partner")
+
+
+def test_the_prompt_tells_the_model_about_the_two_kinds():
+    assert "agent_type" in AGENT_SYSTEM_PROMPT and "employee" in AGENT_SYSTEM_PROMPT
