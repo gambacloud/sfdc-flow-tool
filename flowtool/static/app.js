@@ -258,7 +258,7 @@ const PLAN_EXAMPLE_NOTES = {
   "contact-complex": { gets: "A log object, a screen Flow for the Contact page, and the assignment logic.", before: "A Public Group named Sales_Assignees_Group with the eligible users." },
   "ai-case-summary": { gets: "Two Case fields, a Prompt Template that answers in JSON, and a Flow that calls it.", before: "An org with Einstein generative AI and Prompt Builder enabled." },
   "ai-conversation-review": { gets: "A review object, a Prompt Template, an Apex class that builds the transcript, and a Flow that runs after a chat ends.", before: "Messaging (Enhanced Messaging) enabled and real chats to review. The tool cannot create test chats for you." },
-  "agent-service-orders": { gets: "An Apex class, a Flow, and a draft service agent with two topics.", before: "The username of an Einstein Agent User (enter it under Options > Agent user). Publish and activate the agent in Agentforce Builder afterwards." },
+  "agent-service-orders": { gets: "An Apex class, a Flow, and a draft service agent with two topics.", before: "The username of an Einstein Agent User (you enter it in the Agent user box on the agent's step). Publish and activate the agent in Agentforce Builder afterwards." },
   "agent-employee-account-brief": { gets: "An Apex class, a Prompt Template, a Flow, and a draft employee agent with two topics.", before: "Nothing for the agent user - an employee agent needs none. After deploying, publish and activate it from its step here." },
 };
 // Which mode ("new" | "open" | "plan") a reload should land back on, when a
@@ -3308,8 +3308,51 @@ const EXAMPLE_CARDS = [
   ["lead-medium", "Add a field and a flow"],
   ["cs-complex", "A full solution: object, Apex and flow"],
   ["ai-case-summary", "AI summary on every closed Case"],
-  ["agent-employee-account-brief", "An agent that briefs sales reps"],
 ];
+
+// The two kinds of agent and the Experience Cloud site get their own labelled cards:
+// an agent loads its example request, the site opens the Customer portal tab.
+const FEATURED_CARDS = [
+  { kind: "Employee agent", title: "Briefs your sales reps before a call",
+    gets: "For your own staff, inside Salesforce. Works with the permissions of whoever asks - no agent user.",
+    example: "agent-employee-account-brief" },
+  { kind: "Service agent", title: "Answers customers about their cases",
+    gets: "For your customers. Checks a case's status and opens new ones; runs as an Einstein Agent User.",
+    example: "agent-service-orders" },
+  { kind: "Experience site", title: "A customer portal with sign-up and My Account",
+    gets: "A public home page, self-registration, a secure My Account page and optional chat.",
+    mode: "portal" },
+];
+
+function renderFeaturedCards() {
+  const box = $("exampleFeatured");
+  box.textContent = "";
+  for (const card of FEATURED_CARDS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "featured-card";
+    const tag = document.createElement("span");
+    tag.className = "kind-tag";
+    tag.textContent = card.kind;
+    const title = document.createElement("span");
+    title.className = "card-title";
+    title.textContent = card.title;
+    const gets = document.createElement("span");
+    gets.className = "card-gets";
+    gets.textContent = card.gets;
+    btn.append(tag, title, gets);
+    btn.onclick = () => {
+      if (card.mode) {
+        activateMode(card.mode);
+        return;
+      }
+      $("planRequest").value = PLAN_EXAMPLES[card.example];
+      sessionStorage.setItem(PLAN_REQUEST_STORAGE_KEY, PLAN_EXAMPLES[card.example]);
+      $("planRequest").focus();
+    };
+    box.appendChild(btn);
+  }
+}
 
 function renderExampleCards() {
   const box = $("exampleCards");
@@ -3662,7 +3705,10 @@ function activateMode(selected) {
   $("planPane").hidden = selected !== "plan";
   $("portalPane").hidden = selected !== "portal";
   $("emptyExamples").hidden = selected !== "plan";
-  if (selected === "plan") renderExampleCards();
+  if (selected === "plan") {
+    renderFeaturedCards();
+    renderExampleCards();
+  }
   if (selected === "portal") refreshPortalHints();
   // Normally "Describe a new flow" only - "open" doesn't use it (an
   // imported flow keeps whatever status it already has), and "plan"
