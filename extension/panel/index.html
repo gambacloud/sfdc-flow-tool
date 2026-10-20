@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFDC Build Tool</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230176D3'/%3E%3Ccircle cx='8' cy='9' r='3.4' fill='white'/%3E%3Ccircle cx='24' cy='9' r='3.4' fill='white'/%3E%3Ccircle cx='16' cy='23' r='3.4' fill='white'/%3E%3Cpath d='M8 12.4 L16 19.6 M24 12.4 L16 19.6' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="ui/app.css">
+<link rel="stylesheet" href="ui/vendor/slds-subset.css">
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<div id="extOrgBar" data-status="no-tab">
+  <strong id="extOrgText">Looking for a Salesforce tab...</strong>
+  <span id="extOrgDetail" class="dim"></span>
+  <span class="dim">Backend: <span id="extBackend"></span></span>
+</div>
+
+<header>
+  <h1><a href="ui/guide.pdf" target="_blank" rel="noopener" title="Open the guide (PDF)">SFDC Build Tool</a></h1>
+  <div class="meta" id="env"></div>
+  <label class="header-org">Org
+    <select id="org"></select>
+  </label>
+  <div class="header-connect">
+    <span class="dim" id="orgConnected"></span>
+    <div class="header-oauth" id="oauthBox" hidden>
+      <button id="loginProdBtn" type="button">Log in (Prod)</button>
+      <button id="loginSandboxBtn" type="button">Log in (Sandbox)</button>
+    </div>
+    <div class="dropdown-wrap manual-wrap">
+      <button id="manualBtn" class="dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false">
+        Manual entry
+      </button>
+      <div class="dropdown-panel manual-panel" id="manualPanel" hidden>
+        <label>Instance URL
+          <input id="manualInstanceUrl" type="text" placeholder="https://yourorg.my.salesforce.com">
+        </label>
+        <label>Session ID / access token
+          <input id="manualToken" type="password" autocomplete="off" placeholder="00D...!AQ...">
+        </label>
+        <button id="manualConnectBtn" type="button" class="primary">Connect</button>
+        <details class="manual-help">
+          <summary>How do I get this?</summary>
+          <p>
+            <strong>No install</strong> - log in to the org in this browser, open
+            DevTools (F12) &rarr; Network, click any request to
+            <code>/services/data/...</code> (Setup and Lightning make these
+            constantly), and copy the value after <code>Bearer</code> or
+            <code>OAuth</code> in its <code>Authorization</code> request header -
+            that is the session ID/access token. The instance URL is the
+            address bar's origin. The same trick works on any request made by
+            a browser extension that talks to the org, Salesforce Inspector
+            Reloaded included - it reuses your login rather than issuing its
+            own token, so there's nothing to copy from the extension itself.
+          </p>
+          <p>
+            <strong>Native to Salesforce</strong> - Setup &rarr; Visualforce Pages
+            &rarr; edit or create one &rarr; add <code>{!GETSESSIONID()}</code>
+            to the markup &rarr; open the page. Needs Visualforce access
+            (System Administrator has it by default).
+          </p>
+          <p>
+            <strong>With the <a href="https://developer.salesforce.com/tools/salesforcecli" target="_blank" rel="noopener">sf CLI</a></strong>
+            installed and logged in: <code>sf org display -o your-alias --verbose --json</code>
+            for <code>instanceUrl</code>, then <code>sf org auth show-access-token -o your-alias</code>
+            for the token - recent CLI versions redact it from <code>org display</code>
+            and require the separate command. No alias set as default yet?
+            <code>sf org list</code> shows what you have, or
+            <code>sf org login web -a your-alias</code> connects a new one.
+          </p>
+          <p class="dim">None of these are stored anywhere - sent only with requests, same as OAuth.</p>
+        </details>
+      </div>
+    </div>
+  </div>
+  <div class="dropdown-wrap logs-wrap">
+    <button id="logsBtn" class="dropdown-btn logs-btn" type="button" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path fill="currentColor" d="M2 2h12v2H2V2zm0 5h12v2H2V7zm0 5h8v2H2v-2z"/>
+      </svg>
+      Logs
+      <span class="log-count" id="logCount" hidden></span>
+    </button>
+    <div class="dropdown-panel logs-panel" id="logsPanel" hidden>
+      <div class="logs-section">
+        <h4>Usage this session</h4>
+        <div id="logsUsage" class="dim">No model calls yet.</div>
+      </div>
+      <div class="logs-section">
+        <h4>Activity <button id="logsActivityClear" class="linklike" type="button">clear</button></h4>
+        <div id="logsActivity" class="logs-console dim">Nothing yet - model calls and repair attempts show up here.</div>
+      </div>
+      <div class="logs-section">
+        <h4>Errors <span id="logsErrorCount" class="dim"></span></h4>
+        <div id="logsErrors" class="dim">No errors yet.</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="retryNotice" class="retry-notice" hidden></div>
+
+<main>
+  <!-- Left: the conversation -->
+  <section class="panel" id="left">
+    <div class="pad">
+      <div class="modes">
+        <button class="mode active" data-mode="new">Describe a new flow</button>
+        <button class="mode" data-mode="open">Open one from the org</button>
+        <button class="mode" data-mode="plan">Build multiple things</button>
+        <button class="mode" data-mode="portal">Customer portal</button>
+      </div>
+    </div>
+
+    <div class="pad" id="openPane" hidden>
+      <div class="open-kind">
+        <label><input type="radio" name="openKind" id="openKindFlow" value="flow" checked> Flow</label>
+        <label><input type="radio" name="openKind" id="openKindApex" value="apex"> Apex Class</label>
+        <label><input type="radio" name="openKind" id="openKindTrigger" value="trigger"> Apex Trigger</label>
+        <label><input type="radio" name="openKind" id="openKindLwc" value="lwc"> Lightning Web Component</label>
+        <label><input type="radio" name="openKind" id="openKindPrompt" value="prompt_template"> Prompt Template</label>
+        <label><input type="radio" name="openKind" id="openKindObject" value="custom_object"> Custom Object</label>
+        <label><input type="radio" name="openKind" id="openKindField" value="custom_field"> Custom Field</label>
+      </div>
+
+      <div id="openFlowFields">
+        <label for="flowSearch">Flows in the org</label>
+        <div class="combo">
+          <input id="flowSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="flowPicker" value="">
+          <div id="flowResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim" id="openNote">
+          Flows using screens, waits, or Apex actions are refused rather than
+          drawn approximately.
+        </p>
+      </div>
+
+      <div id="openApexFields" hidden>
+        <label for="apexSearch">Apex classes in the org</label>
+        <div class="combo">
+          <input id="apexSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="apexPicker" value="">
+          <div id="apexResults" class="combo-list" hidden></div>
+        </div>
+      </div>
+
+      <div id="openTriggerFields" hidden>
+        <label for="triggerSearch">Apex triggers in the org</label>
+        <div class="combo">
+          <input id="triggerSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="triggerPicker" value="">
+          <div id="triggerResults" class="combo-list" hidden></div>
+        </div>
+      </div>
+
+      <div id="openLwcFields" hidden>
+        <label for="lwcSearch">Lightning Web Components in the org</label>
+        <div class="combo">
+          <input id="lwcSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="lwcPicker" value="">
+          <div id="lwcResults" class="combo-list" hidden></div>
+        </div>
+      </div>
+
+      <div id="openPromptFields" hidden>
+        <label for="promptSearch">Prompt Templates in the org</label>
+        <div class="combo">
+          <input id="promptSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="promptPicker" value="">
+          <div id="promptResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim">
+          Opens as a one-step plan, so you can ask for a change, review it and deploy it.
+          Only free-form (flex) templates can be opened.
+        </p>
+      </div>
+
+      <div id="openObjectFields" hidden>
+        <label for="objectSearch">Custom Objects in the org</label>
+        <div class="combo">
+          <input id="objectSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="objectPicker" value="">
+          <div id="objectResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim">
+          Opens as a plan: the object, then a step for each of its custom fields. Fields of a type
+          the tool cannot represent are left out and named in the plan.
+        </p>
+      </div>
+
+      <div id="openFieldChooser" hidden>
+        <p id="fieldChooserTitle"></p>
+        <p class="dim" id="fieldChooserNotes"></p>
+        <input id="fieldChooserFilter" type="text" autocomplete="off" placeholder="Filter fields...">
+        <div>
+          <button id="fieldChooserAll" class="link-btn" type="button">Select shown</button>
+          <button id="fieldChooserNone" class="link-btn" type="button">Clear</button>
+          <span id="fieldChooserCount" class="dim"></span>
+        </div>
+        <div id="fieldChooserList" style="max-height:260px;overflow:auto"></div>
+        <button id="fieldChooserOpen" class="primary" type="button">Open object with selected fields</button>
+      </div>
+
+      <div id="openFieldFields" hidden>
+        <label for="fieldSearch">Custom Fields in the org</label>
+        <div class="combo">
+          <input id="fieldSearch" type="text" autocomplete="off" placeholder="Loading...">
+          <input type="hidden" id="fieldPicker" value="">
+          <div id="fieldResults" class="combo-list" hidden></div>
+        </div>
+        <p class="dim">
+          Opens as a one-step plan. Text, number, checkbox, picklist, lookup, master-detail and
+          simple formula fields can be opened; others are refused.
+        </p>
+      </div>
+
+      <button id="importBtn" class="primary">Open it</button>
+      <button id="surveyLink" class="link-btn" type="button">Generate support report</button>
+      <button id="orgSummaryLink" class="link-btn" type="button">Generate org summary</button>
+      <span id="orgSummaryStatusIndicator" class="dim"></span>
+    </div>
+
+    <div class="pad" id="newPane">
+      <div class="open-kind">
+        <label><input type="radio" name="newKind" id="newKindFlow" value="flow" checked> Flow</label>
+        <label><input type="radio" name="newKind" id="newKindLwc" value="lwc"> Lightning Web Component</label>
+      </div>
+
+      <label for="request" id="requestLabel">What should the flow do?</label>
+      <textarea id="request" rows="4"
+        placeholder="When an opportunity is won, mark its account as Hot"></textarea>
+
+      <button id="designBtn" class="primary">Design the flow</button>
+    </div>
+
+    <div class="pad" id="planPane" hidden>
+      <label for="planRequest">What should be built?
+        <span class="info-icon" tabindex="0" title="Can be one thing or several - any mix of Custom Objects, Custom Fields (including formula and long text), Apex Classes, Flows, Lightning Web Components, Platform Events, Custom Metadata, Prompt Templates, and Agentforce Agents. A model first decides how many pieces the request needs and in what order, then each piece is generated on its own.">&#9432;</span>
+      </label>
+      <textarea id="planRequest" rows="4"
+        placeholder="An Invoice object with an Amount field, and a flow that marks it Paid when the amount is settled"></textarea>
+
+      <label class="check">
+        <input type="checkbox" id="planPermSetToggle" checked>
+        Grant access on a Permission Set
+        <span class="dim">(so new objects and fields are visible)</span>
+      </label>
+
+      <div id="planPermSetFields">
+        <div class="open-kind">
+          <label><input type="radio" name="planPermSetMode" id="planPermSetModeNew" value="new" checked> Create new</label>
+          <label><input type="radio" name="planPermSetMode" id="planPermSetModeExisting" value="existing"> Add to existing</label>
+        </div>
+
+        <div id="planPermSetNewFields">
+          <label for="planPermSetLabel">New Permission Set name</label>
+          <input id="planPermSetLabel" type="text" placeholder="Invoice_Access">
+        </div>
+
+        <div id="planPermSetExistingFields" hidden>
+          <label for="planPermSetSearch">Permission Sets in the org</label>
+          <div class="combo">
+            <input id="planPermSetSearch" type="text" autocomplete="off" placeholder="Loading...">
+            <input type="hidden" id="planPermSetPicker" value="">
+            <div id="planPermSetResults" class="combo-list" hidden></div>
+          </div>
+        </div>
+      </div>
+
+      <button id="planBtn" class="primary">Plan and build</button>
+      <button id="planExamplesBtn" type="button" class="link-btn">Examples</button>
+      <button id="planResetBtn" type="button" class="link-btn">Reset</button>
+    </div>
+
+    <div class="pad" id="portalPane" hidden>
+      <h3 class="portal-title">Customer portal</h3>
+      <p class="dim">Builds a ready-to-use Experience Cloud site for your customers:</p>
+      <ul class="portal-gets dim">
+        <li>a <b>public home page</b> with Register and Log in buttons</li>
+        <li><b>self-registration</b> - a visitor signs up and gets a portal user, no admin needed</li>
+        <li>a <b>My Account</b> page, only after login, where they see and edit their own details</li>
+        <li>optionally a <b>chat channel</b> with a support queue</li>
+      </ul>
+      <p class="dim portal-target" id="portalTarget"></p>
+
+      <label for="portalSite">Site name <span class="dim">(also becomes the web address)</span></label>
+      <input id="portalSite" type="text" maxlength="59" placeholder="Support Hub" autocomplete="off">
+      <p class="dim portal-note" id="portalUrlHint"></p>
+
+      <label for="portalHeadline">Home page headline <span class="dim">(optional)</span></label>
+      <input id="portalHeadline" type="text" maxlength="120" placeholder="Welcome to Support Hub">
+      <label for="portalIntro">Text under the headline</label>
+      <textarea id="portalIntro" rows="2" maxlength="300">Create an account to manage your details.</textarea>
+
+      <label for="portalLicense">Type of portal user</label>
+      <select id="portalLicense">
+        <option value="customer_community">Customer Community - each user sees only their own records (simpler)</option>
+        <option value="customer_community_plus">Customer Community Plus - role-based sharing (advanced)</option>
+      </select>
+
+      <label class="check"><input type="checkbox" id="portalChat"> Add a chat channel</label>
+      <p class="dim portal-note">Creates a support queue, a messaging channel and a chat deployment. The chat
+        button on the pages still needs two values copied from Setup afterwards.</p>
+      <label class="check"><input type="checkbox" id="portalReuse"> This site already exists - update it</label>
+      <p class="dim portal-note">Tick this when re-running with the same site name.</p>
+
+      <div class="portal-steps">
+        <button id="portalCheckBtn" type="button"><b>1.</b> Check the org</button>
+        <button id="portalPlanBtn" type="button"><b>2.</b> Preview the steps</button>
+        <button id="portalBuildBtn" type="button" class="primary"><b>3.</b> Build the portal</button>
+      </div>
+      <p class="dim portal-note">1 and 2 only read - nothing is written until you press 3, and it asks you to confirm.</p>
+      <div id="portalOut" class="portal-out"></div>
+    </div>
+
+    <div class="pad" id="sharedOptions">
+      <details id="options">
+        <summary>Options</summary>
+        <div class="options">
+          <label>Provider
+            <select id="provider"></select>
+          </label>
+          <label>API key <span class="dim">(only if not set on the server)</span>
+            <input id="apiKey" type="password" autocomplete="off"
+              placeholder="sk-ant-... or AIza...">
+          </label>
+          <label>Model
+            <select id="model">
+              <option value="">provider default</option>
+            </select>
+          </label>
+          <label>Effort
+            <select id="effort">
+              <option selected>medium</option><option>high</option>
+            </select>
+          </label>
+          <label>API version
+            <input id="apiVersion" value="64.0" size="6">
+          </label>
+          <label class="check">
+            <input type="checkbox" id="activate">
+            Deploy Active <span class="warn-inline">(runs on live records)</span>
+          </label>
+          <label class="check" hidden>
+            <input type="checkbox" id="autoWorkers">
+            Auto-select for workers
+            <span class="dim">(Build multiple things only)</span>
+          </label>
+          <label hidden>Agent user <span class="dim">(only if the plan builds a customer-facing service agent - the username of a user with the Einstein Agent User profile; employee agents need none)</span>
+            <input id="planAgentUser" type="text" autocomplete="off" placeholder="agent.user@example.com">
+          </label>
+          <label class="check" hidden>
+            <input type="checkbox" id="planParallel">
+            Run independent steps in parallel
+            <span class="dim">(Build multiple things only - faster, but can trip rate limits more and cost more retries; off by default)</span>
+          </label>
+        </div>
+      </details>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <div class="pad refine" id="refineBox" hidden>
+      <label for="instruction">Change something</label>
+      <textarea id="instruction" rows="2"
+        placeholder="also set the account's description"></textarea>
+      <button id="refineBtn">Revise</button>
+    </div>
+  </section>
+
+  <!-- Right: the flow -->
+  <section class="panel" id="right">
+    <div id="empty" class="empty">
+      <p>Describe what you need in plain language - a flow, or several pieces at
+        once: objects and fields, Apex, Lightning components, AI prompt templates,
+        Agentforce agents - and it appears here for review.</p>
+      <p class="dim">Nothing is sent to Salesforce until you approve it.</p>
+      <div id="emptyExamples" class="example-cards" hidden>
+        <p class="dim">Start from an example:</p>
+        <div id="exampleFeatured" class="example-featured"></div>
+        <p class="dim">Or a simpler one:</p>
+        <div id="exampleCards"></div>
+      </div>
+    </div>
+
+    <div id="flowView" hidden>
+      <div class="flow-head">
+        <div>
+          <h2 id="flowLabel"></h2>
+          <div class="meta" id="flowMeta"></div>
+        </div>
+        <div class="badges">
+          <span class="badge" id="statusBadge"></span>
+          <span class="badge dim" id="versionBadge"></span>
+        </div>
+      </div>
+
+      <p class="desc" id="flowDesc"></p>
+      <div class="meta usage" id="usage"></div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="diagram" data-kinds="flow">Diagram</button>
+        <button class="tab" data-tab="explain" data-kinds="flow apex trigger lwc">Explain</button>
+        <button class="tab" data-tab="markdown" data-kinds="flow">Documentation</button>
+        <button class="tab" data-tab="test" data-kinds="flow lwc">Test</button>
+        <button class="tab" data-tab="xml" data-kinds="flow apex trigger lwc" id="xmlTabLabel">Flow XML</button>
+        <button class="tab" data-tab="ir" data-kinds="flow apex trigger lwc" id="irTab" hidden>IR</button>
+      </div>
+
+      <div class="diagram-tab" id="diagramTab">
+        <div class="diagram-wrap">
+          <button id="diagramResetBtn" type="button" class="diagram-reset">Reset view</button>
+          <div id="diagram"></div>
+        </div>
+        <div class="element-index" id="elementIndex"></div>
+      </div>
+      <div class="lwc-file-tabs" id="lwcFileTabs" hidden>
+        <button type="button" class="lwc-file-tab active" data-file="js">JS</button>
+        <button type="button" class="lwc-file-tab" data-file="html">HTML</button>
+        <button type="button" class="lwc-file-tab" data-file="css" id="lwcCssTab" hidden>CSS</button>
+        <button type="button" class="lwc-file-tab" data-file="preview">Preview</button>
+      </div>
+      <pre id="code" hidden></pre>
+      <div id="lwcPreview" class="lwc-preview" hidden></div>
+
+      <div id="explainPane" hidden>
+        <div class="row">
+          <input id="question" placeholder="Ask something about this flow (optional)">
+          <button id="explainBtn">Explain</button>
+        </div>
+        <div id="explanation" class="explanation dim">
+          Ask the model what this flow does, or leave the box empty for a walkthrough.
+        </div>
+      </div>
+
+      <div class="actions">
+        <div class="row reference-row">
+          <input id="refInput" maxlength="80" placeholder="Reference, e.g. JIRA-123 (optional)"
+                 title="Stamped into descriptions and code comments of whatever is deployed or exported">
+        </div>
+        <div class="action-groups">
+          <fieldset class="action-group">
+            <legend>Review &amp; deploy</legend>
+            <button id="approveBtn" class="primary">Approve</button>
+            <button id="validateBtn" disabled>Validate</button>
+            <button id="deployBtn" class="danger" disabled>Deploy</button>
+          </fieldset>
+          <fieldset class="action-group">
+            <legend>Export &amp; share</legend>
+            <a id="flowReportLink" href="#" download class="btn">Download report</a>
+            <a id="flowPackageLink" href="#" download class="btn" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
+            <button id="shareBtn" type="button" hidden>Share this</button>
+          </fieldset>
+        </div>
+        <div id="gate" class="gate"></div>
+      </div>
+
+      <div id="result" class="result" hidden></div>
+    </div>
+
+    <div id="planView" hidden>
+      <div class="flow-head">
+        <div>
+          <h2>Plan</h2>
+          <div class="meta" id="planMeta"></div>
+        </div>
+        <div class="badges">
+          <span class="badge dim" id="planVersionBadge"></span>
+        </div>
+      </div>
+
+      <p class="desc" id="planReasoning" hidden></p>
+      <details class="plan-how-to-test" id="planHowToTestBox" hidden>
+        <summary>How to test</summary>
+        <pre id="planHowToTest"></pre>
+      </details>
+
+      <div class="plan-overview" id="planOverview"></div>
+      <div class="plan-steps-toolbar">
+        <button id="planExpandAllBtn" class="link-button" type="button">Expand all</button>
+        <button id="planCollapseAllBtn" class="link-button" type="button">Collapse all</button>
+      </div>
+      <div class="plan-steps" id="planSteps"></div>
+      <div class="plan-permset" id="planPermSetGrant" hidden></div>
+
+      <div class="actions">
+        <div class="row reference-row">
+          <input id="planRefInput" maxlength="80" placeholder="Reference, e.g. JIRA-123 (optional)"
+                 title="Stamped into descriptions and code comments of everything deployed or exported">
+        </div>
+        <div class="action-groups">
+          <fieldset class="action-group">
+            <legend>Review &amp; deploy</legend>
+            <button id="planApproveBtn" class="primary">Approve all</button>
+            <button id="planValidateBtn" disabled>Validate</button>
+            <button id="planDeployBtn" class="danger" disabled>Deploy</button>
+          </fieldset>
+          <fieldset class="action-group">
+            <legend>Export &amp; share</legend>
+            <a id="planReportLink" href="#" download class="btn">Download report</a>
+            <a id="planPackageLink" href="#" download class="btn" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
+            <button id="planGitBtn" type="button" title="Commit the package to a new branch and open a pull request - deploys nothing to Salesforce">Push to Git (PR)</button>
+            <button id="planShareBtn" type="button" hidden>Share this</button>
+          </fieldset>
+        </div>
+        <div id="planGate" class="gate"></div>
+      </div>
+
+      <div id="planResult" class="result" hidden></div>
+
+      <div class="pad refine" id="planRefineBox">
+        <label for="planInstruction">Change the plan itself - add, remove or restructure steps</label>
+        <textarea id="planInstruction" rows="2"
+          placeholder="also add a test class for the Apex trigger"></textarea>
+        <button id="planReviseBtn">Revise plan</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="examplesDialog">
+  <h3>Example requests</h3>
+  <p class="dim">
+    Pick an example to load a ready-made request into the box - you can
+    still edit it before building. The first three groups grow from a single
+    field to a full solution; the last one uses AI (prompt templates and
+    Agentforce agents). For a public site with sign-up and a My Account page,
+    use the Customer portal tab instead.
+  </p>
+  <select id="examplesSelect" size="12">
+    <optgroup label="Fields and components - one thing">
+      <option value="lead-simple">Lead management - priority field</option>
+      <option value="account-simple">Account management - tier field</option>
+      <option value="acv-simple">ACV - contract value field</option>
+      <option value="cs-simple">Customer Success - health score field</option>
+      <option value="lwc-simple">LWC - Contact quick view component</option>
+    </optgroup>
+    <optgroup label="Automation - a field plus a flow">
+      <option value="lead-medium">Lead management - scoring flow</option>
+      <option value="account-medium">Account management - auto-tiering flow</option>
+      <option value="acv-medium">ACV - recalculation flow</option>
+      <option value="cs-medium">Customer Success - onboarding tracking</option>
+    </optgroup>
+    <optgroup label="Full solutions - objects, Apex and flows together">
+      <option value="lead-complex">Lead management - scoring, Apex, and auto-routing</option>
+      <option value="account-complex">Account management - tiering and health</option>
+      <option value="acv-complex">ACV - contract tracking and Chatter alerts</option>
+      <option value="cs-complex">Customer Success - health score and renewal risk</option>
+      <option value="contact-complex">Contact management - round-robin assignment</option>
+    </optgroup>
+    <optgroup label="AI - prompts and Agentforce agents">
+      <option value="ai-case-summary">AI Case summary - prompt template and flow</option>
+      <option value="ai-conversation-review">AI review of ended chats - prompt, Apex and flow</option>
+      <option value="agent-service-orders">Service agent - case status and new requests</option>
+      <option value="agent-employee-account-brief">Employee agent - account briefing for sales reps</option>
+    </optgroup>
+  </select>
+  <div id="examplesNote" class="examples-note" hidden>
+    <div><b>You get:</b> <span id="examplesGets"></span></div>
+    <div><b>Before you start:</b> <span id="examplesBefore"></span></div>
+  </div>
+  <pre id="examplesPreview" class="dim"></pre>
+  <div class="row survey-actions">
+    <button id="examplesUseBtn" class="primary" type="button">Use this</button>
+    <button id="examplesCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="surveyDialog">
+  <h3>Support report</h3>
+  <p class="dim">
+    Every flow in this org, scored against what SFDC Flow Tool can represent.
+    Counts and gap categories only - no flow names, field values, or formulas.
+  </p>
+  <div id="surveyBody" class="dim">Scanning the org...</div>
+  <textarea id="surveyText" rows="14" readonly hidden></textarea>
+  <div class="row survey-actions">
+    <button id="surveyCopyBtn" class="primary" hidden>Copy</button>
+    <button id="surveyCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="orgSummaryDialog">
+  <h3>Org summary</h3>
+  <p class="dim">
+    Pulls a slice of this org's metadata into a knowledge base, then lets you
+    ask the configured model questions against it. The knowledge base itself
+    can't be edited here - it's exactly what was retrieved.
+  </p>
+
+  <div id="orgSummarySelect" hidden>
+    <p class="dim">What to include:</p>
+    <div id="orgSummaryGroups"></div>
+    <div class="row survey-actions">
+      <button id="orgSummaryGenerateBtn" class="primary" type="button">Generate</button>
+    </div>
+  </div>
+
+  <div id="orgSummaryBody" class="dim">Retrieving metadata...</div>
+
+  <div id="orgSummaryConsent" hidden>
+    <textarea id="orgSummaryText" rows="10" readonly></textarea>
+    <p id="orgSummarySize" class="dim"></p>
+    <div class="row survey-actions">
+      <button id="orgSummaryApproveBtn" class="primary" type="button">Use this as context</button>
+    </div>
+  </div>
+
+  <div id="orgSummaryChat" hidden>
+    <div class="row">
+      <input id="orgSummaryQuestion" placeholder="Ask something about this org">
+      <button id="orgSummaryAskBtn">Ask</button>
+    </div>
+    <div id="orgSummaryAnswer" class="explanation dim">
+      Ask about anything that would show up in the knowledge base above -
+      objects, flows, Apex, components.
+    </div>
+  </div>
+
+  <div class="row survey-actions">
+    <button id="orgSummaryDownloadBtn" type="button" hidden>Save as .md</button>
+    <button id="orgSummaryCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="shareDialog">
+  <h3>Share this</h3>
+  <p class="dim">
+    Anyone with this link <strong>and</strong> the password can resume from
+    exactly this point - review, approve, validate and deploy - for the next
+    24 hours. Nothing gets deployed to Salesforce just by opening the link.
+  </p>
+  <div id="shareBody" class="dim">Creating link...</div>
+  <div id="shareResult" hidden>
+    <label>Link
+      <div class="row">
+        <input id="shareLink" type="text" readonly>
+        <button id="shareCopyLinkBtn" type="button">Copy</button>
+      </div>
+    </label>
+    <label>Password
+      <div class="row">
+        <input id="sharePassword" type="text" readonly>
+        <button id="shareCopyPasswordBtn" type="button">Copy</button>
+      </div>
+    </label>
+    <p class="dim">Expires in 24 hours. Send the link and the password separately if you can.</p>
+  </div>
+  <div class="row survey-actions">
+    <button id="shareCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="gitDialog">
+  <h3>Push to Git</h3>
+  <p class="dim">
+    Commits this plan's Metadata API package (package.xml + components) to a new
+    branch and opens a pull request. Nothing is deployed to Salesforce.
+  </p>
+  <div id="gitForm">
+    <label>Repository
+      <input id="gitRepo" type="text" placeholder="owner/name" autocomplete="off">
+    </label>
+    <label>Base branch
+      <input id="gitBase" type="text" placeholder="default branch" autocomplete="off">
+    </label>
+    <label>Folder in the repo
+      <input id="gitFolder" type="text" autocomplete="off">
+    </label>
+    <label>Pull request title
+      <input id="gitTitle" type="text" placeholder="generated from the plan" autocomplete="off">
+    </label>
+    <label>GitHub personal access token
+      <input id="gitToken" type="password" autocomplete="off" placeholder="ghp_... or github_pat_...">
+    </label>
+    <label class="check">
+      <input id="gitRemember" type="checkbox"> Remember the token in this browser
+    </label>
+    <p class="dim">Needs write access to the repo (classic: <code>repo</code> scope; fine-grained: Contents and Pull requests, read &amp; write). Sent to GitHub for this request only - the server doesn't keep it.</p>
+  </div>
+  <div id="gitError" class="error"></div>
+  <div id="gitResult" hidden>
+    <p>Pull request opened: <a id="gitPrLink" href="#" target="_blank" rel="noopener"></a></p>
+  </div>
+  <div class="row survey-actions">
+    <button id="gitSubmitBtn" class="primary" type="button">Create pull request</button>
+    <button id="gitCloseBtn" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="shareUnlockDialog">
+  <h3>Enter the password</h3>
+  <p class="dim">This link opens a shared configuration, ready for review.</p>
+  <label>Password
+    <input id="shareUnlockPassword" type="text" autocomplete="off" inputmode="numeric">
+  </label>
+  <div id="shareUnlockError" class="error"></div>
+  <div class="row survey-actions">
+    <button id="shareUnlockBtn" class="primary" type="button">Unlock</button>
+  </div>
+</dialog>
+
+<script type="module" src="bootstrap.js"></script>
+</body>
+</html>

@@ -1,0 +1,658 @@
+:root {
+  --bg: #ffffff;
+  --panel: #f7f7f8;
+  --line: #e3e3e6;
+  --text: #1a1a1c;
+  --dim: #6b6b73;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+  --ok: #15803d;
+  --warn: #b45309;
+  --code: #f2f2f4;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a;
+    --panel: #1d1d22;
+    --line: #2e2e36;
+    --text: #e8e8ea;
+    --dim: #9a9aa4;
+    --accent: #60a5fa;
+    --danger: #f87171;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --code: #101014;
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* Several header blocks set their own `display` unconditionally (flex, for
+   alignment), which otherwise beats the UA stylesheet's `[hidden]{display:
+   none}` - an author rule always wins over a user-agent one regardless of
+   specificity. Without this, toggling `.hidden` on those elements does
+   nothing visible. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Shown while a background generation is waiting out a rate limit or a
+   transient provider error (see flowtool/llm.py's retry_status and
+   server.py's waiting()) - transparency for a wait that would otherwise look
+   identical to a hang. Sits above <main> so it's visible regardless of which
+   mode is active. */
+.retry-notice {
+  flex-shrink: 0;
+  padding: 8px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+/* Wraps as whole groups (title, org status, Log in buttons, Manual entry,
+   Logs) rather than shrinking - without this, a header too narrow for one
+   line squeezed every item instead, and a squeezed h1 has nowhere to put the
+   overflow except wrapping "SFDC Flow Tool" onto three lines of its own. */
+header {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 16px;
+  row-gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+header h1 a { color: inherit; text-decoration: none; }
+header h1 a:hover { text-decoration: underline; }
+header h1 { flex-shrink: 0; white-space: nowrap; font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+.header-org {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.header-org select { width: auto; min-width: 160px; padding: 4px 8px; }
+.header-oauth { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+
+/* The push-everything-right margin lives here rather than on .header-org,
+   since that one is hidden entirely on a host with no sf CLI (see [hidden]
+   above) - an element with display:none carries no margin, so the group
+   after it would lose its right alignment along with it. .header-connect is
+   never hidden, so it is the one every layout can anchor on. */
+.header-connect {
+  flex-shrink: 0;
+  margin: 0 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.dropdown-wrap { flex-shrink: 0; position: relative; }
+.dropdown-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.dropdown-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  padding: 14px;
+  z-index: 10;
+}
+
+.log-count {
+  background: var(--danger);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.logs-panel { width: 480px; max-width: calc(100vw - 24px); }
+.logs-console {
+  max-height: 240px; overflow-y: auto; padding: 8px;
+  background: #111; color: #d7d7d7; border-radius: 6px;
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.logs-console.dim { color: var(--dim); background: transparent; padding: 0; font: inherit; }
+.logs-console .logline { white-space: pre-wrap; word-break: break-word; }
+.logs-console .logline.warning { color: #f0b429; }
+.logs-console .logline.error { color: #ff6b6b; }
+.logs-section h4 .linklike {
+  margin-left: 8px; padding: 0; border: 0; background: none;
+  color: var(--dim); font-size: 11px; cursor: pointer; text-decoration: underline;
+}
+.logs-section + .logs-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.logs-section h4 { margin: 0 0 8px; font-size: 13px; }
+.logs-entry {
+  border-left: 2px solid var(--danger);
+  padding: 4px 0 4px 10px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+.logs-entry .t { color: var(--dim); font-size: 11px; }
+
+.manual-panel { width: 340px; }
+.manual-panel label { margin-top: 10px; }
+.manual-panel label:first-child { margin-top: 0; }
+.manual-panel .primary { width: 100%; margin-top: 12px; }
+.manual-panel .error { margin-top: 8px; }
+.manual-help { margin-top: 12px; }
+.manual-help summary { cursor: pointer; font-size: 13px; color: var(--dim); }
+.manual-help p { font-size: 12.5px; line-height: 1.55; margin: 8px 0 0; }
+.manual-help code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--code);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+/* flex:1 fills whatever height the header - now variable, since it wraps -
+   left behind, instead of the fixed calc(100vh - 49px) this used to be,
+   which assumed a single-line header and left a gap or an overflow the
+   moment header grew past that. */
+main {
+  display: grid;
+  grid-template-columns: minmax(320px, 30%) 1fr;
+  flex: 1;
+  min-height: 0;
+}
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; flex: none; height: auto; }
+}
+
+.panel { overflow-y: auto; }
+#left { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+#right { padding: 20px; }
+
+.pad { padding: 16px; }
+.meta, .dim { color: var(--dim); font-size: 13px; }
+
+label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
+/* Block, not flex: the text and the dim hint after the checkbox are separate
+   nodes, and as flex items each wrapped into its own narrow column. */
+label.check { display: block; color: var(--text); }
+label.check > input[type=checkbox] { margin-right: 6px; vertical-align: middle; }
+/* A hover/focus tooltip (native `title`) standing in for a paragraph of
+   explanatory text, so the pane above the request box stays uncluttered. */
+.info-icon {
+  display: inline-block;
+  cursor: help;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+}
+.info-icon:hover, .info-icon:focus { color: var(--accent); }
+
+textarea, input, select {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+textarea { resize: vertical; }
+input[type=checkbox], input[type=radio] { width: auto; }
+
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--dim); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button.danger:not(:disabled):hover { background: var(--danger); color: #fff; }
+
+a.btn {
+  display: inline-block;
+  font: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+a.btn:hover { border-color: var(--dim); }
+
+.action-groups { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
+.action-group {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 0; padding: 8px 12px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.action-group legend { padding: 0 6px; font-size: 11.5px; color: var(--dim); }
+
+#designBtn, #refineBtn { margin-top: 10px; }
+
+.combo { position: relative; }
+.combo-list {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.combo-item {
+  display: block;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.combo-item:hover, .combo-item.active { background: var(--line); }
+.combo-item-row { display: flex; justify-content: space-between; gap: 10px; }
+.combo-item .combo-mod { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.combo-item .combo-desc { color: var(--dim); font-size: 11px; margin-top: 2px; }
+.combo-item mark { background: var(--accent); color: #fff; border-radius: 2px; padding: 0 1px; }
+.combo-empty { padding: 7px 10px; font-size: 13px; color: var(--dim); }
+
+details#options { margin-top: 12px; }
+details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
+.options { display: grid; gap: 10px; margin-top: 10px; }
+.warn-inline { color: var(--warn); font-size: 12px; }
+
+.modes { display: flex; gap: 4px; }
+.mode { flex: 1; font-size: 13px; padding: 6px 8px; }
+.mode.active { border-color: var(--accent); color: var(--accent); }
+.portal-out { margin-top: 12px; font-size: 13px; }
+.portal-note { margin: 0 0 8px 0; }
+label.check + .portal-note { margin-left: 24px; }
+.portal-title { margin: 4px 0 6px; font-size: 16px; }
+.portal-gets { margin: 0 0 8px; padding-left: 18px; }
+.portal-gets li { margin: 2px 0; }
+.portal-target { margin: 6px 0 12px; }
+.portal-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 6px; }
+.portal-out h4 { margin: 14px 0 6px; font-size: 13px; }
+.portal-row { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
+.portal-tag { flex: none; min-width: 52px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
+.portal-tag.pass, .portal-tag.done { color: #1a7f37; }
+.portal-tag.fail, .portal-tag.failed, .portal-tag.error { color: #cf222e; }
+.portal-tag.skip, .portal-tag.skipped, .portal-tag.planned { color: var(--dim); }
+.portal-fix { color: var(--dim); }
+.portal-links a { display: block; margin: 2px 0; }
+/* HIGHLIGHT_PLAN_MODE config var (see server.py /api/config) - gives "Build
+   multiple things" a standing accent border and weight so it reads as the
+   featured mode even before it's selected, not just once .active applies. */
+.mode.featured { border-color: var(--accent); font-weight: 700; }
+.mode.featured.active { background: var(--accent); color: var(--bg); }
+
+#openPane select { margin-bottom: 10px; }
+#openPane p { margin: 10px 0 0; }
+.open-kind { display: flex; gap: 14px; margin-bottom: 10px; font-size: 13px; color: var(--text); }
+.open-kind label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+#openApexFields { margin-bottom: 10px; }
+
+.link-btn {
+  display: block;
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: underline;
+}
+.link-btn:hover:not(:disabled) { border-color: transparent; opacity: 0.8; }
+
+dialog {
+  width: min(560px, 90vw);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  color: var(--text);
+  background: var(--bg);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog h3 { margin: 0 0 6px; font-size: 15px; }
+dialog p { margin: 0 0 12px; }
+#surveyText {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: pre;
+}
+.survey-actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+
+.explanation {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  line-height: 1.65;
+  max-width: 80ch;
+}
+.explanation.filled { color: var(--text); }
+#explainPane .row { display: flex; gap: 8px; margin-top: 12px; }
+#explainPane .row input { flex: 1; }
+
+.log { flex: 1; padding: 0 16px 16px; }
+.log .entry {
+  border-left: 2px solid var(--line);
+  padding: 6px 0 6px 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.log .entry .v { color: var(--dim); font-size: 11px; }
+
+.refine { border-top: 1px solid var(--line); }
+
+.empty { color: var(--dim); padding: 40px 0; max-width: 60ch; }
+.example-cards button {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  text-align: left;
+  background: transparent;
+  color: var(--fg, inherit);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.example-cards button:hover { border-color: var(--accent, currentColor); }
+.example-cards .featured-card { border-left: 3px solid var(--accent); }
+.example-cards .kind-tag {
+  display: inline-block;
+  margin-bottom: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.example-cards .card-title { display: block; color: var(--text); }
+.example-cards .card-gets { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+.flow-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.flow-head h2 { margin: 0 0 2px; font-size: 18px; }
+.badges { display: flex; gap: 6px; flex-shrink: 0; }
+.badge {
+  font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.badge.active { border-color: var(--warn); color: var(--warn); }
+.badge.draft { border-color: var(--line); color: var(--dim); }
+
+#examplesNote {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+#examplesPreview {
+  font-family: inherit;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* A plain dim line here was easy to miss, and it is the one place the model
+   is told to flag an assumption or a substitution it made (an invented action
+   name, a component it couldn't use) - text worth reading, not metadata. */
+.desc {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 70ch;
+  white-space: pre-wrap;
+}
+.desc:empty { display: none; }
+
+.diagram-tab { display: flex; gap: 16px; align-items: flex-start; margin: 14px 0 0; }
+
+.diagram-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 70vh;
+  position: relative;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+  cursor: grab;
+  user-select: none;
+}
+.diagram-wrap.dragging { cursor: grabbing; }
+
+.diagram-reset {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+/* Natural size, not fit-to-container - the whole point of panning and
+   zooming is a canvas bigger than its viewport. */
+#diagram { display: inline-block; transform-origin: 0 0; }
+#diagram svg { display: block; }
+
+/* One glow, stacked twice for a visible ring regardless of node shape - a
+   diamond and a stadium have no shared edge to outline any other way. */
+#diagram svg .node[data-index-id] { cursor: pointer; transition: filter 0.1s; }
+#diagram svg .node.linked {
+  filter: drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 2px var(--accent));
+}
+
+.element-index {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.element-index .row {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid var(--line);
+  cursor: pointer;
+}
+.element-index .row.linked { border-left-color: var(--accent); background: var(--panel); }
+.element-index .row-head { display: flex; justify-content: space-between; gap: 8px; }
+.element-index .row-name { font-size: 13px; font-weight: 600; }
+.element-index .row-type { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.element-index .row-detail {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
+
+.tabs { display: flex; gap: 4px; margin: 16px 0 0; flex-wrap: wrap; }
+.tab { font-size: 13px; padding: 5px 10px; }
+.tab.active { border-color: var(--accent); color: var(--accent); }
+
+pre#code {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  margin: 12px 0 0;
+  max-height: 60vh;
+}
+
+.actions { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.actions .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.actions .row label { flex: 0 0 200px; }
+.reference-row { margin-bottom: 10px; }
+.reference-row input { max-width: 320px; }
+input.invalid { border-color: var(--danger); }
+.gate { margin-top: 10px; font-size: 13px; color: var(--dim); }
+
+.result { margin-top: 16px; padding: 14px; border-radius: 8px; border: 1px solid var(--line); }
+.result.ok { border-color: var(--ok); }
+.result.bad { border-color: var(--danger); }
+.result h3 { margin: 0 0 8px; font-size: 14px; }
+.result ul { margin: 8px 0 0; padding-left: 18px; }
+.result li { font-family: var(--mono); font-size: 12.5px; margin-bottom: 6px; }
+.result button { margin-top: 12px; }
+
+/* Plan mode - one card per step (Object/Field/Apex/Flow), colour-coded by
+   type so a long plan stays scannable at a glance. */
+.plan-type-badge.flow { border-color: var(--accent); color: var(--accent); }
+.plan-type-badge.object { border-color: var(--ok); color: var(--ok); }
+.plan-type-badge.field { border-color: var(--warn); color: var(--warn); }
+.plan-type-badge.apex { border-color: var(--accent); color: var(--accent); }
+.plan-type-badge.lwc { border-color: var(--accent); color: var(--accent); }
+.plan-type-badge.mdt { border-color: var(--ok); color: var(--ok); }
+.plan-type-badge.mdt_record { border-color: var(--warn); color: var(--warn); }
+
+.lwc-files { margin-top: 4px; }
+.lwc-file-tabs { display: flex; gap: 4px; }
+.lwc-file-tab {
+  font-size: 12px; padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--line); color: var(--dim); background: none; cursor: pointer;
+  font-family: var(--mono);
+}
+.lwc-file-tab.active { border-color: var(--accent); color: var(--accent); }
+pre.lwc-file-content {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  margin: 8px 0 0;
+  max-height: 50vh;
+}
+
+.plan-overview { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
+.plan-chip {
+  font-size: 12px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--dim);
+}
+.plan-chip.flow { border-color: var(--accent); }
+.plan-chip.object { border-color: var(--ok); }
+.plan-chip.field { border-color: var(--warn); }
+.plan-chip.apex { border-color: var(--accent); }
+
+.plan-steps-toolbar { margin-top: 10px; display: flex; gap: 14px; }
+.link-button {
+  background: none; border: none; padding: 0; color: var(--accent);
+  font-size: 12.5px; cursor: pointer; text-decoration: underline;
+}
+.plan-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
+.plan-step {
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  overflow: hidden;
+}
+.plan-step summary {
+  cursor: pointer; list-style: none; padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px; font-size: 14px;
+}
+.plan-step summary::-webkit-details-marker { display: none; }
+.plan-step summary::before { content: "▸"; color: var(--dim); font-size: 11px; }
+.plan-step[open] summary::before { content: "▾"; }
+.plan-step-name { font-weight: 600; }
+.plan-step-sub { font-size: 12.5px; }
+.plan-step-body { padding: 0 14px 14px; }
+.plan-step-body pre {
+  margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--code);
+  font-family: var(--mono); font-size: 12.5px; overflow-x: auto; white-space: pre-wrap;
+}
+.plan-step-diagram-tab { display: flex; gap: 16px; align-items: flex-start; margin-top: 8px; }
+.plan-step-diagram { flex: 1 1 auto; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow-x: auto; }
+.plan-step-diagram svg { max-width: 100%; height: auto; }
+.plan-step-diagram svg .node[data-index-id] { cursor: pointer; transition: filter 0.1s; }
+.plan-step-diagram svg .node.linked {
+  filter: drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 2px var(--accent));
+}
+.plan-step-diagram-tab .plan-step-element-index { flex: 0 0 220px; max-height: 420px; }
+.plan-step-table { border-collapse: collapse; font-size: 13px; }
+.plan-step-table th {
+  text-align: left; color: var(--dim); font-weight: 400; padding: 3px 12px 3px 0; white-space: nowrap;
+}
+.plan-step-table td { padding: 3px 0; font-family: var(--mono); }
+.plan-step-field-list {
+  margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; font-family: var(--mono); color: var(--dim);
+}
+.plan-step-field-list li { margin-bottom: 2px; }
+.plan-step-deps, .plan-step-repairs { margin-top: 8px; font-size: 12px; }
+.plan-step-revise {
+  display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.plan-step-revise input { flex: 1; }
+
+.plan-how-to-test { margin: 8px 0 0; }
+.plan-how-to-test summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.plan-how-to-test pre {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+.error { color: var(--danger); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+.spin { color: var(--dim); font-size: 13px; margin-top: 10px; }
+
+.usage { margin-top: 8px; font-size: 12px; }
+
+.flow-link {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.agent-user-field { display: block; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; }
+.agent-user-field input { margin-top: 6px; }
+.plan-step-note { margin: 8px 0; font-size: 12px; }
+.agent-publish { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }

@@ -1,0 +1,213 @@
+/*!
+ * Values below are referenced from Salesforce Lightning Design System 2.28.0
+ * (https://github.com/salesforce-ux/design-system), Copyright (c) 2015-present,
+ * Salesforce.com, Inc. Licensed under the BSD 3-Clause License:
+ * https://github.com/salesforce-ux/design-system/blob/main/LICENSE.txt
+ *
+ * This is NOT the official SLDS distribution - it is a small, hand-picked
+ * subset of class names/values (card, button, form element, grid, checkbox)
+ * re-expressed as static values instead of the official file's long
+ * custom-property fallback chains, and every selector is scoped under
+ * .lwc-preview so it can never affect the rest of this app's own styling.
+ * Icons and the Salesforce Sans font are deliberately NOT included here -
+ * SLDS icons are CC-BY-ND (no-derivatives) and the font has its own
+ * separate license; this file only touches the BSD-licensed CSS.
+ *
+ * Used by flowtool/static/lwc-preview.js to render a rough, non-functional
+ * visual approximation of a Lightning Web Component's markup - not a real
+ * render, no data, no interactivity. See .lwc-preview-disclaimer below.
+ */
+
+.lwc-preview {
+  background: #fff;
+  color: #181818;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  padding: 1rem;
+  border: 1px solid #dddbda;
+  border-radius: 0.25rem;
+}
+
+.lwc-preview-disclaimer {
+  font-size: 0.75rem;
+  color: #706e6b;
+  font-style: italic;
+  margin-bottom: 0.75rem;
+}
+
+/* Card */
+.lwc-preview .slds-card {
+  position: relative;
+  background: #fff;
+  border: 1px solid #c9c9c9;
+  border-radius: 0.25rem;
+  box-shadow: 0 2px 2px 0 rgba(0, 0, 0, 0.1);
+  color: #181818;
+  margin-bottom: 0.75rem;
+}
+.lwc-preview .slds-card__header {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem 0;
+}
+.lwc-preview .slds-card__header-title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0;
+}
+.lwc-preview .slds-card__body {
+  padding: 0.75rem 1rem;
+}
+.lwc-preview .slds-card__footer {
+  padding: 0.75rem 1rem;
+  margin-top: 0.75rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  border-top: 1px solid #c9c9c9;
+}
+
+/* Button */
+.lwc-preview .slds-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1rem;
+  min-height: 1.875rem;
+  border-radius: 0.25rem;
+  border: 1px solid transparent;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  cursor: default;
+  margin: 0 0.5rem 0.5rem 0;
+}
+.lwc-preview .slds-button_neutral {
+  background: #fff;
+  border-color: #c9c9c9;
+  color: #0176d3;
+}
+.lwc-preview .slds-button_brand {
+  background: #0176d3;
+  border-color: #0176d3;
+  color: #fff;
+}
+.lwc-preview .slds-button_destructive {
+  background: #ba0517;
+  border-color: #ba0517;
+  color: #fff;
+}
+.lwc-preview .slds-button_outline-brand {
+  background: #fff;
+  border-color: #0176d3;
+  color: #0176d3;
+}
+
+/* Form element / input */
+.lwc-preview .slds-form-element {
+  margin-bottom: 0.75rem;
+}
+.lwc-preview .slds-form-element__label {
+  display: block;
+  color: #444;
+  font-size: 0.75rem;
+  margin-bottom: 0.125rem;
+}
+.lwc-preview .slds-form-element__control {
+  position: relative;
+}
+.lwc-preview .slds-input,
+.lwc-preview .slds-form-element__static {
+  display: block;
+  width: 100%;
+  max-width: 20rem;
+  min-height: 1.875rem;
+  padding: 0 0.75rem;
+  border: 1px solid #c9c9c9;
+  border-radius: 0.25rem;
+  background: #fff;
+  color: #706e6b;
+  box-sizing: border-box;
+}
+.lwc-preview .slds-form-element__static {
+  line-height: 1.875rem;
+  background: #f3f2f2;
+}
+
+/* Checkbox */
+.lwc-preview .slds-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.lwc-preview .slds-checkbox_faux {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid #c9c9c9;
+  border-radius: 0.125rem;
+  background: #fff;
+}
+
+/* Grid / layout */
+.lwc-preview .slds-grid {
+  display: flex;
+}
+.lwc-preview .slds-wrap {
+  flex-wrap: wrap;
+}
+.lwc-preview .slds-col {
+  min-width: 0;
+  flex: 1;
+  padding: 0 0.5rem;
+}
+
+/* Non-SLDS helper classes for what this preview cannot represent with real
+   SLDS (icons need SVGs under a no-derivatives license; an unrecognized tag
+   has no SLDS equivalent at all). */
+.lwc-preview .lwc-preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: #706e6b;
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  margin-right: 0.5rem;
+  flex: none;
+}
+.lwc-preview .lwc-preview-unknown {
+  display: block;
+  border: 1px dashed #c9c9c9;
+  border-radius: 0.25rem;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.75rem;
+  color: #706e6b;
+}
+.lwc-preview .lwc-preview-binding {
+  display: inline-block;
+  padding: 0 0.25rem;
+  border-radius: 0.125rem;
+  background: #f3f2f2;
+  color: #706e6b;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.75rem;
+}
+.lwc-preview .lwc-record-form {
+  border: 1px dashed #c9c9c9;
+  border-radius: 0.25rem;
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.lwc-preview .lwc-record-form-label {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #706e6b;
+  margin-bottom: 0.5rem;
+}

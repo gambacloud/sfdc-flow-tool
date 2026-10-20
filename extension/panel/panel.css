@@ -1,0 +1,23 @@
+/* Extension-only additions on top of the copied web UI. */
+#extOrgBar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: #eef4fb;
+  border-bottom: 1px solid #c9d8ea;
+}
+#extOrgBar[data-status="ok"] { background: #e7f6ec; border-bottom-color: #b6dfc3; }
+#extOrgBar[data-status="no-session"],
+#extOrgBar[data-status="error"] { background: #fdeeee; border-bottom-color: #f1c0c0; }
+
+/* No Connected App, manual token entry or CLI alias picker in the extension:
+   the org is whichever one the active tab is logged into. */
+#oauthBox,
+.manual-wrap,
+.header-org { display: none !important; }
