@@ -46,8 +46,8 @@ Backend contract the extension relies on (sent to the `backend-split` session; a
 ## Follow-ups (not in this change)
 
 - Agent publish (`/api/plan/agent/publish/*`, needs the SFAP JWT exchange) and the portal builder (`/api/portal/*`): answer 501 "not available in the extension yet".
-- Permission-set merge on plan approve (`/api/plan/approve` reads the existing XML from the org): the extension would need to fetch it and send it to the backend.
 - Org Summary still needs `metadata-kb-worker.js` (missing from the repo, see ARCHITECTURE section 5).
-- `import/object-fields` stays on the backend (the pick cache lives with the parsed object there).
 
 Not covered here: final icons.
+
+Backend confirmed (branch `claude/nostalgic-chandrasekhar-50a051`): bundles carry `needs_existing_permission_set` (extension fetches the set and re-POSTs `{existing_permission_set_xml}` to the bundle path); large objects return `choose_fields` with `pick_id: null` and the extension re-POSTs `import/parse` with `fields`; plan `deploy-result` also gets `component_failures`.

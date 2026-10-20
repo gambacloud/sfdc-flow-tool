@@ -187,7 +187,7 @@ test("router: org paths are local, everything else is null (backend)", () => {
   for (const p of ["api/flows", "/api/apex-classes", "api/validate/start", "api/validate/status?session_id=1", "api/plan/deploy/start", "api/import/start", "api/org-summary/status?job_id=1", "api/survey/start"]) {
     assert.equal(typeof orgMethodFor(p), "function", p);
   }
-  for (const p of ["api/design/start", "api/import/object-fields", "api/session/abc", "api/plan/start", "api/config", "api/activity?after=0", "api/repair/start", "api/plan/approve"]) {
+  for (const p of ["api/design/start", "api/session/abc", "api/plan/start", "api/config", "api/activity?after=0", "api/repair/start", "api/plan/approve"]) {
     assert.equal(orgMethodFor(p), null, p);
   }
 });
@@ -269,4 +269,39 @@ test("router: agent publish and portal answer 'not available in the extension ye
 test("componentsFromTypes maps package types to setup kinds", () => {
   assert.deepEqual(componentsFromTypes({ ApexClass: ["A"], CustomField: ["O__c.F__c"], Other: ["x"] }),
     [{ type: "apex", name: "A", step: "A" }, { type: "field", name: "F__c", object: "O__c", step: "O__c.F__c" }]);
+});
+
+test("router: choose_fields without a pick_id is re-posted to import/parse with the chosen fields", async () => {
+  const zip = buildDeployZip({ "objects/O__c.object": "<x/>" }, { CustomObject: ["O__c"] }, "64.0");
+  const r = routerWith({
+    orgHandler: (_u, init) => (init.body.includes("<met:retrieve>")
+      ? soap("<retrieveResponse><result><id>09S</id></result></retrieveResponse>")
+      : soap(`<checkRetrieveStatusResponse><result><done>true</done><status>Succeeded</status><zipFile>${bytesToBase64(zip)}</zipFile></result></checkRetrieveStatusResponse>`)),
+    backend: (_p, b) => (b.fields ? { done: true, opened_as: "plan" } : { done: true, opened_as: "choose_fields", pick_id: null, fields: [] }),
+  });
+  const { job_id } = await r.orgMethodFor("api/import/start")({ api_name: "O__c", kind: "custom_object" });
+  const picked = await until(() => r.orgMethodFor(`api/import/status?job_id=${job_id}`)());
+  assert.ok(picked.pick_id);
+  const plan = await r.orgMethodFor("api/import/object-fields")({ pick_id: picked.pick_id, fields: ["A__c"] });
+  assert.equal(plan.opened_as, "plan");
+  assert.deepEqual(r.sent[1][1].fields, ["A__c"]);
+  assert.equal(r.sent[1][0], "api/import/parse");
+});
+
+test("router: needs_existing_permission_set fetches the set locally and re-requests the merged bundle", async () => {
+  const zip = buildDeployZip({ "permissionsets/PS.permissionset": "<PermissionSet>old</PermissionSet>" }, { PermissionSet: ["PS"] }, "64.0");
+  const merged = { ...bundle, types: { PermissionSet: ["PS"] } };
+  const r = routerWith({
+    orgHandler: (u, init) => {
+      if (init.body && init.body.includes("<met:retrieve>")) return soap("<retrieveResponse><result><id>09S</id></result></retrieveResponse>");
+      if (init.body && init.body.includes("<met:checkRetrieveStatus>")) return soap(`<checkRetrieveStatusResponse><result><done>true</done><status>Succeeded</status><zipFile>${bytesToBase64(zip)}</zipFile></result></checkRetrieveStatusResponse>`);
+      return deployOrg()(u, init);
+    },
+    backend: (p, b) => (p.endsWith("/bundle") ? (b ? merged : { ...bundle, needs_existing_permission_set: "PS" }) : {}),
+  });
+  await r.orgMethodFor("api/plan/validate/start")({ session_id: "1" });
+  const v = await until(() => r.orgMethodFor("api/plan/validate/status?session_id=1")());
+  assert.equal(v.success, true);
+  assert.deepEqual(r.sent[1], ["api/plan/session/1/bundle", { existing_permission_set_xml: "<PermissionSet>old</PermissionSet>" }]);
+  assert.ok(Array.isArray(r.sent[2][1].component_failures));
 });

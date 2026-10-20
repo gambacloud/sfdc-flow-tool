@@ -60,6 +60,7 @@ const enc = encodeURIComponent;
 // deps: newOrg() -> Org; backend(path, body?) -> Promise<json>; newId() -> string
 export function createRouter({ newOrg, backend, newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36) }) {
   const jobs = new Map();
+  const picks = new Map();
 
   function startJob(key, fn) {
     const job = { done: false };
@@ -100,8 +101,15 @@ export function createRouter({ newOrg, backend, newId = () => Math.random().toSt
       const running = jobs.get(key);
       if (running && !running.done) throw Object.assign(new Error("A validate/deploy is already running for this."), { status: 409 });
       startJob(key, async () => {
-        const bundle = await backend(`${sessionPath(id)}/bundle`);
+        let bundle = await backend(`${sessionPath(id)}/bundle`);
         const org = await newOrg();
+        if (bundle.needs_existing_permission_set) {
+          // Merging into an existing set: its current XML comes from the org,
+          // the backend merges it and returns the final bundle.
+          const got = await org.retrieveSource("permission_set", bundle.needs_existing_permission_set);
+          const xml = got[`permissionsets/${bundle.needs_existing_permission_set}.permissionset`];
+          bundle = await backend(`${sessionPath(id)}/bundle`, { existing_permission_set_xml: xml });
+        }
         const apiVersion = bundle.api_version || org.apiVersion;
         const result = await org.validate({ ...bundle, api_version: apiVersion }, { checkOnly });
         let failures = failureStrings(result);
@@ -115,6 +123,7 @@ export function createRouter({ newOrg, backend, newId = () => Math.random().toSt
         }
         const posted = await report(`${sessionPath(id)}/deploy-result`, {
           success, status: result.status, failures, check_only: checkOnly, version: bundle.version ?? null,
+          ...(plan ? { component_failures: result.failures.map((f) => ({ full_name: f.full_name, problem: f.problem, problem_type: f.problem_type })) } : {}),
         });
         const out = { done: true, success, status: result.status, failures };
         if (checkOnly) return { ...out, checked_version: bundle.version ?? null };
@@ -163,14 +172,29 @@ export function createRouter({ newOrg, backend, newId = () => Math.random().toSt
         const org = await newOrg();
         const kind = body.kind || "flow";
         const files = await org.retrieveSource(kind, body.api_name);
-        return backend("api/import/parse", {
+        const parseBody = {
           kind, api_name: body.api_name, files, provider: body.provider ?? null, model: body.model ?? null,
           effort: body.effort, api_key: body.api_key ?? null, api_version: body.api_version || org.apiVersion,
-        });
+        };
+        const data = await backend("api/import/parse", parseBody);
+        if (data && data.opened_as === "choose_fields" && !data.pick_id) {
+          // The backend keeps no pick cache: remember the request here and
+          // re-POST it with the chosen fields (see import/object-fields below).
+          data.pick_id = newId();
+          picks.set(data.pick_id, parseBody);
+        }
+        return data;
       });
       return { job_id };
     }],
     [/^api\/import\/status$/, "GET", async (_b, q) => jobStatus(`import:${q.get("job_id")}`, "Unknown import job.")],
+
+    [/^api\/import\/object-fields$/, "POST", async (body) => {
+      const parseBody = picks.get(body.pick_id);
+      if (!parseBody) return backend("api/import/object-fields", body);
+      picks.delete(body.pick_id);
+      return backend("api/import/parse", { ...parseBody, fields: body.fields });
+    }],
 
     [/^api\/survey\/start$/, "POST", async () => {
       const job_id = newId();
