@@ -458,3 +458,52 @@ class TestCors:
             "access-control-allow-origin"] == "https://a.example"
         assert client.get("/api/config", headers={"Origin": EXTENSION}).headers[
             "access-control-allow-origin"] == EXTENSION
+
+
+class TestExtensionContract:
+    def test_session_bundle_has_kind_and_name(self, client, scripted):
+        data = approved_flow(client, scripted)
+        body = client.get(f"/api/session/{data['session_id']}/bundle").json()
+        assert body["kind"] == "flow" and body["name"] == data["api_name"]
+
+    def test_plan_bundle_components_and_prompt_templates(self, client, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(client, grant_permission_set="new", permission_set_label="Invoice_Access")
+        session = execute(client, plan["plan_id"])
+        sid = session["session_id"]
+        client.post("/api/plan/approve", json={"session_id": sid, "version": session["version"]})
+        body = client.get(f"/api/plan/session/{sid}/bundle").json()
+        types = {c["type"] for c in body["components"]}
+        assert types == {"object", "field", "apex", "permission_set"}
+        field = next(c for c in body["components"] if c["type"] == "field")
+        assert field["object"] == "Invoice__c" and body["prompt_templates"] == []
+
+    def test_plan_deploy_result_accepts_contract_body_and_returns_plan(self, client, typed_scripted):
+        typed_scripted(plan=ONE_STEP_PLAN, flow=VALID)
+        session = execute(client, make_plan(client)["plan_id"])
+        sid = session["session_id"]
+        r = client.post(f"/api/plan/session/{sid}/deploy-result", json={
+            "success": True, "status": "Succeeded", "failures": [], "check_only": False,
+            "version": session["version"],
+        }).json()
+        assert r["plan"]["session_id"] == sid and r["plan"]["deployed"] is True
+        client.post(f"/api/plan/session/{sid}/deploy-result", json={
+            "success": True, "status": "Succeeded", "failures": [], "check_only": True, "version": 1,
+        })
+
+    def test_parse_accepts_zip_paths_and_apex_body(self, client, scripted):
+        name, xml = TestImportParse().flow_xml(client, scripted)
+        scripted()
+        r = client.post("/api/import/parse", json={
+            "kind": "flow", "api_name": name, "files": {"package.xml": "<x/>", f"flows/{name}.flow": xml},
+        }).json()
+        assert r["done"] is True and r["imported"] is True
+        a = client.post("/api/import/parse", json={
+            "kind": "apex", "api_name": "H", "files": {"body": "public class H {}"},
+        }).json()
+        assert a["done"] is True and a["kind"] == "apex"
+        obj = generate_object(CustomObject.model_validate(VALID_OBJECT), [])
+        o = client.post("/api/import/parse", json={
+            "kind": "custom_object", "api_name": OBJECT_NAME, "files": {f"objects/{OBJECT_NAME}.object": obj},
+        }).json()
+        assert o["opened_as"] == "plan"

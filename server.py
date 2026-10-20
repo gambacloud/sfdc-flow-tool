@@ -1518,6 +1518,17 @@ def _lwc_from_files(api_name: str, files: Dict[str, str], api_version: str) -> L
     )
 
 
+def _xml_from_zip_files(kind: str, api_name: str, files: Dict[str, str]) -> Optional[str]:
+    """The one member a retrieved zip holds for this kind (`files` is path -> text)."""
+    suffix = {"flow": ".flow", "prompt_template": ".genAiPromptTemplate"}.get(kind, ".object")
+    stem = api_name.partition(".")[0] if kind == "custom_field" else api_name
+    matches = {p: t for p, t in files.items() if p.endswith(suffix)}
+    for path, text in matches.items():
+        if path.rsplit("/", 1)[-1] == stem + suffix:
+            return text
+    return next(iter(matches.values()), None)
+
+
 @app.post("/api/import/parse")
 async def import_parse(body: ImportParseRequest) -> Dict[str, Any]:
     """
@@ -1531,6 +1542,11 @@ async def import_parse(body: ImportParseRequest) -> Dict[str, Any]:
         raise HTTPException(400, str(exc)) from exc
 
     kind = body.kind
+    files = body.files or {}
+    if kind in ("apex", "trigger") and not body.xml and "body" in files:
+        body.xml = files["body"]
+    elif kind in ("flow", "prompt_template", "custom_object", "custom_field") and not body.xml and files:
+        body.xml = _xml_from_zip_files(kind, body.api_name, files)
     if kind == "lwc":
         source: Any = _lwc_from_files(body.api_name, body.files or {}, body.api_version)
     else:
@@ -1822,10 +1838,12 @@ class DeployResultRequest(BaseModel):
     """What the extension saw when it validated/deployed the bundle itself."""
 
     success: bool
+    status: Optional[str] = None
+    check_only: bool = False
     failures: List[str] = []
     # Plan sessions only: each failure with the component it names, so a repair can route it.
     component_failures: List[Dict[str, str]] = []
-    deployed: bool = False  # a real deploy (not check-only) that succeeded
+    deployed: Optional[bool] = None  # default: a successful run that was not check-only
     version: Optional[int] = None
 
 
@@ -1840,7 +1858,10 @@ def session_bundle(session_id: str) -> Dict[str, Any]:
     if not session.approved:
         raise HTTPException(403, "Approve the flow before fetching its bundle.")
     files, types = _deploy_files(session)
-    return {"version": session.version, "files": files, "types": types, "api_version": session.api_version}
+    return {
+        "version": session.version, "files": files, "types": types, "api_version": session.api_version,
+        "kind": session.kind, "name": session.artifact_name,
+    }
 
 
 @app.post("/api/session/{session_id}/deploy-result")
@@ -3082,6 +3103,24 @@ class PlanBundleRequest(BaseModel):
     existing_permission_set_xml: Optional[str] = None
 
 
+def _plan_components(session: "PlanSession", config: Optional[PermissionSetConfig]) -> List[Dict[str, Any]]:
+    """What the extension needs to build Setup links after a deploy (see _plan_component_urls)."""
+    out: List[Dict[str, Any]] = []
+    for r in session.steps:
+        v = r.value
+        for cls, kind in ((CustomObject, "object"), (CustomField, "field"), (ApexClass, "apex"),
+                          (Flow, "flow"), (LightningComponent, "lwc")):
+            if isinstance(v, cls):
+                item = {"type": kind, "name": v.api_name, "step": r.step.name}
+                if kind == "field":
+                    item["object"] = v.object_api_name
+                out.append(item)
+                break
+    if config is not None and config.api_name:
+        out.append({"type": "permission_set", "name": config.api_name, "step": "Permission Set"})
+    return out
+
+
 def _plan_bundle(session_id: str, existing_xml: Optional[str]) -> Dict[str, Any]:
     session = get_plan_session(session_id)
     if not session.approved:
@@ -3101,6 +3140,10 @@ def _plan_bundle(session_id: str, existing_xml: Optional[str]) -> Dict[str, Any]
         "version": session.version, "files": files, "types": types,
         "api_version": _deploy_api_version(session),
         "needs_existing_permission_set": pending_ps,
+        "kind": "plan",
+        "name": None,
+        "components": _plan_components(session, config),
+        "prompt_templates": [r.value.api_name for r in session.steps if isinstance(r.value, PromptTemplate)],
     }
 
 
@@ -3129,9 +3172,10 @@ def plan_deploy_result(session_id: str, body: DeployResultRequest) -> Dict[str, 
         )
         for c in body.component_failures
     ]
-    if body.success and body.deployed:
+    deployed = body.deployed if body.deployed is not None else not body.check_only
+    if body.success and deployed:
         session.deployed_version = body.version if body.version is not None else session.version
-    return {"recorded": True, "failures": session.last_failures}
+    return {"recorded": True, "failures": session.last_failures, "plan": plan_view(session_id, session)}
 
 
 class GitPushRequest(BaseModel):
