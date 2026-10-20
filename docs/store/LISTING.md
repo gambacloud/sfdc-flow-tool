@@ -14,7 +14,7 @@ Developer Tools. English.
 
 Describe Salesforce changes in plain language, review them, and deploy to the org you are logged into. No Connected App needed.
 
-(125 characters.)
+(127 characters.)
 
 ## Detailed description
 
