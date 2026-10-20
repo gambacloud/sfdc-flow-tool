@@ -1,6 +1,6 @@
 # Chrome extension: hybrid architecture and backend split
 
-Status: design note. Line numbers refer to the tree at branch `claude/confident-germain-cfcaf1` (base `efbae65`). Nothing in the Python backend has been changed yet.
+Status: design note; the backend half (section 7) is implemented. Line numbers in sections 2-4 refer to the original tree (base `efbae65`) and have since shifted.
 
 ## 1. Goal and model
 
@@ -126,3 +126,33 @@ The backend's CSP today is `script-src 'self'` and `connect-src 'self'` (`server
 3. Backend: add `import/parse`, `bundle`, `deploy-result`, `survey/score`; remove credentials from request models (`OrgRequest` server.py:647, `FlowsRequest` :656, `DeployRequest` :684, `SurveyRequest` :688, `ImportRequest` :705).
 4. Agent publish + portal builder in the extension.
 5. Backend CORS: allow `chrome-extension://<id>` origin; the hosted CSP is unaffected (extension pages are not served by it).
+
+## 7. Backend implementation status
+
+Implemented in `server.py`, `flowtool/hosted.py`, `flowtool/portal_api.py`; tests in `tests/test_hosted_backend.py`. Default (non-hosted) behaviour is unchanged.
+
+| Item | Status |
+|---|---|
+| `GET /api/session/{id}/bundle` -> `{version, files, types, api_version}` (requires an approved version, 403 otherwise) | done |
+| `GET /api/plan/session/{id}/bundle` (same shape; reuses `_bundle_files_and_types`, `_deploy_api_version`, the new-permission-set rendering of `/package`) | done |
+| Plan bundle with an existing Permission Set: GET omits it and names it in `needs_existing_permission_set`; `POST` on the same path with `{existing_permission_set_xml}` returns the merged bundle (no token, no fetch) | done |
+| `POST /api/import/parse` `{api_name, kind, xml \| files, fields?}` -> same session/plan view as `/api/import/status`; shares `_adopt_import` with it. Large objects answer `choose_fields` with `pick_id: null` and the caller re-sends with `fields` (no server-side picker state) | done |
+| `POST /api/survey/score` `{flows:{name:xml}}` -> `{report, total, parsed}` | done |
+| Portal planner: **not** IR-only. `/api/portal/plan` calls `build_site(apply=False)`, which runs the preflight against the org first; only the step list (`planned_steps(spec)`) is org-free. Added `POST /api/portal/plan-from-preflight` taking the spec plus the preflight report the extension ran (`{can_proceed, checks}`) | done |
+| `POST /api/session/{id}/deploy-result`, `POST /api/plan/session/{id}/deploy-result` (4.3: failures feed the repair loop; plan also sets `deployed_version`) | done |
+| Plan/execute org context: `/api/plan/start` takes `org_context: {objects:{Name:{fields:[...]}}}` and gives it to the planner as text. Neither `plan/start` nor `plan/execute/start` read the org today, so there was no token fetch to replace; `execute` needs nothing extra (steps carry the planner's brief) | done (planning only) |
+| Hosted mode `FLOWTOOL_HOSTED=1`: org-only endpoints (list `ORG_PATHS` in `hosted.py`) answer 403; any JSON body with non-empty `instance_url` / `access_token` / `org` on any endpoint answers 400; `credentials()` itself refuses | done |
+| Hosted `/api/config`: no `clientId`, `orgs`, `sf_cli`, `env_file`; adds `hosted: true` | done |
+| CORS: exact-match origins from `FLOWTOOL_CORS_ORIGINS` (comma separated, e.g. `chrome-extension://<id>`), handled in the existing HTTP middleware (preflight answered with 204; allows `Content-Type`, `X-Client-Id`, `Authorization`); no CORS headers when unset | done |
+| Sessions hold no credentials in hosted mode (no `PendingDeploy` is ever created; the only `instance_url`/token holders are the org endpoints, all refused) | done |
+| Never log or store tokens | done for this server: bodies are not logged (uvicorn runs at `warning`) and nothing writes them; hosted mode rejects them before any handler runs |
+
+Not done / caveats:
+
+- `Session` / `PlanSession` are still server-held; removing the `instance_url` / `access_token` fields from `OrgRequest`, `FlowsRequest`, `DeployRequest`, `SurveyRequest`, `ImportRequest` (phase 3) is deferred so the local flow keeps working. Hosted mode rejects them instead of removing them.
+- `/api/org-summary`, `/api/plan/agent/publish`, portal `apply`/`preflight`/`status`, `plan/git/push` have no org-free replacement endpoint: org-summary parsing already runs in the browser, the others are extension work. `plan/git/push` is not blocked in hosted mode (it takes a GitHub token, not an org one) - decide per 3.2.
+- `org_context` is advisory prompt text; it is not validated against anything.
+- `existing object fields` for `design/start` (single flow) are not accepted yet; only planning is.
+- The survey report (`survey.text_report`) and flow XML sent to `/import/parse` were not audited for org-identifying strings (4.2).
+- LLM keys are still per-request body fields (`api_key`); the `Authorization` header is allowed by CORS but unused.
+
