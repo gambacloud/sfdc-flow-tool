@@ -50,6 +50,14 @@ def patch_app_js(js: str) -> str:
         r"function orgCredentials\(\) \{",
         "function orgCredentials() {\n  return {}; // extension: org + session id are resolved by the org client\n",
     )
+    # 5. The org is the active Salesforce tab, so the "connect to an org first"
+    #    guards (which wait for OAuth or an sf CLI) must not block the pickers,
+    #    and the sf-CLI alias picker stays hidden.
+    js = sub_once(
+        js,
+        r"state\.sfCli = config\.sf_cli;\n    if \(config\.sf_cli\) \{",
+        "state.sfCli = true; // extension: the org is the active Salesforce tab\n    if (false) {",
+    )
     return js
 
 
