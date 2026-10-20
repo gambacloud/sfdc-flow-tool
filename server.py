@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -64,18 +64,22 @@ from flowtool.planner import (
     revise_plan,
 )
 from flowtool.object_import import (
-    list_custom_fields, list_custom_objects, retrieve_custom_field, retrieve_custom_object,
+    UnsupportedObject, list_custom_fields, list_custom_objects, parse_custom_field,
+    parse_custom_object, retrieve_custom_field, retrieve_custom_object,
 )
-from flowtool.prompt_import import list_prompt_templates, retrieve_prompt_template
+from flowtool.prompt_import import (
+    UnsupportedTemplate, list_prompt_templates, parse_prompt_template, retrieve_prompt_template,
+)
 from flowtool.reference import clean_reference, tag_description, tag_value
 from flowtool.report import render_standalone_report
-from flowtool import github, share
+from flowtool import github, hosted, share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     ComponentProblem,
     MetadataClient,
     RetrieveError,
     _deploy_package_xml,
+    _parse_lwc_meta,
     build_deploy_package,
     component_setup_url,
     list_apex_classes,
@@ -112,7 +116,7 @@ load_env(ROOT)
 # as package data when this repo is installed as a dependency elsewhere.
 STATIC = ROOT / "flowtool" / "static"
 
-app = FastAPI(title="SFDC Flow Tool")
+app = FastAPI(title="SFDC Flow Tool", dependencies=[Depends(hosted.guard)])
 
 # Mermaid is vendored under /static/vendor rather than pulled from a CDN, so
 # script-src needs nothing beyond 'self' - a future inline <script> added by
@@ -138,7 +142,19 @@ async def security_headers(request: Request, call_next):
     # Tag everything this request kicks off with the browser's id, so the
     # activity feed (flowtool/activity.py) is served back only to its owner.
     activity.client_id.set(request.headers.get("x-client-id", "")[:64] or None)
-    response = await call_next(request)
+    origin = request.headers.get("origin", "").rstrip("/")
+    cors_ok = bool(origin) and origin in hosted.cors_origins()
+    if cors_ok and request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
+        # Preflight from an allowed origin (the Chrome extension): answered here, never routed.
+        response = Response(status_code=204)
+    else:
+        response = await call_next(request)
+    if cors_ok:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = ", ".join(hosted.HEADERS_ALLOWED)
+        response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Content-Security-Policy"] = CSP
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -595,6 +611,10 @@ def credentials(
     config either way. Otherwise fall back to the sf CLI, the only path when
     the browser did not send its own credentials.
     """
+    if hosted.is_hosted():
+        # Never reached by a real route (hosted.guard rejects first); a second lock so a
+        # new endpoint that forgets to be listed still cannot use a token or the sf CLI.
+        raise HTTPException(403, hosted.MESSAGE)
     if instance_url and access_token:
         return instance_url, access_token
 
@@ -753,6 +773,23 @@ class ModelsRequest(BaseModel):
 @app.get("/api/config")
 def config() -> Dict[str, Any]:
     providers = available_providers()
+    if hosted.is_hosted():
+        # No org of any kind here: no Connected App id, no sf CLI aliases, no server paths.
+        return {
+            "hosted": True,
+            "providers": providers,
+            "all_providers": list(PROVIDERS),
+            "default_provider": default_provider(providers),
+            "heroku": False,
+            "org_summary_type_groups": [
+                {"group": g["group"], "label": g["label"], "default": g["default"]}
+                for g in ORG_SUMMARY_TYPE_GROUPS
+            ],
+            "show_ir_subtab": False,
+            "show_auto_workers": os.environ.get("SHOW_AUTO_WORKERS", "").strip().lower() == "true",
+            "highlight_plan_mode": os.environ.get("HIGHLIGHT_PLAN_MODE", "").strip().lower() == "true",
+            "share_enabled": share.configured(),
+        }
     orgs: List[str] = []
     cli = True
     try:
@@ -1297,13 +1334,26 @@ async def import_status(job_id: str) -> Dict[str, Any]:
         provider = build_provider(body.provider, body.model, body.effort, body.api_key)
     except LLMError as exc:
         raise HTTPException(400, str(exc)) from exc
+    return _adopt_import(body, provider, source, pending.instance_url)
 
+
+def _adopt_import(
+    body: ImportRequest, provider: Provider, source: Any, origin: str,
+    chosen: Optional[List[str]] = None, stateless_pick: bool = False,
+) -> Dict[str, Any]:
+    """
+    The half of an import that needs no org: turn what was retrieved (`source`:
+    flow XML, Apex body, a LightningComponent, a PromptTemplate, an OpenedObject
+    or a CustomField) into a session, and return its view. `origin` is only the
+    words "from ..." in the model's context (an instance URL when this server
+    retrieved it, "the org" when the extension did).
+    """
     session_id = uuid.uuid4().hex
 
     if body.kind == "prompt_template":
         template = source
         adopted = PromptTemplateGenerator(provider).adopt(
-            template, f"the prompt template {body.api_name} from {pending.instance_url}"
+            template, f"the prompt template {body.api_name} from {origin}"
         )
         step = PlanStep(
             artifact_type="prompt_template", name=body.api_name,
@@ -1320,17 +1370,23 @@ async def import_status(job_id: str) -> Dict[str, Any]:
 
     if body.kind == "custom_object":
         opened = source
-        if len(opened.fields) > FIELD_PICK_THRESHOLD:
+        if chosen is None and len(opened.fields) > FIELD_PICK_THRESHOLD:
             # Too many for one plan to be readable: ask which fields to bring in.
             pick_id = uuid.uuid4().hex
-            OBJECT_PICKS[pick_id] = (body, pending.instance_url, opened)
+            if stateless_pick:
+                pick_id = None  # nothing kept here: the caller sends `fields` back with the XML
+            else:
+                OBJECT_PICKS[pick_id] = (body, origin, opened)
             return {
                 "done": True, "opened_as": "choose_fields", "pick_id": pick_id,
                 "object": opened.object.api_name,
                 "fields": [{"api_name": f.api_name, "label": f.label, "type": f.type} for f in opened.fields],
                 "skipped": opened.skipped, "notes": opened.notes,
             }
-        return _object_plan(body, provider, pending.instance_url, opened, [f.api_name for f in opened.fields])
+        return _object_plan(
+            body, provider, origin, opened,
+            chosen if chosen is not None else [f.api_name for f in opened.fields],
+        )
 
     if body.kind == "custom_field":
         fld = source
@@ -1347,7 +1403,7 @@ async def import_status(job_id: str) -> Dict[str, Any]:
         step_result = StepResult(
             step=fld_step, value=fld, repairs=0,
             messages=CustomFieldGenerator(provider).adopt(
-                fld, f"the custom field {body.api_name} from {pending.instance_url}").messages,
+                fld, f"the custom field {body.api_name} from {origin}").messages,
         )
         plan_session = PlanSession(
             provider=provider, plan=Plan(steps=[fld_step], reasoning=reasoning),
@@ -1366,7 +1422,7 @@ async def import_status(job_id: str) -> Dict[str, Any]:
         session = Session(
             generator=generator,
             result=generator.adopt(
-                artifact, f"the {noun} {body.api_name} from {pending.instance_url}"
+                artifact, f"the {noun} {body.api_name} from {origin}"
             ),
             kind=body.kind,
             api_version=body.api_version,
@@ -1384,7 +1440,7 @@ async def import_status(job_id: str) -> Dict[str, Any]:
         session = Session(
             generator=generator,
             result=generator.adopt(
-                component, f"the Lightning Web Component {body.api_name} from {pending.instance_url}"
+                component, f"the Lightning Web Component {body.api_name} from {origin}"
             ),
             kind="lwc",
             api_version=component.api_version,
@@ -1403,7 +1459,7 @@ async def import_status(job_id: str) -> Dict[str, Any]:
         session = Session(
             generator=generator,
             result=generator.adopt(
-                flow, f"the flow {body.api_name} from {pending.instance_url}"
+                flow, f"the flow {body.api_name} from {origin}"
             ),
             kind="flow",
             # An imported flow keeps the status it already has in the org, so
@@ -1417,6 +1473,107 @@ async def import_status(job_id: str) -> Dict[str, Any]:
     session.apply_policy()
     SESSIONS[session_id] = session
     return {"done": True, **view(session_id, session)}
+
+
+class ImportParseRequest(BaseModel):
+    """
+    The post-retrieve half of /api/import/start: the extension retrieved the
+    metadata from the org itself and sends what it got. `xml` carries the
+    single-file kinds (flow, prompt_template, custom_object/custom_field: the
+    owning object's XML), or the source text for apex/trigger; `files` carries
+    an LWC bundle, keyed by file name (x.js, x.html, x.css, x.js-meta.xml).
+    """
+
+    api_name: str
+    kind: Literal["flow", "apex", "trigger", "lwc", "prompt_template", "custom_object", "custom_field"] = "flow"
+    xml: Optional[str] = None
+    files: Optional[Dict[str, str]] = None
+    # custom_object with many fields: the ones to bring in (answer to a `choose_fields` reply).
+    fields: Optional[List[str]] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: Literal["medium", "high"] = "medium"
+    api_version: str = "64.0"
+    api_key: Optional[str] = None
+
+
+def _lwc_from_files(api_name: str, files: Dict[str, str], api_version: str) -> LightningComponent:
+    def pick(suffix: str) -> Optional[str]:
+        for name, text in files.items():
+            if name.rsplit("/", 1)[-1].lower().endswith(suffix):
+                return text
+        return None
+
+    js, html = pick(".js"), pick(".html")
+    if js is None or html is None:
+        raise HTTPException(400, "An LWC needs at least its .js and .html files in `files`.")
+    meta = pick(".js-meta.xml") or ""
+    try:
+        is_exposed, targets, retrieved_version = _parse_lwc_meta(meta)
+    except Exception as exc:  # noqa: BLE001 - malformed sidecar XML
+        raise HTTPException(422, f"The .js-meta.xml could not be read: {exc}") from exc
+    return LightningComponent(
+        api_name=api_name, js=js, html=html, css=pick(".css"),
+        is_exposed=is_exposed, targets=targets, api_version=retrieved_version or api_version,
+    )
+
+
+@app.post("/api/import/parse")
+async def import_parse(body: ImportParseRequest) -> Dict[str, Any]:
+    """
+    Open metadata the caller already retrieved: same result as /api/import/status
+    (a session view, or a plan view for the plan kinds) without any org contact,
+    so nothing here can know which org it came from.
+    """
+    try:
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    kind = body.kind
+    if kind == "lwc":
+        source: Any = _lwc_from_files(body.api_name, body.files or {}, body.api_version)
+    else:
+        if not (body.xml or "").strip():
+            raise HTTPException(400, "Send the retrieved metadata in `xml`.")
+        text = body.xml
+        try:
+            if kind == "prompt_template":
+                source = parse_prompt_template(text, body.api_name)
+            elif kind == "custom_object":
+                source = parse_custom_object(text, body.api_name)
+            elif kind == "custom_field":
+                obj, _, fld = body.api_name.partition(".")
+                if not obj or not fld:
+                    raise HTTPException(400, f"{body.api_name!r} is not Object.Field__c.")
+                source = parse_custom_field(text, obj, fld)
+            else:
+                source = text  # flow XML (parsed in _adopt_import) or Apex source
+        except (UnsupportedObject, UnsupportedTemplate) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    return _adopt_import(
+        ImportRequest(
+            api_name=body.api_name, kind=kind, provider=body.provider, model=body.model,
+            effort=body.effort, api_version=body.api_version,
+        ),
+        provider, source, "the org", chosen=body.fields, stateless_pick=True,
+    )
+
+
+class SurveyScoreRequest(BaseModel):
+    flows: Dict[str, str]
+
+
+@app.post("/api/survey/score")
+def survey_score(body: SurveyScoreRequest) -> Dict[str, Any]:
+    """The scoring half of /api/survey/start: flows the extension retrieved -> the same report."""
+    if not body.flows:
+        raise HTTPException(400, "Send at least one flow in `flows` ({name: xml}).")
+    survey = Survey()
+    for name, xml in body.flows.items():
+        survey.add(name, xml)
+    return {"report": text_report(survey), "total": survey.total, "parsed": len(survey.parsed)}
 
 
 @app.post("/api/explain/start")
@@ -1661,6 +1818,39 @@ def session_view(session_id: str) -> Dict[str, Any]:
     return view(session_id, session)
 
 
+class DeployResultRequest(BaseModel):
+    """What the extension saw when it validated/deployed the bundle itself."""
+
+    success: bool
+    failures: List[str] = []
+    # Plan sessions only: each failure with the component it names, so a repair can route it.
+    component_failures: List[Dict[str, str]] = []
+    deployed: bool = False  # a real deploy (not check-only) that succeeded
+    version: Optional[int] = None
+
+
+@app.get("/api/session/{session_id}/bundle")
+def session_bundle(session_id: str) -> Dict[str, Any]:
+    """
+    The approved version's deploy bundle, for the extension to validate/deploy
+    with the browser's own org session. Registered before the generic
+    `/{artifact}` route below, which would otherwise swallow it.
+    """
+    session = get_session(session_id)
+    if not session.approved:
+        raise HTTPException(403, "Approve the flow before fetching its bundle.")
+    files, types = _deploy_files(session)
+    return {"version": session.version, "files": files, "types": types, "api_version": session.api_version}
+
+
+@app.post("/api/session/{session_id}/deploy-result")
+def session_deploy_result(session_id: str, body: DeployResultRequest) -> Dict[str, Any]:
+    """Records a validation the extension ran, so the repair loop (`last_failures`) keeps working."""
+    session = get_session(session_id)
+    session.last_failures = list(body.failures) if not body.success else []
+    return {"recorded": True, "failures": session.last_failures}
+
+
 @app.get("/api/session/{session_id}/{artifact}")
 def artifact(session_id: str, artifact: str) -> PlainTextResponse:
     session = get_session(session_id)
@@ -1811,6 +2001,9 @@ class PlanRequest(BaseModel):
     # Username of the user an Agentforce agent runs as ("Einstein Agent User"
     # profile). Only needed when the plan builds an agent.
     agent_user: Optional[str] = None
+    # What the extension read from the org, since this server cannot: {"objects": {"Account":
+    # {"fields": ["Region__c", ...]}}}. Handed to the planner as facts about the org.
+    org_context: Optional[Dict[str, Any]] = None
 
 
 class PlanExecuteRequest(BaseModel):
@@ -2201,6 +2394,19 @@ def _bundle_files_and_types(
     return files, types
 
 
+def _org_context_text(context: Optional[Dict[str, Any]]) -> str:
+    """Existing objects/fields the caller read from the org, as text for the planner's request."""
+    objects = (context or {}).get("objects")
+    if not isinstance(objects, dict) or not objects:
+        return ""
+    lines = ["", "", "Already in the org (do not recreate these; build on them):"]
+    for name, info in list(objects.items())[:50]:
+        fields = info.get("fields", []) if isinstance(info, dict) else []
+        names = ", ".join(str(f.get("api_name", f)) if isinstance(f, dict) else str(f) for f in fields[:200])
+        lines.append(f"- {name}" + (f": fields {names}" if names else ""))
+    return "\n".join(lines)
+
+
 @app.post("/api/plan/start")
 async def plan_start(body: PlanRequest) -> Dict[str, Any]:
     """Kick off planning in the background - same reasoning as design_start:
@@ -2229,7 +2435,8 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
         )
 
     generator = PlannerGenerator(planner_of(provider))
-    task = asyncio.create_task(asyncio.to_thread(generator.generate, body.request))
+    request_text = body.request + _org_context_text(body.org_context)
+    task = asyncio.create_task(asyncio.to_thread(generator.generate, request_text))
     job_id = uuid.uuid4().hex
     PLAN_JOBS[job_id] = PendingPlan(
         task=task, provider=provider, api_version=body.api_version,
@@ -2359,16 +2566,41 @@ async def _add_permission_set_files(
     this is the one part of a plan's deploy that can need an org round trip
     before the bundle is complete.
     """
+    existing_xml = None
+    if config.mode == "existing" and _permission_set_grant(config, steps, reference) is not None:
+        existing_xml = await retrieve_permission_set(url, token, config.api_name, api_version=api_version)
+    _add_permission_set_xml(config, steps, existing_xml, files, types, reference)
+
+
+def _permission_set_grant(
+    config: PermissionSetConfig, steps: List[StepResult], reference: Optional[str],
+) -> Optional[PermissionSetGrant]:
     grant = build_grant_from_steps(steps, config.label or config.api_name or "Generated Access")
     if not grant.field_grants and not grant.object_grants:
-        return  # a plan with no new object or field has nothing to grant - no empty Permission Set
+        return None  # a plan with no new object or field has nothing to grant - no empty Permission Set
     if reference:
         grant.description = tag_description(grant.description, reference)
+    return grant
+
+
+def _add_permission_set_xml(
+    config: PermissionSetConfig,
+    steps: List[StepResult],
+    existing_xml: Optional[str],
+    files: Dict[str, str],
+    types: Dict[str, List[str]],
+    reference: Optional[str] = None,
+) -> None:
+    """The org-free part: render (or merge into `existing_xml`, which the caller fetched)."""
+    grant = _permission_set_grant(config, steps, reference)
+    if grant is None:
+        return
     api_name = config.api_name
     if config.mode == "new":
         xml = generate_permission_set(grant, api_name=api_name)
     else:
-        existing_xml = await retrieve_permission_set(url, token, api_name, api_version=api_version)
+        if existing_xml is None:
+            raise HTTPException(400, f"Merging into {api_name} needs its current XML (existing_permission_set_xml).")
         xml = merge_permission_set_xml(existing_xml, grant)
 
     files[f"permissionsets/{api_name}.permissionset"] = xml
@@ -2426,6 +2658,16 @@ async def _deploy_plan_bundle(
     return result
 
 
+def _require_agent_user(session: "PlanSession") -> None:
+    needs_user = any(isinstance(r.value, Agent) and r.value.agent_type == "service" for r in session.steps)
+    if needs_user and not (session.plan.agent_user or "").strip():
+        raise HTTPException(
+            400,
+            "This plan builds a service agent, which needs an agent user: the username of a user with the "
+            "'Einstein Agent User' profile. Enter it in the Agent user box on the agent step, then approve and validate again.",
+        )
+
+
 def _start_plan_deploy(
     session: PlanSession,
     org: Optional[str],
@@ -2435,13 +2677,7 @@ def _start_plan_deploy(
 ) -> None:
     if session.pending_deploy is not None and not session.pending_deploy.task.done():
         raise HTTPException(409, "A validate/deploy is already running for this plan.")
-    needs_user = any(isinstance(r.value, Agent) and r.value.agent_type == "service" for r in session.steps)
-    if needs_user and not (session.plan.agent_user or "").strip():
-        raise HTTPException(
-            400,
-            "This plan builds a service agent, which needs an agent user: the username of a user with the "
-            "'Einstein Agent User' profile. Enter it in the Agent user box on the agent step, then approve and validate again.",
-        )
+    _require_agent_user(session)
     url, token = credentials(org, instance_url, access_token)
     task = asyncio.create_task(_deploy_plan_bundle(session, url, token, check_only))
     session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
@@ -2838,6 +3074,64 @@ def plan_package(session_id: str) -> Response:
     files, types = _plan_package_files(session)
     zip_bytes = build_deploy_package(files, types, session.api_version)
     return _zip_response(zip_bytes, f"package-{session_id}.zip")
+
+
+class PlanBundleRequest(BaseModel):
+    # The current XML of the existing Permission Set this plan merges into, read from
+    # the org by the extension. Only needed when the plan's grant mode is "existing".
+    existing_permission_set_xml: Optional[str] = None
+
+
+def _plan_bundle(session_id: str, existing_xml: Optional[str]) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    if not session.approved:
+        raise HTTPException(403, "Approve the plan before fetching its bundle.")
+    _require_agent_user(session)
+    files, types = _bundle_files_and_types(session.steps, session.reference, session.plan.agent_user)
+    config = session.permission_set_config
+    pending_ps = None
+    if config is not None:
+        if config.mode == "existing" and existing_xml is None:
+            # Left out, and named, so the extension can fetch it and POST this route again.
+            if _permission_set_grant(config, session.steps, session.reference) is not None:
+                pending_ps = config.api_name
+        else:
+            _add_permission_set_xml(config, session.steps, existing_xml, files, types, session.reference)
+    return {
+        "version": session.version, "files": files, "types": types,
+        "api_version": _deploy_api_version(session),
+        "needs_existing_permission_set": pending_ps,
+    }
+
+
+@app.get("/api/plan/session/{session_id}/bundle")
+def plan_bundle(session_id: str) -> Dict[str, Any]:
+    """The approved plan's deploy bundle (see /api/session/{id}/bundle). When the plan merges
+    into an existing Permission Set, that file is omitted and `needs_existing_permission_set`
+    names it: POST the same path with `existing_permission_set_xml` to get the merged bundle."""
+    return _plan_bundle(session_id, None)
+
+
+@app.post("/api/plan/session/{session_id}/bundle")
+def plan_bundle_with_context(session_id: str, body: PlanBundleRequest) -> Dict[str, Any]:
+    return _plan_bundle(session_id, body.existing_permission_set_xml)
+
+
+@app.post("/api/plan/session/{session_id}/deploy-result")
+def plan_deploy_result(session_id: str, body: DeployResultRequest) -> Dict[str, Any]:
+    """Records a validate/deploy the extension ran, for the repair loop and the agent-publish gate."""
+    session = get_plan_session(session_id)
+    session.last_failures = [] if body.success else list(body.failures)
+    session.last_component_failures = [] if body.success else [
+        ComponentProblem(
+            full_name=c.get("full_name", ""), problem_type=c.get("problem_type", "Error"),
+            problem=c.get("problem", ""),
+        )
+        for c in body.component_failures
+    ]
+    if body.success and body.deployed:
+        session.deployed_version = body.version if body.version is not None else session.version
+    return {"recorded": True, "failures": session.last_failures}
 
 
 class GitPushRequest(BaseModel):

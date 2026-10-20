@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, field_validator
 from . import portal_miaw as miaw
 from . import portal_pages as pages
 from .portal_preflight import OrgClient, run_preflight
-from .portal_site import OrgWriter, SiteResult, SiteSpec, Step, build_site
+from .portal_site import OrgWriter, SiteResult, SiteSpec, Step, build_site, planned_steps
 from .sfdc import MetadataClient
 
 _SITE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,58}$")
@@ -81,6 +81,12 @@ class PortalRequest(BaseModel):
         if not re.match(r"^\d{2}\.0$", v):
             raise ValueError("API version looks like 64.0.")
         return v
+
+
+class PortalPlanOffline(PortalRequest):
+    """PortalRequest plus the preflight report the caller already ran ({can_proceed, checks})."""
+
+    preflight: Dict[str, Any]
 
 
 def spec_from(body: PortalRequest) -> SiteSpec:
@@ -149,6 +155,26 @@ def make_router(credentials: Callable[..., tuple]) -> APIRouter:
         async with MetadataClient(url, token, body.api_version) as meta:
             result = await build_site(org, meta, spec, apply=False)
         return result_to_dict(result)
+
+    @router.post("/api/portal/plan-from-preflight")
+    async def portal_plan_from_preflight(body: PortalPlanOffline) -> Dict[str, Any]:
+        """
+        /plan without the org: the planned steps depend only on the spec; the one
+        thing /plan reads from the org is the preflight, which the caller (the
+        extension) ran itself and sends back here as `preflight`.
+        """
+        spec = spec_from(body)
+        can_proceed = bool(body.preflight.get("can_proceed"))
+        steps = [Step(n, "planned", d) for n, d in planned_steps(spec)] if can_proceed else []
+        return {
+            "ok": can_proceed,
+            "preflight": body.preflight,
+            "steps": [asdict(s) for s in steps],
+            "validation": [],
+            "site_url": None,
+            "register_url": None,
+            "manual_steps": [],
+        }
 
     @router.post("/api/portal/apply")
     async def portal_apply(body: PortalRequest) -> Dict[str, Any]:
