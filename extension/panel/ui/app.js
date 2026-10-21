@@ -3839,8 +3839,8 @@ async function boot() {
     // installed" - not a choice, just noise next to the OAuth login buttons.
     renderOrgSummaryGroups(config.org_summary_type_groups);
 
-    state.sfCli = config.sf_cli;
-    if (config.sf_cli) {
+    state.sfCli = true; // extension: the org is the active Salesforce tab
+    if (false) {
       const org = $("org");
       if (config.orgs.length) {
         org.add(new Option("(default org)", ""));

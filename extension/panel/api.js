@@ -4,7 +4,7 @@
 // are routed to org-client.js, the rest go to the hosted backend.
 
 import { BACKEND_URL } from "../lib/config.js";
-import { orgMethodFor } from "./org-client.js";
+import { orgMethodFor, setBackend } from "./org-client.js";
 
 const CLIENT_ID = (() => {
   const key = "flowtoolClientId";
@@ -44,10 +44,15 @@ export function rawFetch(path, init) {
   return fetch(backendUrl(path), init);
 }
 
+// Org-touching paths are answered locally by org-client.js; it calls back into
+// backendRequest() only with bundles, IR/XML and failure text.
 export async function request(path, body) {
   const orgMethod = orgMethodFor(path);
   if (orgMethod) return orgMethod(body);
+  return backendRequest(path, body);
+}
 
+export async function backendRequest(path, body) {
   const response = await fetch(backendUrl(path), {
     method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json", "X-Client-Id": CLIENT_ID },
@@ -67,3 +72,5 @@ export async function request(path, body) {
   }
   return payload;
 }
+
+setBackend(backendRequest);
