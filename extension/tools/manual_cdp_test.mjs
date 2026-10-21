@@ -49,7 +49,7 @@ function chromePath() {
 }
 
 function frontdoorUrl() {
-  const out = execFileSync(process.platform === "win32" ? "sf.cmd" : "sf", ["org", "open", "--url-only", "-o", ORG_ALIAS, "--json"], { encoding: "utf8" });
+  const out = execFileSync(process.platform === "win32" ? "sf.cmd" : "sf", ["org", "open", "--url-only", "-o", ORG_ALIAS, "--json"], { encoding: "utf8", shell: process.platform === "win32" });
   const url = JSON.parse(out).result?.url;
   if (!url) throw new Error(`sf org open returned no url for ${ORG_ALIAS} (expired? run: sf org list)`);
   return url;
