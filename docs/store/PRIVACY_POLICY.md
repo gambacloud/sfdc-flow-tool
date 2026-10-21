@@ -19,9 +19,6 @@ When you generate, refine, explain or repair something, the extension sends to o
 **3. Your AI provider key (stored locally, sent per request).**
 You supply your own API key for Anthropic, Google Gemini or Ollama. It is stored in the extension's local storage on your device. It is sent to our backend with a request so the provider can be called on your behalf, and is not stored by the backend `[confirm]`.
 
-**4. Optional "Share this" `[if enabled in v1]`.**
-If you choose to share a result, a snapshot of it is stored with a time limit in a hosted key-value store (Upstash Redis) and protected by a link and password you give to others.
-
 ## AI providers
 
 Content from item 2 is processed by the provider you choose, under that provider's terms and privacy policy: Anthropic (anthropic.com), Google (Gemini API), or Ollama (`[local endpoint or api.ollama.com]`). We do not control their retention. Use a key and plan whose data terms fit your organisation's policies.

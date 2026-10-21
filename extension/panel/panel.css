@@ -21,3 +21,10 @@
 #oauthBox,
 .manual-wrap,
 .header-org { display: none !important; }
+
+/* v1 scope: no "Share this" (Upstash), and nothing that needs the backend
+   to hold org credentials. Hidden here so flowtool/static stays untouched. */
+#shareBtn,
+#planShareBtn,
+#shareDialog,
+#shareUnlockDialog { display: none !important; }

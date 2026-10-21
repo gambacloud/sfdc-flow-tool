@@ -4,7 +4,7 @@ Paste-ready answers. They match `extension/manifest.json` (permissions `cookies`
 
 ## Single purpose
 
-> Help Salesforce administrators and developers create and change Salesforce metadata (Flows, Apex, Lightning components, objects and fields, permission sets, agents) from a plain-language description, review the result, and deploy it to the Salesforce org they are logged into in the browser.
+> Help Salesforce administrators and developers create and change Salesforce metadata (Flows, Apex, Lightning components, objects and fields, permission sets) from a plain-language description, review the result, and deploy it to the Salesforce org they are logged into in the browser.
 
 One purpose, with its parts (generate, review, validate, deploy) all serving the same workflow. Everything is on one side panel.
 
@@ -53,6 +53,5 @@ Limited Use statement (also in the policy): use of information received from Goo
 
 ## Open questions for the owner before ticking boxes
 
-1. Does the hosted backend (Heroku) keep prompts or metadata beyond the life of a session? `Session`/`PlanSession` are in memory (`server.py:295`, `:1945`), the optional "Share this" feature stores a snapshot in Upstash Redis with a TTL (`flowtool/share.py`), and Heroku router logs record request metadata. If any of this is retained, say so in the policy.
+1. Does the hosted backend (Heroku) keep prompts or metadata beyond the life of a session? `Session`/`PlanSession` are in memory (`server.py:295`, `:1945`), and Heroku router logs record request metadata. If any of this is retained, say so in the policy.
 2. Does the backend log request content or per-user activity (`flowtool/activity.py` keeps a per-browser, in-memory feed of log lines)? If you add analytics or error reporting later, "User activity"/"Website content" disclosures must be updated first.
-3. Is "Share this" in scope for v1? It sends a snapshot to Upstash; the policy lists it as optional.

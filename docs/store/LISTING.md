@@ -18,7 +18,7 @@ Describe Salesforce changes in plain language, review them, and deploy to the or
 
 ## Detailed description
 
-SFDC Build Tool turns a plain-language request into Salesforce metadata you can review and deploy: Flows, Apex classes and triggers, Lightning Web Components, Custom Objects and Fields, Permission Sets, Prompt Templates and Agentforce agents.
+SFDC Build Tool turns a plain-language request into Salesforce metadata you can review and deploy: Flows, Apex classes and triggers, Lightning Web Components, Custom Objects and Fields and Permission Sets.
 
 HOW IT WORKS
 1. Log in to your Salesforce org in Chrome as you normally do.
@@ -50,6 +50,6 @@ This extension is not affiliated with or endorsed by Salesforce, Inc. Salesforce
 
 ## Notes on accuracy
 
-- "Agentforce agents" in the description depends on the SFAP session-exchange spike result (ARCHITECTURE.md section 1). Remove that item if it does not work with a browser `sid`.
+- v1 scope (owner decision): "Share this", Org Summary, Agent publish and the portal/site builder are not listed. Add one back only after it works in the shipped build (Agent publish also depends on the SFAP spike result, ARCHITECTURE.md section 1).
 - The provider list matches `PROVIDERS` in `server.py:170`. Remove Ollama if the hosted backend should not reach an Ollama endpoint.
 - "Never sent to our servers" must stay true for the shipped code; `tools/check.py` guards the backend module against touching the cookie, but a review of every request body is still needed once the org client is ported.

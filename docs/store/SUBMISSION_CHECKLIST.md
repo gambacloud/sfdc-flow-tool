@@ -8,14 +8,14 @@ Unlisted = installable only via the direct link; not searchable. It still goes t
 - [ ] Pay the one-time developer registration fee (US$5 at time of writing; check the dashboard).
 - [ ] Turn on 2-Step Verification on that Google account (required to publish).
 - [ ] Contact email in the dashboard, and **verify** it (verification email).
-- [ ] Declare trader / non-trader status under the EU Digital Services Act. If trader (you offer this commercially), provide and verify name, address, phone and email; these are shown publicly on the listing for EU users. If non-trader, say so.
+- [ ] Declare **non-trader** status under the EU Digital Services Act (owner decision: personal, free, no commercial intent). Revisit if that changes; a trader must publish verified name, address, phone and email.
 - [ ] (Optional) Publisher verification / a verified website domain if you want it shown on the listing.
 
 ## B. Hosting and legal (OWNER)
 
 - [ ] Publish `PRIVACY_POLICY.md` (after filling every `[...]`) at a stable public HTTPS URL; paste into the "Privacy policy" field.
 - [ ] Support email or support page URL; monitored.
-- [ ] Confirm the facts the policy asserts (open questions in `PERMISSIONS_AND_PRIVACY_FORMS.md`): retention on Heroku, logs, Upstash, provider terms.
+- [ ] Confirm the facts the policy asserts (open questions in `PERMISSIONS_AND_PRIVACY_FORMS.md`): retention on Heroku, logs, provider terms.
 - [ ] Decide trademark wording: the "not affiliated with Salesforce" line stays.
 - [ ] Production backend: HTTPS origin chosen, CORS allows `chrome-extension://<extension id>`; rate limiting in place since the backend is reachable from any install.
 
@@ -25,7 +25,7 @@ Unlisted = installable only via the direct link; not searchable. It still goes t
 - [ ] Backend split done: no org credentials in any request model.
 - [ ] Set the real `BACKEND_URL` in `extension/lib/config.js`, `host_permissions` and CSP `connect-src` in `manifest.json`; `python extension/tools/check.py` passes.
 - [ ] Final icons (16/32/48/128) replace placeholders; `python extension/tools/sync_ui.py` re-run after any UI change.
-- [ ] Resolve `metadata-kb-worker.js` (missing) or hide Org Summary.
+- [ ] Org Summary stays out of v1 (worker file missing); hide its UI in the build if it still shows.
 - [ ] Decide mermaid handling (ARCHITECTURE.md section 5) and note the `eval` string for the reviewer if kept.
 - [ ] Manual test on a clean Chrome profile: load unpacked, log in to a scratch org, open panel, validate and deploy a Flow, Apex class and LWC; sandbox, My Domain and Experience Cloud hosts; two orgs open at once.
 - [ ] Bump `version` in `manifest.json`; zip the **contents** of `extension/` (manifest at the zip root), excluding `tools/`. Keep the zip under the store limit; the vendored mermaid is about 3.5 MB.

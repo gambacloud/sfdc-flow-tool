@@ -30,7 +30,7 @@ Use a scratch org or sandbox with fake data; no real customer names, record data
 5. **Deployed**: success state with the link to the component in Setup. Caption: "Deploy and jump straight to it in Setup."
 Optional 6: **Bring your own key**: provider/model/key settings. Caption: "Your AI key stays in your browser."
 
-Do not show screenshots of features that are still stubbed in the build being submitted (list, retrieve, validate, deploy, agent publish, portal).
+Do not show screenshots of features that are still stubbed in the build being submitted (list, retrieve, validate, deploy; and anything out of v1: Share, Org Summary, agent publish, portal).
 
 ## Promo tile idea
 
