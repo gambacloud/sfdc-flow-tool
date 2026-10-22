@@ -21,6 +21,8 @@ from typing import Deque, Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
+from flowtool import hosted
+
 MIN_ENV = "FLOWTOOL_RATE_PER_MIN"
 DAY_ENV = "FLOWTOOL_RATE_PER_DAY"
 DEFAULT_PER_MIN = 60
@@ -80,6 +82,29 @@ def _check(key: Tuple[str, str], now: float, per_min: int, per_day: int) -> Opti
             return f"Too many requests ({per_min} per minute). Wait a minute and try again."
     hits.append(now)
     return None
+
+
+KEY_MESSAGE = "Add your own AI key in the extension settings."
+
+
+async def require_own_key(request: Request) -> None:
+    """Extension requests (Origin in FLOWTOOL_CORS_ORIGINS) must bring their own api_key.
+
+    Never lets them fall back to the server's env keys. Other callers (the web
+    UI) are untouched.
+    """
+    if not is_limited(request):
+        return
+    origin = request.headers.get("origin", "").rstrip("/")
+    if not origin or origin not in hosted.cors_origins():
+        return
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001 - not JSON: no key either
+        data = None
+    key = data.get("api_key") if isinstance(data, dict) else None
+    if not (isinstance(key, str) and key.strip()):
+        raise HTTPException(400, KEY_MESSAGE)
 
 
 async def guard(request: Request) -> None:

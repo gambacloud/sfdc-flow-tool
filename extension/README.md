@@ -67,3 +67,5 @@ heroku config:set FLOWTOOL_CORS_ORIGINS=chrome-extension://eimhkifgfamgkmmoidhlh
 `FLOWTOOL_HOSTED` must stay **unset** on that app: it also serves the existing web UI, whose users send OAuth org tokens, and hosted mode would reject them. The extension never sends org fields, so it works without it.
 
 LLM-spending endpoints are rate limited per client (`FLOWTOOL_RATE_PER_MIN`, default 60; `FLOWTOOL_RATE_PER_DAY`, default 2000; 0 disables). A 429 carries a plain message, which the panel shows like any other error. The privacy policy page is served at `/flow-tool/privacy`.
+
+Requests from the extension origin (`FLOWTOOL_CORS_ORIGINS`) to the LLM endpoints must carry their own `api_key`; otherwise the backend answers 400 "Add your own AI key in the extension settings." and never falls back to the server's env keys. The web UI is unaffected.

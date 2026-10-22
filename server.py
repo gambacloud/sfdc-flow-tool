@@ -116,7 +116,7 @@ load_env(ROOT)
 # as package data when this repo is installed as a dependency elsewhere.
 STATIC = ROOT / "flowtool" / "static"
 
-app = FastAPI(title="SFDC Flow Tool", dependencies=[Depends(hosted.guard), Depends(ratelimit.guard)])
+app = FastAPI(title="SFDC Flow Tool", dependencies=[Depends(hosted.guard), Depends(ratelimit.require_own_key), Depends(ratelimit.guard)])
 
 # Mermaid is vendored under /static/vendor rather than pulled from a CDN, so
 # script-src needs nothing beyond 'self' - a future inline <script> added by

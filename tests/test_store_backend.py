@@ -80,3 +80,29 @@ def test_client_ip_uses_last_forwarded_hop():
         client = None
 
     assert ratelimit.client_ip(R()) == "7.7.7.7"
+
+
+EXT = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+
+
+def test_extension_origin_must_send_own_key(client, monkeypatch):
+    monkeypatch.setenv(server.hosted.CORS_ENV, EXT)
+    h = {"Origin": EXT, "X-Client-Id": "a"}
+    for body in ({}, {"api_key": ""}, {"api_key": "  "}):
+        r = client.post("/api/design/start", json=body, headers=h)
+        assert r.status_code == 400
+        assert r.json()["detail"] == ratelimit.KEY_MESSAGE
+    assert client.post("/api/design/start", json={"api_key": "k"}, headers=h).status_code != 400
+
+
+def test_web_ui_and_other_origins_keep_server_key_fallback(client, monkeypatch):
+    monkeypatch.setenv(server.hosted.CORS_ENV, EXT)
+    for h in ({}, {"Origin": "https://evil.example"}):
+        assert client.post("/api/design/start", json={}, headers=h).status_code != 400 or \
+            client.post("/api/design/start", json={}, headers=h).json()["detail"] != ratelimit.KEY_MESSAGE
+
+
+def test_key_required_only_on_llm_endpoints(client, monkeypatch):
+    monkeypatch.setenv(server.hosted.CORS_ENV, EXT)
+    r = client.get("/api/design/status", params={"job_id": "x"}, headers={"Origin": EXT})
+    assert r.status_code != 400 or r.json()["detail"] != ratelimit.KEY_MESSAGE
