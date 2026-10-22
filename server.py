@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -72,7 +72,7 @@ from flowtool.prompt_import import (
 )
 from flowtool.reference import clean_reference, tag_description, tag_value
 from flowtool.report import render_standalone_report
-from flowtool import github, hosted, share
+from flowtool import github, hosted, privacy, ratelimit, share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     ComponentProblem,
@@ -116,7 +116,7 @@ load_env(ROOT)
 # as package data when this repo is installed as a dependency elsewhere.
 STATIC = ROOT / "flowtool" / "static"
 
-app = FastAPI(title="SFDC Flow Tool", dependencies=[Depends(hosted.guard)])
+app = FastAPI(title="SFDC Flow Tool", dependencies=[Depends(hosted.guard), Depends(ratelimit.guard)])
 
 # Mermaid is vendored under /static/vendor rather than pulled from a CDN, so
 # script-src needs nothing beyond 'self' - a future inline <script> added by
@@ -3515,6 +3515,11 @@ def install_macos() -> PlainTextResponse:
         media_type="text/plain",
         headers={"Content-Disposition": 'attachment; filename="sfdc-flow-forge-installer.sh"'},
     )
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_policy() -> HTMLResponse:
+    return HTMLResponse(privacy.page())
 
 
 @app.get("/")

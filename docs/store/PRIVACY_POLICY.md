@@ -14,10 +14,10 @@ SFDC Build Tool turns a plain-language request into Salesforce metadata, lets yo
 To act as you in your org, the extension reads the Salesforce session cookie (`sid`) for the org in your active tab and uses it to call that org's APIs directly from your browser. The session id and your org's URL are **not sent to our servers** and not sent to any third party other than Salesforce itself.
 
 **2. Your requests and Salesforce metadata (sent to our server and your AI provider).**
-When you generate, refine, explain or repair something, the extension sends to our backend `[backend URL]`: the text you type; the metadata you chose to open or build (for example the definition of a Flow, Apex source, object and field definitions); and Salesforce validation or deployment error messages. Our backend sends the relevant parts to the AI provider you selected to produce the result and returns it to you. We do not intentionally include your Salesforce session id, cookies or org URL in these requests. Metadata you open from an org may itself contain org-specific names or identifiers; do not open anything you are not allowed to share with an AI provider.
+When you generate, refine, explain or repair something, the extension sends to our backend (`https://salesforce-debugtool.herokuapp.com/flow-tool`): the text you type; the metadata you chose to open or build (for example the definition of a Flow, Apex source, object and field definitions); and Salesforce validation or deployment error messages. Our backend sends the relevant parts to the AI provider you selected to produce the result and returns it to you. We do not intentionally include your Salesforce session id, cookies or org URL in these requests. Metadata you open from an org may itself contain org-specific names or identifiers; do not open anything you are not allowed to share with an AI provider.
 
 **3. Your AI provider key (stored locally, sent per request).**
-You supply your own API key for Anthropic, Google Gemini or Ollama. It is stored in the extension's local storage on your device. It is sent to our backend with a request so the provider can be called on your behalf, and is not stored by the backend `[confirm]`.
+You supply your own API key for Anthropic, Google Gemini or Ollama. It is stored in the extension's local storage on your device. It is sent to our backend with a request so the provider can be called on your behalf, and is used only for that request. The backend has no AI key of its own, never writes your key to disk or to a database, and does not log it.
 
 ## AI providers
 
@@ -25,7 +25,7 @@ Content from item 2 is processed by the provider you choose, under that provider
 
 ## Hosting
 
-Our backend runs on `[Heroku]`. The host and its infrastructure providers process standard connection and request logs (IP address, timestamp, URL path). `[Describe retention. Confirm no request bodies are logged.]`
+Our backend runs on Heroku. The host and its infrastructure providers process standard connection and request logs (IP address, timestamp, URL path). `[Describe retention. Confirm no request bodies are logged.]`
 
 ## What we do not do
 
@@ -41,7 +41,8 @@ We use the information described above only to provide and improve the single pu
 
 ## Retention and your choices
 
-- Session state used to produce a result is held in the backend's memory and discarded when the session ends or the server restarts `[confirm]`.
+- Session state used to produce a result (your request, the generated metadata and a short activity log of model calls, tagged with a random per-panel id) is held only in the backend's memory, not in a database, and is discarded when the server restarts. The activity log keeps at most the latest 3000 lines across all users. Heroku restarts servers at least once a day.
+- The "Share this" link feature is not part of this extension.
 - Remove the extension to delete everything it stored locally (settings and keys). You can also clear the key in the panel.
 - To ask about or delete data held by us, contact [support email].
 
