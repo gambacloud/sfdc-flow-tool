@@ -17,7 +17,7 @@ Unlisted = installable only via the direct link; not searchable. It still goes t
 - [ ] Support email or support page URL; monitored.
 - [ ] Confirm the facts the policy asserts (open questions in `PERMISSIONS_AND_PRIVACY_FORMS.md`): retention on Heroku, logs, provider terms.
 - [ ] Decide trademark wording: the "not affiliated with Salesforce" line stays.
-- [ ] Production backend: HTTPS origin chosen, CORS allows `chrome-extension://<extension id>`; rate limiting in place since the backend is reachable from any install.
+- [ ] Production backend: HTTPS origin chosen, CORS allows `chrome-extension://<extension id>`; rate limiting is in place (`FLOWTOOL_RATE_PER_MIN` / `FLOWTOOL_RATE_PER_DAY`, in-process). Heroku setting: `FLOWTOOL_CORS_ORIGINS=chrome-extension://eimhkifgfamgkmmoidhlhbdjbhigmifp` only; `FLOWTOOL_HOSTED` stays unset on the shared app. Privacy policy URL: `https://salesforce-debugtool.herokuapp.com/flow-tool/privacy` (after the pinned dependency is bumped and deployed).
 
 ## C. Build (DEV)
 

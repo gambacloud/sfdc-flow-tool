@@ -31,7 +31,7 @@ if "optional_permissions" in manifest or "content_scripts" in manifest:
     err("no optional_permissions or content_scripts expected in v0.1")
 
 config = (EXT / "lib" / "config.js").read_text(encoding="utf-8")
-m = re.search(r'BACKEND_URL\s*=\s*"(https://[^"/]+)"', config)
+m = re.search(r'BACKEND_URL\s*=\s*"(https://[^"/]+)(/[^"]*)?"', config)
 if not m:
     err("BACKEND_URL not found / not https")
 else:
@@ -75,7 +75,7 @@ for p in own_js:
     text = p.read_text(encoding="utf-8")
     if re.search(r"\beval\s*\(|new\s+Function\s*\(|importScripts\s*\(", text):
         err(f"eval/new Function/importScripts in {p.relative_to(EXT)}")
-    if re.search(r"""['"`]https?://(?!backend\.example\.com)[^'"`]*\.(js|mjs)['"`]""", text):
+    if re.search(r"""['"`]https?://(?!salesforce-debugtool\.herokuapp\.com)[^'"`]*\.(js|mjs)['"`]""", text):
         err(f"remote script URL in {p.relative_to(EXT)}")
 
 api_js = (panel / "api.js").read_text(encoding="utf-8")

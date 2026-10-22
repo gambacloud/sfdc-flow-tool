@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Describe Salesforce changes in plain language, review them, and deploy to the org you are logged into. Uses your existing Salesforce browser session.",
   "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv5a1ecmthfOzMjGUwgu3nmD9xUw9esl2wGEbH7FhUv8HmxNFkGuuIpzNik75N1Pdit/g3d8lDGLQNuWA/eDhj/XeZZwXyzQRwhVRCbWPIj9C3vcckNcUpm6t48oEc8BL6UNUq0XtUADHUSVl/Q+Jg+9RXri+zOXRK9/Oto0xsZ+2rjm9uSfjlQ0OyS0nqurBOwY6qRY5mx8JCmBObc8m22fL1F2DbVlg1QKIMkPdjEexrHOvTvEnseqCgenfpRDM2BE8Jg/9SOOJShW0tDpmXydo20HGlOI8ea0qSj7Sb5RVQkNekbKZv5wJx2lsYegJTkZWq9p5hDNzr+XCvI2QhwIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -29,9 +30,9 @@
     "https://*.salesforce.com/*",
     "https://*.force.com/*",
     "https://*.salesforce-setup.com/*",
-    "https://backend.example.com/*"
+    "https://salesforce-debugtool.herokuapp.com/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'; connect-src 'self' https://*.salesforce.com https://*.force.com https://*.salesforce-setup.com https://backend.example.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'; connect-src 'self' https://*.salesforce.com https://*.force.com https://*.salesforce-setup.com https://salesforce-debugtool.herokuapp.com"
   }
 }

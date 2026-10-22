@@ -22,7 +22,7 @@ One purpose, with its parts (generate, review, validate, deploy) all serving the
 **Host permissions: `https://*.salesforce.com/*`, `https://*.force.com/*`, `https://*.salesforce-setup.com/*`**
 > Salesforce orgs are served from customer-specific subdomains of these domains (My Domain, Lightning, Setup, Visualforce). The extension needs access to them to (1) read which org the active tab is on, (2) read that org's `sid` cookie, and (3) call that org's Metadata SOAP, REST and Tooling APIs to list, retrieve, validate and deploy metadata the user asked for. No content script is injected into these pages.
 
-**Host permission: `[backend origin, currently placeholder https://backend.example.com]`**
+**Host permission: `https://salesforce-debugtool.herokuapp.com`**
 > The developer's server that turns the user's request into Salesforce metadata and checks it, using the user's own AI provider key. It receives requests and metadata, never the Salesforce session id or org URL.
 
 **Remote code**: No. All JavaScript is packaged in the extension. The AI/LLM work runs on the server and returns data (JSON/XML), not code that the extension executes.

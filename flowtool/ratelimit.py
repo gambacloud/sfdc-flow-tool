@@ -35,7 +35,7 @@ LIMITED_PATHS = (
     "/api/refine/start", "/api/repair/start", "/api/import/parse", "/api/import/start",
     "/api/org-summary/start", "/api/plan/start", "/api/plan/execute/start",
     "/api/plan/repair/start", "/api/plan/step/revise/start", "/api/plan/revise/start",
-    "/api/plan/agent/publish/start", "/api/reference", "/api/models",
+    "/api/plan/agent/publish/start",
 )
 
 _hits: Dict[Tuple[str, str], Deque[float]] = {}

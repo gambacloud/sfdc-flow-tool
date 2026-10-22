@@ -8,7 +8,7 @@ MV3 side-panel extension. Design: [docs/store/ARCHITECTURE.md](../docs/store/ARC
 2. Open a Salesforce tab (Lightning, Setup, or My Domain) while logged in.
 3. Click the toolbar icon. The side panel opens and the top bar shows the detected org (`Org: <host>.my.salesforce.com`, org id, which cookie was used).
 
-Other tabs show a hint instead. Salesforce calls (lists, retrieve, validate, deploy, org summary) run in the panel with the browser `sid`; everything else goes to `BACKEND_URL` (placeholder `https://backend.example.com`, so those calls fail until it is set).
+Other tabs show a hint instead. Salesforce calls (lists, retrieve, validate, deploy, org summary) run in the panel with the browser `sid`; everything else goes to `BACKEND_URL` (`https://salesforce-debugtool.herokuapp.com/flow-tool`, see below).
 
 ## Layout
 
@@ -51,3 +51,19 @@ Backend contract the extension relies on (sent to the `backend-split` session; a
 Not covered here: final icons.
 
 Backend confirmed (branch `claude/nostalgic-chandrasekhar-50a051`): bundles carry `needs_existing_permission_set` (extension fetches the set and re-POSTs `{existing_permission_set_xml}` to the bundle path); large objects return `choose_fields` with `pick_id: null` and the extension re-POSTs `import/parse` with `fields`; plan `deploy-result` also gets `component_failures`.
+
+## Backend and extension id
+
+`BACKEND_URL` is `https://salesforce-debugtool.herokuapp.com/flow-tool`: this repo is a pinned pip dependency of the `salesforce-debugtool` Heroku app and mounted at `/flow-tool`. `manifest.json` `host_permissions` and the CSP `connect-src` carry the origin; `tools/check.py` keeps the three in step.
+
+`manifest.json` pins a `key`, so the extension id is the same for a local unpacked load, the Unlisted store item and the CORS allow-list: `eimhkifgfamgkmmoidhlhbdjbhigmifp`. The matching private key lives outside the repo (`%USERPROFILE%\.claude\ext-keys\sfdc-build-tool.pem`); keep it, it is needed to upload a package signed with the same id if the store ever asks for it. The Chrome Web Store assigns its own id to the store item unless the key is supplied in the first upload: confirm the id on the dashboard and, if it differs, use that id in the CORS setting too.
+
+The only Heroku setting the shared app needs:
+
+```
+heroku config:set FLOWTOOL_CORS_ORIGINS=chrome-extension://eimhkifgfamgkmmoidhlhbdjbhigmifp -a salesforce-debugtool
+```
+
+`FLOWTOOL_HOSTED` must stay **unset** on that app: it also serves the existing web UI, whose users send OAuth org tokens, and hosted mode would reject them. The extension never sends org fields, so it works without it.
+
+LLM-spending endpoints are rate limited per client (`FLOWTOOL_RATE_PER_MIN`, default 60; `FLOWTOOL_RATE_PER_DAY`, default 2000; 0 disables). A 429 carries a plain message, which the panel shows like any other error. The privacy policy page is served at `/flow-tool/privacy`.

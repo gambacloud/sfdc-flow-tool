@@ -1,10 +1,10 @@
 // One place for deployment-specific values.
 //
-// BACKEND_URL is a PLACEHOLDER. Replace it with the hosted backend origin
-// (no trailing slash) and make the same change to host_permissions and
-// content_security_policy.connect-src in manifest.json. `python
-// tools/check.py` fails if the three disagree.
-export const BACKEND_URL = "https://backend.example.com";
+// BACKEND_URL is the hosted backend: the flow tool mounted at /flow-tool on the
+// salesforce-debugtool Heroku app (no trailing slash). manifest.json host_permissions
+// and content_security_policy.connect-src carry its origin; `python
+// tools/check.py` fails if they disagree.
+export const BACKEND_URL = "https://salesforce-debugtool.herokuapp.com/flow-tool";
 
 // Hosts the extension may read a Salesforce session for. Mirrors the
 // host_permissions entries in manifest.json.
