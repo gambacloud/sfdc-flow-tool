@@ -2,7 +2,7 @@
 
 DRAFT: not legal advice. Have the owner review, fill the `[...]` fields and publish at a stable public HTTPS URL before submission. Effective date: [date].
 
-Publisher: [legal name / individual], [country]. Contact: [support email].
+Publisher: [legal name / individual], [country]. Contact: salesforcedebugtool@gmail.com.
 
 ## What the extension does
 
@@ -44,7 +44,7 @@ We use the information described above only to provide and improve the single pu
 - Session state used to produce a result (your request, the generated metadata and a short activity log of model calls, tagged with a random per-panel id) is held only in the backend's memory, not in a database, and is discarded when the server restarts. The activity log keeps at most the latest 3000 lines across all users. Heroku restarts servers at least once a day.
 - The "Share this" link feature is not part of this extension.
 - Remove the extension to delete everything it stored locally (settings and keys). You can also clear the key in the panel.
-- To ask about or delete data held by us, contact [support email].
+- To ask about or delete data held by us, contact salesforcedebugtool@gmail.com.
 
 ## Security
 
@@ -60,4 +60,4 @@ We will update this page and the effective date when practices change; material 
 
 ## Contact
 
-[support email]
+salesforcedebugtool@gmail.com

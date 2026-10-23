@@ -44,7 +44,7 @@ REQUIREMENTS
 - A Salesforce user who can deploy metadata (API Enabled; Modify Metadata or Author Apex, depending on what you deploy).
 - An API key for a supported AI provider.
 
-SUPPORT: [support email]   PRIVACY POLICY: [URL]
+SUPPORT: salesforcedebugtool@gmail.com   PRIVACY POLICY: [URL]
 
 This extension is not affiliated with or endorsed by Salesforce, Inc. Salesforce is a trademark of Salesforce, Inc.
 
