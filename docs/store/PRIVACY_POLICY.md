@@ -1,8 +1,8 @@
 # Privacy Policy: SFDC Build Tool (Chrome extension)
 
-DRAFT: not legal advice. Have the owner review, fill the `[...]` fields and publish at a stable public HTTPS URL before submission. Effective date: [date].
+Effective date: 2026-10-23.
 
-Publisher: [legal name / individual], [country]. Contact: salesforcedebugtool@gmail.com.
+Publisher: GAMBACLOUD (an individual developer), Israel. Contact: salesforcedebugtool@gmail.com.
 
 ## What the extension does
 
@@ -21,16 +21,16 @@ You supply your own API key for Anthropic, Google Gemini or Ollama. It is stored
 
 ## AI providers
 
-Content from item 2 is processed by the provider you choose, under that provider's terms and privacy policy: Anthropic (anthropic.com), Google (Gemini API), or Ollama (`[local endpoint or api.ollama.com]`). We do not control their retention. Use a key and plan whose data terms fit your organisation's policies.
+Content from item 2 is processed by the provider you choose, under that provider's terms and privacy policy: Anthropic (anthropic.com), Google (Gemini API), or Ollama (a local endpoint or api.ollama.com, as you configure it). We do not control their retention. Use a key and plan whose data terms fit your organisation's policies.
 
 ## Hosting
 
-Our backend runs on Heroku. The host and its infrastructure providers process standard connection and request logs (IP address, timestamp, URL path). `[Describe retention. Confirm no request bodies are logged.]`
+Our backend runs on Heroku. The host and its infrastructure providers process standard connection and request logs (IP address, timestamp, URL path). Those logs are kept for a short period under Heroku's own policy. Our application keeps no database and does not intentionally write your request text or API key to its logs; its in-memory activity feed holds only the latest few thousand log lines and is cleared when the server restarts.
 
 ## What we do not do
 
 - We do not sell your data and do not share it for advertising.
-- We do not use your data to train models or to build profiles. `[confirm with provider settings]`
+- We do not use your data to train models or to build profiles. Because you bring your own API key, the provider's own terms govern what it does with your content; we do not control them.
 - We do not collect browsing history; the extension reads only the address of the active tab, and only to detect whether it is a Salesforce page.
 - We do not use remote code; all extension code ships in the package.
 - We do not receive your Salesforce session id.
