@@ -60,9 +60,10 @@ from flowtool.lwc_guide import to_lwc_test_guide
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
-    Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, refine_step, repair_step,
-    revise_plan,
+    HOUSE_RULES_MAX, Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, house_rules_text,
+    refine_step, repair_step, revise_plan,
 )
+from flowtool.compare import OrgReader, compare_steps
 from flowtool.object_import import (
     UnsupportedObject, list_custom_fields, list_custom_objects, parse_custom_field,
     parse_custom_object, retrieve_custom_field, retrieve_custom_object,
@@ -2024,6 +2025,8 @@ class PlanRequest(BaseModel):
     # Username of the user an Agentforce agent runs as ("Einstein Agent User"
     # profile). Only needed when the plan builds an agent.
     agent_user: Optional[str] = None
+    # The person's standing conventions (naming, tests, style), applied to every step.
+    house_rules: Optional[str] = None
     # What the extension read from the org, since this server cannot: {"objects": {"Account":
     # {"fields": ["Region__c", ...]}}}. Handed to the planner as facts about the org.
     org_context: Optional[Dict[str, Any]] = None
@@ -2069,6 +2072,7 @@ class PendingPlan:
     api_version: str
     permission_set_config: Optional[PermissionSetConfig] = None
     agent_user: Optional[str] = None
+    house_rules: Optional[str] = None
 
 
 PLAN_JOBS: Dict[str, PendingPlan] = {}
@@ -2464,13 +2468,15 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
         )
 
     generator = PlannerGenerator(planner_of(provider))
-    request_text = body.request + _org_context_text(body.org_context)
+    house_rules = (body.house_rules or "").strip()[:HOUSE_RULES_MAX] or None
+    request_text = body.request + _org_context_text(body.org_context) + house_rules_text(house_rules)
     task = asyncio.create_task(asyncio.to_thread(generator.generate, request_text))
     job_id = uuid.uuid4().hex
     PLAN_JOBS[job_id] = PendingPlan(
         task=task, provider=provider, api_version=body.api_version,
         permission_set_config=permission_set_config,
         agent_user=(body.agent_user or "").strip() or None,
+        house_rules=house_rules,
     )
     return {"job_id": job_id}
 
@@ -2486,6 +2492,7 @@ async def plan_status(job_id: str) -> Dict[str, Any]:
 
     result = llm_result(pending.task)
     result.value.agent_user = pending.agent_user  # a build option, never the model's to choose
+    result.value.house_rules = pending.house_rules
     plan_id = uuid.uuid4().hex
     PLANS[plan_id] = StoredPlan(
         provider=pending.provider, plan=result.value, messages=result.messages,
@@ -2712,6 +2719,43 @@ def _start_plan_deploy(
     session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
 
 
+# --- Compare with the org ----------------------------------------------------
+# Read-only: for each step, is it new in the org or does it exist, and what would
+# deploying change. Runs on its own job so it never delays or blocks a validate.
+
+COMPARES: Dict[str, "asyncio.Task"] = {}
+
+
+async def _compare_plan(session: PlanSession, url: str, token: str) -> List[Dict[str, Any]]:
+    api_version = _deploy_api_version(session)
+    async with OrgReader(url, token, api_version) as reader:
+        async with MetadataClient(url, token, api_version) as meta:
+            return await compare_steps(reader, session.steps, meta)
+
+
+@app.post("/api/plan/compare/start")
+async def plan_compare_start(body: OrgRequest) -> Dict[str, Any]:
+    session = get_plan_session(body.session_id)
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    job_id = uuid.uuid4().hex
+    COMPARES[job_id] = asyncio.create_task(_compare_plan(session, url, token))
+    return {"job_id": job_id}
+
+
+@app.get("/api/plan/compare/status")
+async def plan_compare_status(job_id: str) -> Dict[str, Any]:
+    task = COMPARES.get(job_id)
+    if task is None:
+        raise HTTPException(404, "Unknown compare job.")
+    if not task.done():
+        return {"done": False}
+    del COMPARES[job_id]
+    try:
+        return {"done": True, "items": task.result()}
+    except Exception as exc:  # noqa: BLE001 - the whole comparison could not run (connection, token)
+        raise HTTPException(400, f"Could not compare with the org: {exc}") from exc
+
+
 @app.post("/api/plan/validate/start")
 async def plan_validate_start(body: OrgRequest) -> Dict[str, Any]:
     session = get_plan_session(body.session_id)
@@ -2822,6 +2866,25 @@ async def plan_scenarios_status(session_id: str) -> Dict[str, Any]:
     session.scenarios = result.value
     session.scenarios_version = session.version
     return {"done": True, "scenarios": _scenarios_view(session), "usage": session.provider.usage.as_dict()}
+
+
+@app.get("/api/plan/session/{session_id}/scenarios/{index}")
+async def plan_scenario_script(session_id: str, index: int) -> Dict[str, Any]:
+    """
+    One scenario's script, for a client that runs it itself (the browser
+    extension talks to the org directly, so the hosted server never does).
+    No org contact here - the same refusals as /run apply on the client side.
+    """
+    session = get_plan_session(session_id)
+    if session.scenarios is None or session.scenarios_version != session.version:
+        raise HTTPException(400, "Generate test scenarios for this plan version first.")
+    if not 0 <= index < len(session.scenarios.scenarios):
+        raise HTTPException(404, "No such scenario.")
+    return {
+        "apex": session.scenarios.scenarios[index].apex,
+        "deployed": session.deployed,
+        "api_version": session.api_version,
+    }
 
 
 class RunScenarioRequest(OrgRequest):

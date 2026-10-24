@@ -299,6 +299,7 @@ const state = {
   flows: [], // cached, alphabetically-sorted /api/flows result backing the search combo
   apexClasses: [], // same, for the Apex Class picker in "Open one from the org"
   promptTemplates: [], // same, for the Prompt Template picker
+  planCompare: {}, // step name -> {status, summary, changes, diff} from "Compare with the org"
   apexTriggers: [], // same, for the Apex Trigger picker
   lwcComponents: [], // same, for the Lightning Web Component picker
   openObjects: [], // Custom Object picker
@@ -1261,6 +1262,75 @@ function setAllPlanStepsOpen(open) {
   });
 }
 
+// "Compare with the org": a chip in the step's header (New / Exists / ?) and, inside the card, what
+// would change - a list of differences and, for code and prompt text, the diff.
+function compareChip(item) {
+  const chip = document.createElement("span");
+  chip.className = "badge compare-chip " + item.status;
+  chip.textContent = item.status === "new" ? "New" : item.status === "exists" ? "Exists" : "?";
+  chip.title = item.summary;
+  return chip;
+}
+
+function compareBlock(item) {
+  const box = document.createElement("div");
+  box.className = "compare-block " + item.status;
+  const line = document.createElement("div");
+  line.textContent = item.summary;
+  box.appendChild(line);
+  if (item.changes && item.changes.length) {
+    const list = document.createElement("ul");
+    for (const change of item.changes) {
+      const li = document.createElement("li");
+      li.textContent = change;
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+  }
+  if (item.diff) {
+    const details = document.createElement("details");
+    const label = document.createElement("summary");
+    label.textContent = "Show the difference";
+    const pre = document.createElement("pre");
+    pre.className = "compare-diff";
+    pre.textContent = item.diff;
+    details.append(label, pre);
+    box.appendChild(details);
+  }
+  return box;
+}
+
+async function planCompare(button) {
+  showError($("planGate").parentElement, "");
+  if (!state.org && !$("org")?.value) {
+    showError($("planGate").parentElement, "Connect to an org first to compare with it.");
+    return;
+  }
+  if (button) busy(button, true, "Comparing...");
+  try {
+    const { job_id } = await api("api/plan/compare/start", {
+      session_id: state.planSessionId,
+      ...orgCredentials(),
+    });
+    const data = await poll("api/plan/compare/status", { job_id });
+    state.planCompare = Object.fromEntries(data.items.map((item) => [item.step, item]));
+    document.querySelectorAll("#planSteps details.plan-step").forEach((card) => {
+      const name = card.querySelector(".plan-step-name")?.textContent;
+      card.querySelector(".compare-chip")?.remove();
+      card.querySelector(".compare-block")?.remove();
+      const item = state.planCompare[name];
+      if (!item) return;
+      card.querySelector("summary").appendChild(compareChip(item));
+      card.insertBefore(compareBlock(item), card.querySelector("summary").nextSibling);
+    });
+  } catch (err) {
+    showError($("planGate").parentElement, err.message);
+    logError("Compare plan", err.message);
+  } finally {
+    if (button) busy(button, false);
+  }
+}
+
 // A service agent runs as an "Einstein Agent User" - Salesforce's compiler refuses the
 // script without one - so the field lives on the agent's own step, not in Options.
 function agentUserField() {
@@ -1376,7 +1446,10 @@ function renderPlanStep(step) {
   sub.className = "dim plan-step-sub";
   sub.textContent = planStepSummary(step);
   summary.append(badge, name, sub);
+  const compared = state.planCompare[step.name];
+  if (compared) summary.appendChild(compareChip(compared));
   card.appendChild(summary);
+  if (compared) card.appendChild(compareBlock(compared));
 
   const body = document.createElement("div");
   body.className = "plan-step-body";
@@ -1534,6 +1607,7 @@ function renderPlan(data) {
   state.planSessionId = data.session_id;
   sessionStorage.setItem(PLAN_SESSION_STORAGE_KEY, data.session_id);
   sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "plan");
+  if (data.version !== state.planVersion) state.planCompare = {};
   state.planVersion = data.version;
   state.planApproved = data.approved;
 
@@ -1564,6 +1638,8 @@ function renderPlan(data) {
   });
 
   renderPlanSteps(data);
+  state.planScenarios = data.scenarios || null;
+  renderScenarios();
 
   $("planReportLink").href = `api/plan/session/${data.session_id}/report`;
   $("planPackageLink").href = `api/plan/session/${data.session_id}/package`;
@@ -2798,6 +2874,7 @@ async function planAndBuildOnce(button) {
     model: $("model").value || null,
     auto_workers: $("autoWorkers").checked,
     agent_user: $("planAgentUser").value.trim() || null,
+    house_rules: $("houseRules").value.trim() || null,
     ...planPermSetRequestFields(),
   });
   const planned = await poll("api/plan/status", { job_id });
@@ -2842,6 +2919,7 @@ async function planValidate() {
     if (result.success) state.planValidatedVersion = result.checked_version;
     renderPlanResult(result);
     renderPlanGate();
+    if ($("planCompareToggle").checked) await planCompare(null);
   } catch (err) {
     showError($("planGate").parentElement, err.message);
     logError("Validate plan", err.message);
@@ -2907,6 +2985,138 @@ async function planRevise() {
   }
 }
 
+// --------------------------------------------------------------------------
+// Test scenarios: generated Anonymous Apex, run rolled back in a non-production org
+// --------------------------------------------------------------------------
+
+function renderScenarios() {
+  const data = state.planScenarios;
+  const list = $("planScenarios");
+  list.innerHTML = "";
+  $("planScenariosBtn").textContent = data ? "Regenerate" : "Suggest scenarios";
+  $("planScenariosHint").textContent = data
+    ? state.planDeployed
+      ? "Each run is rolled back - nothing is left in the org. Sandbox or scratch orgs only."
+      : "Deploy this plan to run a scenario. You can also paste one into the Developer Console."
+    : "Generates Anonymous Apex from the built components, with 200-record bulk cases.";
+  if (!data) return;
+
+  data.scenarios.forEach((scenario, index) => {
+    const card = document.createElement("div");
+    card.className = "plan-scenario";
+    const title = document.createElement("h4");
+    title.textContent = scenario.title;
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = scenario.kind;
+    title.appendChild(kind);
+    const expect = document.createElement("p");
+    expect.textContent = scenario.expect;
+    const code = document.createElement("pre");
+    code.textContent = scenario.apex;
+
+    const actions = document.createElement("div");
+    actions.className = "plan-scenario-actions";
+    const run = document.createElement("button");
+    run.type = "button";
+    run.textContent = "Run in org";
+    run.disabled = !state.planDeployed;
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy";
+    copy.onclick = () => navigator.clipboard.writeText(scenario.apex).catch(() => {});
+    actions.append(run, copy);
+
+    const result = document.createElement("div");
+    result.className = "scenario-run";
+    run.onclick = () => runScenario(index, run, result);
+    card.append(title, expect, code, actions, result);
+    list.appendChild(card);
+  });
+
+  if (data.manual_notes) {
+    const notes = document.createElement("pre");
+    notes.textContent = "By hand:\n" + data.manual_notes;
+    list.appendChild(notes);
+  }
+}
+
+function renderScenarioRun(box, run) {
+  box.innerHTML = "";
+  if (!run.success) {
+    const fail = document.createElement("div");
+    fail.className = "fail";
+    fail.textContent = (run.compiled ? "Failed: " : "Did not compile: ") + (run.problem || "unknown error");
+    box.appendChild(fail);
+  } else {
+    const ok = document.createElement("div");
+    ok.textContent = "Passed. Rolled back.";
+    box.appendChild(ok);
+  }
+  if (run.limits && run.limits.length) {
+    const table = document.createElement("table");
+    table.className = "scenario-limits";
+    run.limits.forEach((lim) => {
+      const row = document.createElement("tr");
+      row.className = lim.level;
+      [lim.name, `${lim.used} / ${lim.allowed}`, `${lim.percent}%`].forEach((text) => {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        row.appendChild(cell);
+      });
+      table.appendChild(row);
+    });
+    box.appendChild(table);
+  }
+  if (run.warnings && run.warnings.length) {
+    const ul = document.createElement("ul");
+    ul.className = "scenario-warnings";
+    run.warnings.forEach((w) => {
+      const li = document.createElement("li");
+      li.textContent = w;
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  }
+}
+
+async function runScenario(index, button, box) {
+  busy(button, true, "Running...");
+  box.textContent = "";
+  try {
+    const run = await api("api/plan/scenarios/run", {
+      session_id: state.planSessionId, index, ...orgCredentials(),
+    });
+    renderScenarioRun(box, run);
+  } catch (err) {
+    showError(box, err.message);
+    logError("Run scenario", err.message);
+  } finally {
+    busy(button, false);
+    button.disabled = !state.planDeployed;
+  }
+}
+
+async function generateScenarios() {
+  const button = $("planScenariosBtn");
+  const box = $("planScenariosBox");
+  showError(box, "");
+  busy(button, true, "Generating...");
+  try {
+    await api("api/plan/scenarios/start", { session_id: state.planSessionId });
+    const data = await poll("api/plan/scenarios/status", { session_id: state.planSessionId });
+    if (data.usage) state.usage = data.usage;
+    state.planScenarios = data.scenarios;
+    renderLogs();
+  } catch (err) {
+    showError(box, err.message);
+    logError("Test scenarios", err.message);
+  } finally {
+    busy(button, false);
+    renderScenarios();
+  }
+}
+
 async function planDeploy() {
   if (!confirm("Deploy every step above to the org?\n\nThis happens as one transaction.")) return;
 
@@ -2921,7 +3131,10 @@ async function planDeploy() {
     });
     const result = await poll("api/plan/deploy/status", { session_id: state.planSessionId });
     renderPlanResult(result);
-    if (result.plan) renderPlanSteps(result.plan);
+    if (result.plan) {
+      renderPlanSteps(result.plan);
+      renderScenarios();
+    }
   } catch (err) {
     showError($("planGate").parentElement, err.message);
     logError("Deploy plan", err.message);
@@ -4053,7 +4266,21 @@ async function boot() {
   $("planApproveBtn").onclick = planApprove;
   $("planRefInput").onchange = () => saveReference("plan", $("planRefInput"));
   $("planValidateBtn").onclick = planValidate;
+  $("planCompareBtn").onclick = () => planCompare($("planCompareBtn"));
+  try {
+    $("houseRules").value = localStorage.getItem("flowtool.houseRules") || "";
+  } catch (_e) { /* storage unavailable: start empty */ }
+  $("houseRules").addEventListener("input", () => {
+    try { localStorage.setItem("flowtool.houseRules", $("houseRules").value); } catch (_e) { /* ignore */ }
+  });
+  try {
+    $("planCompareToggle").checked = localStorage.getItem("flowtool.compare") !== "off";
+  } catch (_e) { /* storage unavailable: keep the default */ }
+  $("planCompareToggle").onchange = () => {
+    try { localStorage.setItem("flowtool.compare", $("planCompareToggle").checked ? "on" : "off"); } catch (_e) { /* ignore */ }
+  };
   $("planDeployBtn").onclick = planDeploy;
+  $("planScenariosBtn").onclick = generateScenarios;
   $("planShareBtn").onclick = () => openShareDialog("plan", state.planSessionId);
   $("planGitBtn").onclick = openGitDialog;
   $("gitSubmitBtn").onclick = submitGit;

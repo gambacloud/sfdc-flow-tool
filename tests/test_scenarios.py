@@ -29,7 +29,7 @@ LOG = """\
 12:00:00.0 (1)|EXECUTION_STARTED
 12:00:00.9 (9)|CUMULATIVE_LIMIT_USAGE
 12:00:00.9 (9)|LIMIT_USAGE_FOR_NS|(default)|
-  Number of SOQL queries: 3 out of 100
+  Number of SOQL queries: 100 out of 100 ******* CLOSE TO LIMIT
   Number of query rows: 0 out of 50000
   Number of DML statements: 140 out of 150
   Maximum CPU time: 8000 out of 10000
@@ -58,7 +58,7 @@ def soap(*, compiled="true", success="true", problem="", exception="", log=""):
 class TestRunner:
     def test_limits_come_from_the_default_namespace_only(self):
         limits = {lim.name: lim for lim in anon_apex.parse_limits(LOG)}
-        assert limits["Number of SOQL queries"].used == 3
+        assert limits["Number of SOQL queries"].used == 100  # the "CLOSE TO LIMIT" line
         assert "Number of Publish Immediate DML" in limits
         assert sum(1 for lim in anon_apex.parse_limits(LOG) if lim.name == "Number of SOQL queries") == 1
 
@@ -68,14 +68,14 @@ class TestRunner:
         levels = {lim.name: lim.level for lim in run.limits}
         assert levels["Number of DML statements"] == "critical"
         assert levels["Maximum CPU time"] == "warn"
-        assert levels["Number of SOQL queries"] == "ok"
+        assert levels["Number of SOQL queries"] == "critical"
         text = "\n".join(run.warnings)
         assert "140 of 150" in text and "DML per record" in text
-        assert "SOQL queries" not in text
+        assert "SOQL queries: 100 of 100" in text
 
     def test_compile_error_and_exception_are_reported(self):
         bad = anon_apex.parse_response(soap(compiled="false", success="false", problem="Unexpected token"))
-        assert not bad.compiled and "Unexpected token" in bad.problem and "line 4" in bad.problem
+        assert not bad.compiled and "Unexpected token" in bad.problem and "line 2" in bad.problem
         boom = anon_apex.parse_response(soap(success="false", exception="System.AssertException: nope"))
         assert boom.compiled and not boom.success and "AssertException" in boom.problem
 
@@ -203,10 +203,24 @@ class TestEndpoints:
         r = client.post("/api/plan/scenarios/run", json={"session_id": "s1", "index": 1})
         assert r.status_code == 200
         assert seen["body"] == BULK["apex"]
-        assert r.json()["warnings"] and r.json()["limits"][0]["percent"] == 3.0
+        assert r.json()["warnings"] and r.json()["limits"][0]["percent"] == 100.0
 
     def test_report_includes_scenarios(self, client):
         make_session(PAYLOAD)
         generate(client)
         html = client.get("/api/plan/session/s1/report").text
         assert "Test scenarios (Anonymous Apex)" in html and "200 at once" in html
+
+
+class TestScriptEndpoint:
+    def test_returns_script_and_deployed_flag(self, client):
+        make_session(PAYLOAD)
+        generate(client)
+        data = client.get("/api/plan/session/s1/scenarios/1").json()
+        assert data["apex"] == BULK["apex"] and data["deployed"] is True
+
+    def test_needs_scenarios_and_a_valid_index(self, client):
+        make_session(PAYLOAD)
+        assert client.get("/api/plan/session/s1/scenarios/0").status_code == 400
+        generate(client)
+        assert client.get("/api/plan/session/s1/scenarios/9").status_code == 404

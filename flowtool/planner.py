@@ -121,6 +121,10 @@ class Plan(BaseModel):
         default=None,
         description="Leave out - the username of the agent user, set from the plan options.",
     )
+    house_rules: Optional[str] = Field(
+        default=None,
+        description="Leave out - the person's standing conventions, set from the plan options.",
+    )
     how_to_test: Optional[str] = Field(
         default=None,
         description="How a person checks, after deploy, that the whole bundle "
@@ -595,6 +599,21 @@ def _run_one_step(
     return StepResult(step=step, value=value, repairs=raw.repairs, messages=raw.messages)
 
 
+HOUSE_RULES_MAX = 2000
+
+
+def house_rules_text(rules: Optional[str]) -> str:
+    """The person's standing conventions as a paragraph for a step's brief (or the planner's
+    request): naming, test and style rules they want applied everywhere. Their own words, capped."""
+    text = (rules or "").strip()[:HOUSE_RULES_MAX]
+    if not text:
+        return ""
+    return (
+        "\n\nHouse rules - the person's standing conventions. Follow them in everything you write, "
+        "unless the request itself says otherwise:\n" + text
+    )
+
+
 def execute_plan(
     provider: Provider, plan: Plan, max_repairs: int = DEFAULT_MAX_REPAIRS,
     parallel: bool = False,
@@ -639,7 +658,7 @@ def execute_plan(
                 pool.submit(
                     contextvars.copy_context().run,
                     _run_one_step, provider, step, max_repairs,
-                    _dependency_facts(step, by_name),
+                    _dependency_facts(step, by_name) + house_rules_text(plan.house_rules),
                     _agent_targets(step, by_name),
                 ): step
                 for step in layer
@@ -747,5 +766,6 @@ def revise_plan(
     prior = IRGenerationResult(value=plan, messages=messages, repairs=0)
     revised = planner.refine(prior, instruction)
     revised.value.agent_user = plan.agent_user  # an option of the build, not something the model writes
+    revised.value.house_rules = plan.house_rules
     steps = execute_plan(provider, revised.value, max_repairs, parallel=parallel)
     return PlanRevision(plan=revised.value, messages=revised.messages, steps=steps)

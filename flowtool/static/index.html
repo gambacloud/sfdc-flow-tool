@@ -313,6 +313,7 @@
       <details id="options">
         <summary>Options</summary>
         <div class="options">
+          <div class="options-heading">Basic</div>
           <label>Provider
             <select id="provider"></select>
           </label>
@@ -330,6 +331,13 @@
               <option selected>medium</option><option>high</option>
             </select>
           </label>
+          <label>House rules <span class="dim">(optional - your standing conventions, applied to every step: naming, tests, style)</span>
+            <textarea id="houseRules" rows="3" maxlength="2000"
+              placeholder="e.g. prefix every new class with ACME_, always write a test class, add a description to every field"></textarea>
+          </label>
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <div class="options">
           <label>API version
             <input id="apiVersion" value="64.0" size="6">
           </label>
@@ -358,6 +366,8 @@
               <a class="link-btn" href="/install/sfdc-flow-forge-installer.sh" download>macOS (.sh)</a>
             </div>
           </label>
+            </div>
+          </details>
         </div>
       </details>
     </div>
@@ -478,6 +488,14 @@
         <summary>How to test</summary>
         <pre id="planHowToTest"></pre>
       </details>
+      <details class="plan-how-to-test plan-scenarios" id="planScenariosBox">
+        <summary>Test scenarios (Anonymous Apex)</summary>
+        <div class="plan-scenarios-bar">
+          <button id="planScenariosBtn" type="button">Suggest scenarios</button>
+          <span class="dim" id="planScenariosHint"></span>
+        </div>
+        <div id="planScenarios"></div>
+      </details>
 
       <div class="plan-overview" id="planOverview"></div>
       <div class="plan-steps-toolbar">
@@ -497,6 +515,10 @@
             <legend>Review &amp; deploy</legend>
             <button id="planApproveBtn" class="primary">Approve all</button>
             <button id="planValidateBtn" disabled>Validate</button>
+            <label class="check compare-toggle" title="Also look each step up in the org: new, or already there and what would change. Read-only.">
+              <input type="checkbox" id="planCompareToggle" checked> Compare with the org
+            </label>
+            <button id="planCompareBtn" type="button" class="link-btn" title="Look each step up in the org without validating">Compare only</button>
             <button id="planDeployBtn" class="danger" disabled>Deploy</button>
           </fieldset>
           <fieldset class="action-group">

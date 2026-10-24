@@ -94,6 +94,10 @@ class ScenarioRun:
         }
 
 
+# Lines wrap_script puts above the body, so a compile error's line can be mapped back.
+WRAP_LINES = 2
+
+
 def wrap_script(body: str) -> str:
     """The scenario inside a savepoint that is always rolled back. The
     savepoint and the rollback each count as a DML statement."""
@@ -107,7 +111,8 @@ def wrap_script(body: str) -> str:
     )
 
 
-_LIMIT_LINE = re.compile(r"^\s*(.+?):\s*(\d+)\s+out of\s+(\d+)\s*$")
+# Salesforce appends "******* CLOSE TO LIMIT" to the hot ones - the lines that matter most.
+_LIMIT_LINE = re.compile(r"^\s*(.+?):\s*(\d+)\s+out of\s+(\d+)")
 
 
 def parse_limits(log: str) -> List[LimitUsage]:
@@ -148,7 +153,8 @@ def parse_response(payload: str) -> ScenarioRun:
     success = (_text(root, "success") or "").lower() == "true"
     problem = None
     if not compiled:
-        where = f" (line {_text(root, 'line')})" if _text(root, "line") else ""
+        raw = _text(root, "line")
+        where = f" (line {max(int(raw) - WRAP_LINES, 1)})" if raw and raw.isdigit() else ""
         problem = (_text(root, "compileProblem") or "Did not compile") + where
     elif not success:
         problem = _text(root, "exceptionMessage") or "The script threw an exception"

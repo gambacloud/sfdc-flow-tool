@@ -868,3 +868,30 @@ class TestPlanPermissionSet:
         result = poll(client, "/api/plan/deploy/status", session_id=sid).json()
 
         assert result["setup_urls"]["Permission Set"] == "https://x/setup/permission_set/Invoice_Access"
+
+
+class TestHouseRules:
+    """The person's standing conventions reach the planner and every step's brief."""
+
+    def test_rules_are_given_to_the_planner_and_every_step_and_kept_on_the_plan(self, client, typed_scripted):
+        provider = typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(client, house_rules="prefix every class with ACME_")
+        planner_text = [c for c in provider.calls if c[0] == "plan"][0][1][0].content
+        assert "House rules" in planner_text and "prefix every class with ACME_" in planner_text
+        assert server.PLANS[plan["plan_id"]].plan.house_rules == "prefix every class with ACME_"
+
+        execute(client, plan["plan_id"])
+        for kind in ("object", "field", "apex"):
+            brief = [c for c in provider.calls if c[0] == kind][0][1][0].content
+            assert "prefix every class with ACME_" in brief
+
+    def test_no_rules_leaves_the_briefs_untouched(self, client, typed_scripted):
+        provider = typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(client)
+        execute(client, plan["plan_id"])
+        assert all("House rules" not in c[1][0].content for c in provider.calls)
+
+    def test_rules_are_capped(self, client, typed_scripted):
+        typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
+        plan = make_plan(client, house_rules="x" * 5000)
+        assert len(server.PLANS[plan["plan_id"]].plan.house_rules) == 2000
