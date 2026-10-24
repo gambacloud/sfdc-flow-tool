@@ -934,40 +934,74 @@ You produce IR only, never metadata XML - a compiler generates the deployable \
 files from your IR. Unlike the Flow, Object and Field IRs, `body` is not \
 structured - it is the class source itself, written out in full.
 
+Rules for every class:
 - `api_name` is the class name, and the class you declare in `body` (`public \
-class Foo { ... }`) must use exactly that name - the deployed file is named \
-after api_name, so a mismatch fails to deploy.
+with sharing class Foo { ... }`) must use exactly that name - the deployed \
+file is named after api_name, so a mismatch fails to deploy.
+- State the sharing mode on the top-level class: `with sharing` by default, \
+`inherited sharing` for a plain utility, and `without sharing` only when the \
+request needs to bypass the running user's access. A test class is exempt.
 - Write complete, compilable Apex: balanced braces, a real class declaration, \
 no placeholders or "TODO" left where logic belongs.
-- A class that implements `Database.Batchable` must be the top-level class itself \
-(the org rejects it as an inner class). To run a batch nightly, make that one class \
-implement both `Database.Batchable<SObject>` and `Schedulable`.
-- Prefer the smallest class that does what was asked. Do not add error \
-handling, logging, or methods that were not requested.
+- Be bulk safe: assume 200 records arrive at once. Never put a SOQL query or \
+a DML statement inside a loop. Collect the Ids first, query once with \
+`WHERE Id IN :ids`, keep the rows in a `Map`, and run one DML per object \
+after the loop. Guard against an empty list and a null value.
+- Do not use an Apex reserved word as a variable name (`bulk`, `end`, `group`, `sort`, \
+`search`, ...): `List<Account> bulk = ...` does not compile. Name it for what it \
+holds, such as `bulkAccounts`.
+- Never write a record Id (`'001...'`, `'005...'`) in the code - Ids differ \
+from org to org. Look a record up by its Name, DeveloperName or a field value.
 - Do not invent a reference to a field, object or another class the request \
 did not name or clearly imply - a guessed API name compiles today and breaks \
-the moment it is wrong.
-- A class a Flow calls is `public with sharing`, with exactly one \
+the moment it is wrong. A custom field you use must be one this request or \
+the details below say exists.
+- Prefer the smallest class that does what was asked. Do not add logging or \
+methods that were not requested (the safety rules above are not extras).
+- No compiler runs against this output before it is checked here - only \
+structural checks (brackets, class name, the rules above). Write it as if it \
+must be correct the first time.
+
+When the class is called from a Flow:
+- It is `public with sharing`, with exactly one \
 `@InvocableMethod(label='...' description='...')` that takes a `List` of an \
 inner `Request` class and returns a `List` of an inner `Result` class (both \
 use `@InvocableVariable` members, with `required=true` where a value must be \
-passed) - one result per request, in order, and bulk safe: no SOQL or DML \
-inside a loop.
-- The text of a Messaging conversation lives in `ConversationEntry` records. \
-Find them by `ConversationId`, which is the MessagingSession's own \
-`ConversationId` field (not the session's `Id`). Useful fields: `Message` \
-(text), `ActorType` (for example EndUser, Agent, Bot, System), `ActorName`, \
-`EntryType`, and `Seq` to order by. Skip entries with an empty `Message`. A \
-transcript is conventionally one line per entry, "<ActorType>: <Message>".
-- When Apex receives a model's JSON answer (a Prompt Template whose response \
-is JSON, handed over as one text value), parse it with `JSON.deserialize` into \
-a small inner class whose property names are exactly the JSON keys, never \
-`JSON.deserializeUntyped`. Treat the answer as untrusted: a missing or \
-malformed value must not throw - fall back to leaving the field empty - and \
-a number must be clamped to what its field can hold before it is saved.
-- No compiler runs against this output before it is checked here - only a \
-brace-balance and class-name sanity check. Write it as if it must be correct \
-the first time.
+passed) - one result per request, in order.
+
+When the class runs on a schedule or over many records:
+- A class that implements `Database.Batchable` must be the top-level class \
+itself (the org rejects it as an inner class). To run a batch nightly, make \
+that one class implement both `Database.Batchable<SObject>` and `Schedulable`, \
+give it a `public static Id scheduleNightly()` that calls `System.schedule`, \
+and have `execute(SchedulableContext)` call `Database.executeBatch(this, 200)`.
+
+When the class reads a Messaging conversation:
+- The text lives in `ConversationEntry` records. Find them by \
+`ConversationId`, which is the MessagingSession's own `ConversationId` field \
+(not the session's `Id`). Useful fields: `Message` (text), `ActorType` (for \
+example EndUser, Agent, Bot, System), `ActorName`, `EntryType`, and `Seq` to \
+order by. Skip entries with an empty `Message`. A transcript is \
+conventionally one line per entry, "<ActorType>: <Message>".
+
+When the class receives a model's JSON answer (a Prompt Template whose \
+response is JSON, handed over as one text value):
+- Parse it with `JSON.deserialize` into a small inner class whose property \
+names are exactly the JSON keys, never `JSON.deserializeUntyped`. Treat the \
+answer as untrusted: a missing or malformed value must not throw - fall back \
+to leaving the field empty - and a number must be clamped to what its field \
+can hold before it is saved.
+
+When the class is a test class (another class's tests are always their own \
+step, never extra methods in the class they test):
+- Mark it `@isTest private class <Name>`; never `SeeAllData=true`. Create the \
+records it needs in the test itself or in a `@TestSetup` method.
+- Cover the normal path, a bulk case of 200 records, and one case that should \
+do nothing or fail. Every test method ends with \
+`System.assertEquals(expected, actual, 'what this checks')` (or another \
+`System.assert*`) - a test that cannot fail proves nothing.
+- Wrap the call under test in `Test.startTest()` / `Test.stopTest()`; a batch \
+or scheduled job only finishes at `Test.stopTest()`.
 
 `description` is Salesforce metadata - it deploys to the org and is what an admin \
 sees in Setup. Only put a plain, accurate description of the class there.

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from flowtool.ir_apex import ApexClass, heuristic_errors
 
-VALID_BODY = "public class Invoice_Helper {\n    public static void run() {}\n}"
+VALID_BODY = "public with sharing class Invoice_Helper {\n    public static void run() {}\n}"
 
 
 class TestApexClassModel:
@@ -69,7 +69,7 @@ class TestHeuristicErrors:
     def test_inner_class_does_not_confuse_the_declaration_match(self):
         # The outer class is the one that must match api_name; an inner class
         # sharing the file is legitimate Apex and must not be flagged.
-        body = "public class Outer {\n    class Inner {}\n}"
+        body = "public with sharing class Outer {\n    class Inner {}\n}"
         problems = heuristic_errors("Outer", body)
         assert problems == []
 

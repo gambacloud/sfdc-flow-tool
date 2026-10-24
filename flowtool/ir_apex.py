@@ -28,6 +28,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
+from .apex_checks import quality_errors
 from .ir import _check_api_name
 
 _CLASS_DECL_RE = re.compile(r"\bclass\s+(\w+)")
@@ -142,6 +143,8 @@ def heuristic_errors(api_name: str, body: str) -> List[str]:
             "the one class named by api_name"
         )
 
+    problems += quality_errors(body)
+
     match = _CLASS_DECL_RE.search(body)
     if not match:
         problems.append("no 'class <Name>' declaration found in the body")
@@ -159,6 +162,7 @@ def heuristic_trigger_errors(api_name: str, body: str) -> List[str]:
     """Trigger counterpart to heuristic_errors: same bracket-balance check,
     a 'trigger <Name> on <Object>' declaration instead of a class one."""
     problems = _bracket_balance_errors(body)
+    problems += quality_errors(body, check_sharing=False)
 
     match = _TRIGGER_DECL_RE.search(body)
     if not match:

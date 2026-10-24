@@ -11,12 +11,12 @@ from tests.test_llm import ScriptedProvider
 
 VALID = {
     "api_name": "Invoice_Helper",
-    "body": "public class Invoice_Helper {\n    public static void run() {}\n}",
+    "body": "public with sharing class Invoice_Helper {\n    public static void run() {}\n}",
 }
 
 UNBALANCED = {
     "api_name": "Invoice_Helper",
-    "body": "public class Invoice_Helper {\n    public static void run() {}\n",
+    "body": "public with sharing class Invoice_Helper {\n    public static void run() {}\n",
 }
 
 NAME_MISMATCH = {
