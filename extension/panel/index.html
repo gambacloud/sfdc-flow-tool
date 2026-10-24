@@ -272,6 +272,8 @@
       <button id="planBtn" class="primary">Plan and build</button>
       <button id="planExamplesBtn" type="button" class="link-btn">Examples</button>
       <button id="planResetBtn" type="button" class="link-btn">Reset</button>
+      <button id="restoreBtn" type="button" class="link-btn" title="Open a .sfdcbuildertool.json file saved earlier with Save session">Restore session</button>
+      <input id="restoreFile" type="file" accept=".json,application/json" hidden>
     </div>
 
     <div class="pad" id="portalPane" hidden>
@@ -318,8 +320,11 @@
     <div class="pad" id="sharedOptions">
       <details id="options">
         <summary>Options</summary>
-        <div class="options">
-          <div class="options-heading">Basic</div>
+        <div class="opt-tabs" role="tablist">
+          <button type="button" class="opt-tab active" id="optTabBasic" role="tab" aria-selected="true">Basic</button>
+          <button type="button" class="opt-tab" id="optTabAdvanced" role="tab" aria-selected="false">Advanced</button>
+        </div>
+        <div class="options" id="optBasic" role="tabpanel">
           <label>Provider
             <select id="provider"></select>
           </label>
@@ -337,13 +342,15 @@
               <option selected>medium</option><option>high</option>
             </select>
           </label>
-          <label>House rules <span class="dim">(optional - your standing conventions, applied to every step: naming, tests, style)</span>
+        </div>
+        <div class="options" id="optAdvanced" role="tabpanel" hidden>
+          <label>House rules <span class="dim">(optional - your style preferences for every step: naming, tests, comments. They never change what gets built or how it is checked, and you see them on the plan)</span>
             <textarea id="houseRules" rows="3" maxlength="2000"
               placeholder="e.g. prefix every new class with ACME_, always write a test class, add a description to every field"></textarea>
           </label>
-          <details class="advanced">
-            <summary>Advanced</summary>
-            <div class="options">
+          <label>Session name <span class="dim">(optional - used in the file name when you save a session, after the reference)</span>
+            <input id="sessionName" maxlength="80" autocomplete="off" placeholder="e.g. lead scoring">
+          </label>
           <label>API version
             <input id="apiVersion" value="64.0" size="6">
           </label>
@@ -364,8 +371,6 @@
             Run independent steps in parallel
             <span class="dim">(Build multiple things only - faster, but can trip rate limits more and cost more retries; off by default)</span>
           </label>
-            </div>
-          </details>
         </div>
       </details>
     </div>
@@ -461,6 +466,7 @@
             <legend>Export &amp; share</legend>
             <a id="flowReportLink" href="#" download class="btn">Download report</a>
             <a id="flowPackageLink" href="#" download class="btn" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
+            <button id="saveBtn" type="button" title="Save this session as a .sfdcbuildertool.json file on your computer, to restore later">Save session</button>
             <button id="shareBtn" type="button" hidden>Share this</button>
           </fieldset>
         </div>
@@ -482,6 +488,10 @@
       </div>
 
       <p class="desc" id="planReasoning" hidden></p>
+      <details id="planHouseRulesBox" class="house-rules-applied" hidden>
+        <summary>House rules applied to this plan</summary>
+        <pre id="planHouseRules"></pre>
+      </details>
       <details class="plan-how-to-test" id="planHowToTestBox" hidden>
         <summary>How to test</summary>
         <pre id="planHowToTest"></pre>
@@ -524,6 +534,7 @@
             <a id="planReportLink" href="#" download class="btn">Download report</a>
             <a id="planPackageLink" href="#" download class="btn" title="Metadata API zip (package.xml + components) - deploy it yourself with sf CLI or Workbench">Download package (.zip)</a>
             <button id="planGitBtn" type="button" title="Commit the package to a new branch and open a pull request - deploys nothing to Salesforce">Push to Git (PR)</button>
+            <button id="planSaveBtn" type="button" title="Save this session as a .sfdcbuildertool.json file on your computer, to restore later">Save session</button>
             <button id="planShareBtn" type="button" hidden>Share this</button>
           </fieldset>
         </div>

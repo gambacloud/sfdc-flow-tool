@@ -24,7 +24,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from flowtool import activity
 from flowtool.config import load_env
@@ -75,7 +75,7 @@ from flowtool.reference import clean_reference, tag_description, tag_value
 from flowtool.report import render_standalone_report
 from flowtool.scenarios import ScenarioGenerator, TestScenarios
 from flowtool import anon_apex
-from flowtool import github, hosted, privacy, ratelimit, share
+from flowtool import github, hosted, privacy, ratelimit, savefile, share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
     ComponentProblem,
@@ -3508,7 +3508,9 @@ def _session_snapshot(session: Session) -> Dict[str, Any]:
     }
 
 
-def _session_from_snapshot(data: Dict[str, Any], provider: Provider) -> Session:
+def _session_from_snapshot(
+    data: Dict[str, Any], provider: Provider, note: str = "Resumed from a shared link",
+) -> Session:
     kind = data["kind"]
     ir_cls, generator_cls = _SESSION_KIND_TYPES[kind]
     artifact = ir_cls.model_validate(data["ir"])
@@ -3524,7 +3526,7 @@ def _session_from_snapshot(data: Dict[str, Any], provider: Provider) -> Session:
         kind=kind,
         activate=data["activate"],
         api_version=data["api_version"],
-        history=list(data["history"]) + [{"note": "Resumed from a shared link", "version": "1"}],
+        history=list(data["history"]) + [{"note": note, "version": "1"}],
         imported=data["imported"],
         reference=data.get("reference"),
     )
@@ -3633,6 +3635,75 @@ async def share_unlock(token: str, body: ShareUnlockRequest) -> Dict[str, Any]:
     session_id = uuid.uuid4().hex
     SESSIONS[session_id] = session
     return {"done": True, "share_kind": "session", **view(session_id, session)}
+
+
+# --------------------------------------------------------------------------
+# Save / restore a session as a local file (.sfdcbuildertool.json). Same
+# snapshot as Share, but the file stays with the person - nothing is stored
+# server-side and nothing expires. A restored session always lands unapproved,
+# for the same reason a shared one does.
+# --------------------------------------------------------------------------
+
+
+class SaveRequest(BaseModel):
+    kind: Literal["session", "plan"]
+    session_id: str
+    name: Optional[str] = Field(default=None, max_length=80)
+
+
+class RestoreRequest(BaseModel):
+    file: Dict[str, Any]
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    effort: Literal["medium", "high"] = "medium"
+    api_key: Optional[str] = None
+
+
+@app.post("/api/save")
+def save_session(body: SaveRequest) -> Dict[str, Any]:
+    if body.kind == "plan":
+        plan_session = get_plan_session(body.session_id)
+        snapshot = _plan_snapshot(plan_session)
+        title = plan_session.steps[0].step.name if plan_session.steps else None
+        version = None
+    else:
+        session = get_session(body.session_id)
+        snapshot = _session_snapshot(session)
+        title = session.artifact.api_name
+        version = session.version
+    return {
+        "filename": savefile.filename(
+            reference=snapshot.get("reference"), name=body.name, kind=body.kind,
+            title=title, version=version,
+        ),
+        "file": savefile.wrap(snapshot, name=body.name, title=title),
+    }
+
+
+@app.post("/api/restore")
+def restore_session(body: RestoreRequest) -> Dict[str, Any]:
+    try:
+        snapshot = savefile.unwrap(body.file)
+        # The file is hand-editable and the reference ends up in deployed XML.
+        snapshot["reference"] = clean_reference(snapshot.get("reference"))
+        provider = build_provider(body.provider, body.model, body.effort, body.api_key)
+        note = "Restored from a saved session file"
+        if snapshot["type"] == "plan":
+            plan_session = _plan_from_snapshot(snapshot, provider)
+            session_id = uuid.uuid4().hex
+            PLAN_SESSIONS[session_id] = plan_session
+            return {"done": True, "restored_kind": "plan", **plan_view(session_id, plan_session)}
+        session = _session_from_snapshot(snapshot, provider, note=note)
+        session_id = uuid.uuid4().hex
+        SESSIONS[session_id] = session
+        return {"done": True, "restored_kind": "session", **view(session_id, session)}
+    except savefile.SaveFileError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except LLMError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        # pydantic's ValidationError is a ValueError.
+        raise HTTPException(400, "The session file is damaged or incomplete.") from exc
 
 
 INSTALL_DIR = STATIC / "install"

@@ -1401,6 +1401,11 @@ async function planAgentPublish(agentName, button, status) {
 
 function renderPlanSteps(data) {
   state.planAgentUser = data.agent_user || "";
+  const rulesBox = $("planHouseRulesBox");
+  if (rulesBox) {
+    rulesBox.hidden = !data.house_rules;
+    $("planHouseRules").textContent = data.house_rules || "";
+  }
   state.planDeployed = !!data.deployed;
   state.planAgentPublish = data.agent_publish || {};
   const container = $("planSteps");
@@ -3356,6 +3361,72 @@ async function copyShareField(inputId, buttonId) {
   setTimeout(() => busy(button, false), 1200);
 }
 
+// Save / restore a session as a local file (.sfdcbuildertool.json). The server
+// builds the file and its name (reference, name or title, version, date); this
+// only hands it to the browser as a download, and sends a picked file back.
+// Nothing is kept server-side and nothing expires. See server.py's
+// /api/save and /api/restore.
+async function saveSession(kind, sessionId, button) {
+  if (!sessionId) return;
+  busy(button, true, "Saving...");
+  try {
+    const data = await api("api/save", {
+      kind,
+      session_id: sessionId,
+      name: $("sessionName").value.trim() || null,
+    });
+    const blob = new Blob([JSON.stringify(data.file, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = data.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function restoreSessionFile(file) {
+  const button = $("restoreBtn");
+  busy(button, true, "Restoring...");
+  try {
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch (_e) {
+      throw new Error("That file is not a SFDCBUILDERTOOL session file.");
+    }
+    const data = await api("api/restore", {
+      file: parsed,
+      provider: $("provider").value || null,
+      effort: $("effort").value,
+      api_key: $("apiKey").value.trim() || null,
+      model: $("model").value || null,
+    });
+    if (data.restored_kind === "plan") {
+      state.planValidatedVersion = null;
+      renderPlan(data);
+      sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "plan");
+      activateMode("plan");
+    } else {
+      state.validatedVersion = null;
+      renderFlow(data);
+      sessionStorage.setItem(LAST_MODE_STORAGE_KEY, "open");
+      activateMode("open");
+    }
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    busy(button, false);
+    $("restoreFile").value = "";
+  }
+}
+
 // Landing on ?share=<token> - gate everything behind a password prompt
 // before rendering anything else. unlockShare() below turns a correct
 // password into a brand-new live session/plan, the same shape a fresh
@@ -4225,6 +4296,13 @@ async function boot() {
   $("validateBtn").onclick = validate;
   $("deployBtn").onclick = deploy;
   $("shareBtn").onclick = () => openShareDialog("session", state.sessionId);
+  $("saveBtn").onclick = () => saveSession("session", state.sessionId, $("saveBtn"));
+  $("planSaveBtn").onclick = () => saveSession("plan", state.planSessionId, $("planSaveBtn"));
+  $("restoreBtn").onclick = () => $("restoreFile").click();
+  $("restoreFile").onchange = () => {
+    const file = $("restoreFile").files[0];
+    if (file) restoreSessionFile(file);
+  };
   $("shareCopyLinkBtn").onclick = () => copyShareField("shareLink", "shareCopyLinkBtn");
   $("shareCopyPasswordBtn").onclick = () => copyShareField("sharePassword", "shareCopyPasswordBtn");
   $("shareCloseBtn").onclick = () => $("shareDialog").close();
@@ -4255,10 +4333,24 @@ async function boot() {
   $("planApproveBtn").onclick = planApprove;
   $("planRefInput").onchange = () => saveReference("plan", $("planRefInput"));
   $("planValidateBtn").onclick = planValidate;
+  const showOptionsTab = (advanced) => {
+    $("optBasic").hidden = advanced;
+    $("optAdvanced").hidden = !advanced;
+    $("optTabBasic").classList.toggle("active", !advanced);
+    $("optTabAdvanced").classList.toggle("active", advanced);
+    $("optTabBasic").setAttribute("aria-selected", String(!advanced));
+    $("optTabAdvanced").setAttribute("aria-selected", String(advanced));
+  };
+  $("optTabBasic").onclick = () => showOptionsTab(false);
+  $("optTabAdvanced").onclick = () => showOptionsTab(true);
   $("planCompareBtn").onclick = () => planCompare($("planCompareBtn"));
   try {
     $("houseRules").value = localStorage.getItem("flowtool.houseRules") || "";
   } catch (_e) { /* storage unavailable: start empty */ }
+  try { $("sessionName").value = localStorage.getItem("flowtool.sessionName") || ""; } catch (_e) { /* ignore */ }
+  $("sessionName").addEventListener("input", () => {
+    try { localStorage.setItem("flowtool.sessionName", $("sessionName").value); } catch (_e) { /* ignore */ }
+  });
   $("houseRules").addEventListener("input", () => {
     try { localStorage.setItem("flowtool.houseRules", $("houseRules").value); } catch (_e) { /* ignore */ }
   });
