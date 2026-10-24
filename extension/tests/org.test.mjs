@@ -305,3 +305,70 @@ test("router: needs_existing_permission_set fetches the set locally and re-reque
   assert.deepEqual(r.sent[1], ["api/plan/session/1/bundle", { existing_permission_set_xml: "<PermissionSet>old</PermissionSet>" }]);
   assert.ok(Array.isArray(r.sent[2][1].component_failures));
 });
+
+// ---- Anonymous Apex scenarios ---------------------------------------------
+import { parseLimits, parseResponse as parseApex, wrapScript, envelope as apexEnvelope } from "../panel/org/apex.js";
+
+const APEX_LOG = [
+  "12:00:00.9 (9)|CUMULATIVE_LIMIT_USAGE",
+  "12:00:00.9 (9)|LIMIT_USAGE_FOR_NS|(default)|",
+  "  Number of SOQL queries: 100 out of 100 ******* CLOSE TO LIMIT",
+  "  Number of DML statements: 140 out of 150",
+  "  Maximum CPU time: 8000 out of 10000",
+  "12:00:00.9 (9)|LIMIT_USAGE_FOR_NS|Other|",
+  "  Number of SOQL queries: 50 out of 100",
+  "12:00:00.9 (9)|CUMULATIVE_LIMIT_USAGE_END",
+].join("\n");
+const apexResponse = ({ compiled = "true", success = "true", problem = "", exception = "", log = "" } = {}) =>
+  `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns="http://soap.sforce.com/2006/08/apex"><soapenv:Header><DebuggingInfo><debugLog>${log}</debugLog></DebuggingInfo></soapenv:Header><soapenv:Body><executeAnonymousResponse><result><compileProblem>${problem}</compileProblem><compiled>${compiled}</compiled><exceptionMessage>${exception}</exceptionMessage><line>4</line><success>${success}</success></result></executeAnonymousResponse></soapenv:Body></soapenv:Envelope>`;
+
+test("limits come from the default namespace and flag hot ones", () => {
+  const limits = parseLimits(APEX_LOG);
+  assert.equal(limits.filter((l) => l.name === "Number of SOQL queries").length, 1);
+  const run = parseApex(apexResponse({ log: APEX_LOG }));
+  assert.equal(run.success, true);
+  assert.equal(run.limits.find((l) => l.name === "Number of DML statements").level, "critical");
+  assert.equal(run.limits.find((l) => l.name === "Maximum CPU time").level, "warn");
+  assert.equal(run.limits.find((l) => l.name === "Number of SOQL queries").level, "critical");
+  assert.equal(run.warnings.length, 3);
+  assert.ok(run.warnings.some((w) => /140 of 150/.test(w)));
+});
+
+test("compile problems and exceptions are reported", () => {
+  const bad = parseApex(apexResponse({ compiled: "false", success: "false", problem: "Unexpected token" }));
+  assert.equal(bad.compiled, false);
+  assert.match(bad.problem, /Unexpected token \(line 2\)/);
+  const boom = parseApex(apexResponse({ success: "false", exception: "System.AssertException: nope" }));
+  assert.match(boom.problem, /AssertException/);
+});
+
+test("script is rolled back and escaped in the request", () => {
+  const w = wrapScript("insert a;");
+  assert.ok(w.indexOf("setSavepoint") < w.indexOf("insert a;") && w.indexOf("insert a;") < w.indexOf("rollback"));
+  assert.match(apexEnvelope("tok", "a < b && c"), /a &lt; b &amp;&amp; c/);
+});
+
+test("runAnonymous posts to the Apex SOAP endpoint and parses the log", async () => {
+  const f = fakeFetch(() => apexResponse({ log: APEX_LOG }));
+  const run = await mkOrg(f).runAnonymous("insert a;");
+  assert.match(f.calls[0].url, /\/services\/Soap\/s\//);
+  assert.match(f.calls[0].init.body, /Database\.rollback/);
+  assert.equal(run.success, true);
+});
+
+test("scenarios/run refuses production and an undeployed plan, and never runs there", async () => {
+  const sent = [];
+  const org = (production) => ({
+    isProduction: async () => production,
+    runAnonymous: async () => { sent.push("ran"); return { success: true }; },
+  });
+  const router = (deployed, production) => createRouter({
+    newOrg: async () => org(production),
+    backend: async () => ({ apex: "x", deployed }),
+  });
+  await assert.rejects(router(false, false).orgMethodFor("api/plan/scenarios/run")({ session_id: "1", index: 0 }), /Deploy this plan/);
+  await assert.rejects(router(true, true).orgMethodFor("api/plan/scenarios/run")({ session_id: "1", index: 0 }), /never production/);
+  assert.deepEqual(sent, []);
+  const ok = await router(true, false).orgMethodFor("api/plan/scenarios/run")({ session_id: "1", index: 0 });
+  assert.equal(ok.success, true);
+});

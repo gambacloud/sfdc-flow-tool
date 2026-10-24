@@ -288,6 +288,9 @@ a.btn:hover { border-color: var(--dim); }
 details#options { margin-top: 12px; }
 details#options summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .options { display: grid; gap: 10px; margin-top: 10px; }
+.options-heading { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+details.advanced { margin-top: 4px; }
+details.advanced > summary { cursor: pointer; font-size: 13px; color: var(--dim); }
 .warn-inline { color: var(--warn); font-size: 12px; }
 
 .modes { display: flex; gap: 4px; }
@@ -400,6 +403,17 @@ dialog p { margin: 0 0 12px; }
   color: var(--accent);
 }
 .example-cards .card-title { display: block; color: var(--text); }
+
+.compare-toggle { display: inline-block; margin: 0 6px; font-size: 13px; }
+.compare-chip { margin-left: 6px; font-size: 11px; }
+.compare-chip.new { border-color: var(--accent); color: var(--accent); }
+.compare-chip.exists { border-color: var(--warn, #b45309); color: var(--warn, #b45309); }
+.compare-chip.unknown { color: var(--dim); }
+.compare-block { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 6px; font-size: 13px; }
+.compare-block.new { border-left-color: var(--accent); }
+.compare-block.exists { border-left-color: var(--warn, #b45309); }
+.compare-block ul { margin: 4px 0 0; padding-left: 18px; }
+.compare-diff { max-height: 260px; overflow: auto; font-size: 12px; white-space: pre; }
 .example-cards .card-gets { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; }
 
 .flow-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
@@ -639,6 +653,21 @@ pre.lwc-file-content {
   font-size: 12.5px;
   white-space: pre-wrap;
 }
+
+.plan-scenarios-bar { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.plan-scenario { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.plan-scenario h4 { margin: 0 0 4px; font-size: 13.5px; }
+.plan-scenario .kind { color: var(--dim); font-weight: 400; font-size: 12px; margin-left: 6px; }
+.plan-scenario p { margin: 2px 0 6px; font-size: 13px; }
+.plan-scenario pre { max-height: 220px; overflow: auto; }
+.plan-scenario-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.scenario-run { margin-top: 8px; font-size: 13px; }
+.scenario-run .fail { color: var(--danger); white-space: pre-wrap; }
+.scenario-limits { border-collapse: collapse; margin-top: 6px; font-size: 12.5px; }
+.scenario-limits td { padding: 2px 14px 2px 0; }
+.scenario-limits tr.warn td { color: #b7791f; font-weight: 600; }
+.scenario-limits tr.critical td { color: var(--danger); font-weight: 600; }
+.scenario-warnings { margin: 6px 0 0; padding-left: 18px; }
 
 .error { color: var(--danger); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
 .spin { color: var(--dim); font-size: 13px; margin-top: 10px; }

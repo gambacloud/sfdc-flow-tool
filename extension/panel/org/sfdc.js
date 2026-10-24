@@ -8,6 +8,7 @@
 
 import { API_VERSION } from "../../lib/config.js";
 import { escapeXml, parseXml, find, findAll, childText } from "./xml.js";
+import { envelope as apexEnvelope, parseResponse as parseApexResponse, wrapScript } from "./apex.js";
 import { METADATA_NS, base64ToBytes, buildDeployZip, bytesToBase64, readZipText } from "./zip.js";
 
 const TERMINAL = new Set(["Succeeded", "Failed", "Canceled", "SucceededPartial"]);
@@ -122,6 +123,28 @@ export class Org {
       path = data.done === false ? data.nextRecordsUrl : null;
     }
     return records;
+  }
+
+  // True unless the org says it is a sandbox or a Developer/scratch org.
+  async isProduction() {
+    const rows = await this.query("SELECT IsSandbox, OrganizationType FROM Organization", { what: "the organization" });
+    if (!rows.length) return true;
+    return !rows[0].IsSandbox && !String(rows[0].OrganizationType).includes("Developer");
+  }
+
+  // Anonymous Apex over the Apex SOAP API (it returns the debug log inline).
+  async runAnonymous(body) {
+    const path = `/services/Soap/s/${this.apiVersion}`;
+    const r = await this._send((s) => [path, {
+      method: "POST",
+      headers: { "Content-Type": "text/xml; charset=UTF-8", SOAPAction: '""' },
+      body: apexEnvelope(s.sid, wrapScript(body)),
+    }]);
+    if (!r.ok) {
+      const fault = faultString(r.text);
+      throw new SfError(fault ? `Salesforce rejected the call: ${fault}` : `executeAnonymous failed (${r.status}): ${r.text.slice(0, 600)}`);
+    }
+    return parseApexResponse(r.text);
   }
 
   // ---- Metadata SOAP ------------------------------------------------

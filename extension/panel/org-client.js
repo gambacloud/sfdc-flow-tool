@@ -226,6 +226,23 @@ export function createRouter({ newOrg, backend, newId = () => Math.random().toSt
     [/^api\/plan\/deploy\/start$/, "POST", planned.run(false)],
     [/^api\/plan\/deploy\/status$/, "GET", planned.status("deploy")],
 
+    // Test scenarios: the backend holds the generated script, the run itself
+    // (Anonymous Apex, rolled back) happens here against the active org.
+    [/^api\/plan\/scenarios\/run$/, "POST", async (body) => {
+      const id = body && body.session_id;
+      if (!id) throw Object.assign(new Error("session_id is required."), { status: 400 });
+      const index = Number(body.index);
+      const script = await backend(`api/plan/session/${enc(id)}/scenarios/${index}`);
+      if (!script.deployed) {
+        throw Object.assign(new Error("Deploy this plan version first - scenarios run against the real components."), { status: 409 });
+      }
+      const org = await newOrg();
+      if (await org.isProduction()) {
+        throw Object.assign(new Error("Scenarios only run in a sandbox or scratch org, never production."), { status: 403 });
+      }
+      return org.runAnonymous(script.apex);
+    }],
+
     // Follow-ups: need the SFAP JWT exchange / the portal builder ported.
     [/^api\/plan\/agent\/publish\//, null, async () => { throw new NotAvailableError("Publishing an agent"); }],
     [/^api\/portal\/(preflight|plan|apply|status)$/, null, async () => { throw new NotAvailableError("The portal builder"); }],
