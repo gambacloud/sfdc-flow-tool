@@ -1105,6 +1105,32 @@ class _SchemaTooComplex(LLMError):
     """
 
 
+def _anthropic_keys() -> List[str]:
+    """
+    Every Anthropic API key this build knows about, in order: ANTHROPIC_API_KEY,
+    then ANTHROPIC_API_KEY2, ANTHROPIC_API_KEY3, ... for as long as they are set,
+    no gaps (the same naming GEMINI_API_KEY uses). A key the API rejects is skipped
+    in favour of the next one - see AnthropicProvider._advance_key.
+    """
+    keys = []
+    primary = os.environ.get("ANTHROPIC_API_KEY")
+    if primary:
+        keys.append(primary)
+    n = 2
+    while True:
+        extra = os.environ.get(f"ANTHROPIC_API_KEY{n}")
+        if not extra:
+            break
+        keys.append(extra)
+        n += 1
+    return keys
+
+
+# Server-configured keys the API answered 401 to during this process, so a later request
+# does not spend a round trip on a dead key first. Never holds a key a user typed in.
+_REJECTED_ANTHROPIC_KEYS: set = set()
+
+
 class AnthropicProvider:
     """Uses schema-constrained structured outputs, so the shape is guaranteed."""
 
@@ -1125,8 +1151,21 @@ class AnthropicProvider:
                 "    pip install anthropic"
             ) from exc
 
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self._client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+        # A key the person typed is theirs alone: it is never swapped for a server key
+        # (their usage and billing stay on their own agreement). Only the keys the
+        # server itself holds rotate when one is rejected.
+        self._rotating = False
+        if api_key:
+            self._keys: List[Optional[str]] = [api_key]
+        else:
+            env_keys = _anthropic_keys()
+            self._keys = list(env_keys) if env_keys else [None]
+            self._rotating = len(env_keys) > 1
+        self._key_index = next(
+            (i for i, k in enumerate(self._keys) if k not in _REJECTED_ANTHROPIC_KEYS), 0
+        )
+        self._clients: Dict[int, Any] = {}
+        self._anthropic = anthropic
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
@@ -1134,6 +1173,39 @@ class AnthropicProvider:
         # Schemas the API already refused as too complex, so later calls (and
         # repair rounds) skip straight to the prompt-text fallback.
         self._too_complex: set = set()
+
+    @property
+    def _client(self):
+        forced = self.__dict__.get("_forced_client")  # a test (or caller) pinned one client
+        if forced is not None:
+            return forced
+        client = self._clients.get(self._key_index)
+        if client is None:
+            key = self._keys[self._key_index]
+            client = self._anthropic.Anthropic(api_key=key) if key else self._anthropic.Anthropic()
+            self._clients[self._key_index] = client
+        return client
+
+    @_client.setter
+    def _client(self, value) -> None:
+        self.__dict__["_forced_client"] = value
+
+    def _advance_key(self) -> bool:
+        """The current server key was rejected: move to the next one the API has not
+        rejected. False when there is none left (or this provider holds a typed-in key)."""
+        if not getattr(self, "_rotating", False) or "_forced_client" in self.__dict__:
+            return False
+        _REJECTED_ANTHROPIC_KEYS.add(self._keys[self._key_index])
+        for offset in range(1, len(self._keys)):
+            candidate = (self._key_index + offset) % len(self._keys)
+            if self._keys[candidate] not in _REJECTED_ANTHROPIC_KEYS:
+                log.warning(
+                    "Anthropic rejected key %d of %d, switching to key %d",
+                    self._key_index + 1, len(self._keys), candidate + 1,
+                )
+                self._key_index = candidate
+                return True
+        return False
 
     def _record(self, response) -> None:
         usage = getattr(response, "usage", None)
@@ -1157,12 +1229,17 @@ class AnthropicProvider:
     )
 
     def list_models(self) -> List[str]:
-        try:
-            return [m.id for m in self._client.models.list(limit=100)]
-        except TypeError as exc:
-            if "authentication method" not in str(exc):
-                raise
-            raise LLMError(self._NO_KEY) from exc
+        while True:
+            try:
+                return [m.id for m in self._client.models.list(limit=100)]
+            except TypeError as exc:
+                if "authentication method" not in str(exc):
+                    raise
+                raise LLMError(self._NO_KEY) from exc
+            except self._anthropic.AuthenticationError as exc:
+                if self._advance_key():
+                    continue
+                raise LLMError("Anthropic rejected the API key.") from exc
 
     def _create(self, **kwargs):
         """
@@ -1182,10 +1259,25 @@ class AnthropicProvider:
                 kwargs["output_config"] = config
             else:
                 kwargs.pop("output_config", None)
+        while True:
+            try:
+                return self._client.messages.create(
+                    model=self.model, max_tokens=self.max_tokens, **kwargs
+                )
+            except anthropic.AuthenticationError as exc:
+                # A rejected server key falls through to the next ANTHROPIC_API_KEY<n>.
+                if self._advance_key():
+                    continue
+                raise LLMError("Anthropic rejected the API key.") from exc
+            except Exception as exc:
+                self._translate(exc)
+
+    def _translate(self, exc: Exception) -> None:
+        """Always raises: the errors `_create` has always turned into something actionable."""
+        import anthropic
+
         try:
-            return self._client.messages.create(
-                model=self.model, max_tokens=self.max_tokens, **kwargs
-            )
+            raise exc
         except TypeError as exc:
             # The SDK resolves credentials lazily, so a missing key surfaces
             # here as a TypeError rather than at construction.

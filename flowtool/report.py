@@ -199,8 +199,25 @@ def _plan_summary_html(plan: Optional[Plan]) -> str:
     return "".join(parts)
 
 
+def _scenarios_html(scenarios: Any) -> str:
+    """Generated Anonymous Apex scenarios - each one runnable as-is in a sandbox."""
+    if scenarios is None:
+        return ""
+    parts = ["<section class='plan-summary'><h2>Test scenarios (Anonymous Apex)</h2>"]
+    for s in scenarios.scenarios:
+        parts.append(
+            f"<h3>{_esc(s.title)} <span class='meta'>[{_esc(s.kind)}]</span></h3>"
+            f"<p>{_esc(s.expect)}</p><pre>{_esc(s.apex)}</pre>"
+        )
+    if scenarios.manual_notes:
+        parts.append(f"<h3>By hand</h3><pre>{_esc(scenarios.manual_notes)}</pre>")
+    parts.append("</section>")
+    return "".join(parts)
+
+
 def render_standalone_report(
     steps: List[StepResult], title: str, meta: str = "", plan: Optional[Plan] = None,
+    scenarios: Any = None,
 ) -> str:
     """
     A complete, self-contained HTML document - what the web UI's "Download
@@ -217,7 +234,7 @@ def render_standalone_report(
     """
     body = render_html_fragment(steps)
     meta_html = f'<p class="meta">{_esc(meta)}</p>' if meta else ""
-    summary_html = _plan_summary_html(plan)
+    summary_html = _plan_summary_html(plan) + _scenarios_html(scenarios)
     lwc_preview_script = ""
     if any(isinstance(r.value, LightningComponent) for r in steps):
         lwc_preview_js = _LWC_PREVIEW_JS.read_text(encoding="utf-8")

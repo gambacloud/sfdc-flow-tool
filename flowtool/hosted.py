@@ -35,7 +35,7 @@ ORG_PATHS = (
     "/api/org-summary",
     "/api/import/start", "/api/import/status", "/api/import/object-fields",
     "/api/validate", "/api/deploy",
-    "/api/plan/validate", "/api/plan/deploy", "/api/plan/agent/publish",
+    "/api/plan/validate", "/api/plan/deploy", "/api/plan/agent/publish", "/api/plan/scenarios/run",
     "/api/portal/preflight", "/api/portal/plan", "/api/portal/apply", "/api/portal/status",
 )
 

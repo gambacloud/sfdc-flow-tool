@@ -72,6 +72,8 @@ from flowtool.prompt_import import (
 )
 from flowtool.reference import clean_reference, tag_description, tag_value
 from flowtool.report import render_standalone_report
+from flowtool.scenarios import ScenarioGenerator, TestScenarios
+from flowtool import anon_apex
 from flowtool import github, hosted, privacy, ratelimit, share
 from flowtool.sfdc import (
     ORG_SUMMARY_TYPE_GROUPS,
@@ -186,7 +188,7 @@ async def activity_feed(request: Request, after: int = 0) -> Dict[str, Any]:
 PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider, "ollama": OllamaProvider}
 
 PROVIDER_KEYS = {
-    "anthropic": ("ANTHROPIC_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY2"),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "ollama": ("OLLAMA_API_KEY",),
 }
@@ -2138,6 +2140,11 @@ class PlanSession:
     publishing_agent: Optional[str] = None
     # Agent api name -> PublishResult.as_dict() of its last publish from here.
     agent_publish: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Generated test scenarios for the plan version in `scenarios_version`;
+    # stale (and hidden) once the plan is revised.
+    scenarios: Optional[TestScenarios] = None
+    scenarios_version: int = 0
+    pending_scenarios: Optional["asyncio.Task"] = None
 
     @property
     def approved(self) -> bool:
@@ -2305,6 +2312,7 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
         "deployed": session.deployed,
         "agent_publish": session.agent_publish,
         "permission_set": _permission_set_view(session),
+        "scenarios": _scenarios_view(session),
         "usage": session.provider.usage.as_dict(),
     }
 
@@ -2775,6 +2783,75 @@ async def plan_deploy_status(session_id: str) -> Dict[str, Any]:
         "setup_urls": urls,
         "plan": plan_view(session_id, session),
     }
+
+
+def _scenarios_view(session: PlanSession) -> Optional[Dict[str, Any]]:
+    if session.scenarios is None or session.scenarios_version != session.version:
+        return None
+    return session.scenarios.model_dump(exclude_none=True)
+
+
+class SessionRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/api/plan/scenarios/start")
+async def plan_scenarios_start(body: SessionRequest) -> Dict[str, Any]:
+    """One extra model call over the built components; no org needed."""
+    session = get_plan_session(body.session_id)
+    if session.pending_scenarios is not None:
+        raise HTTPException(409, "Test scenarios are already being generated for this plan.")
+    generator = ScenarioGenerator(session.provider)
+    request = session.reference or (session.planner_messages[0].content if session.planner_messages else None)
+    session.pending_scenarios = asyncio.create_task(
+        asyncio.to_thread(generator.generate, session.plan, session.steps, request)
+    )
+    return {"started": True}
+
+
+@app.get("/api/plan/scenarios/status")
+async def plan_scenarios_status(session_id: str) -> Dict[str, Any]:
+    session = get_plan_session(session_id)
+    task = session.pending_scenarios
+    if task is None:
+        raise HTTPException(400, "No scenario generation in progress - call /api/plan/scenarios/start first.")
+    if not task.done():
+        return waiting(session.provider)
+    session.pending_scenarios = None
+    result = llm_result(task)
+    session.scenarios = result.value
+    session.scenarios_version = session.version
+    return {"done": True, "scenarios": _scenarios_view(session), "usage": session.provider.usage.as_dict()}
+
+
+class RunScenarioRequest(OrgRequest):
+    index: int
+
+
+@app.post("/api/plan/scenarios/run")
+async def plan_scenarios_run(body: RunScenarioRequest) -> Dict[str, Any]:
+    """
+    Run one scenario as Anonymous Apex, rolled back. Sandbox and Developer/scratch
+    orgs only, and only once this plan version is deployed there - the scenario
+    exercises the real components.
+    """
+    session = get_plan_session(body.session_id)
+    if session.scenarios is None or session.scenarios_version != session.version:
+        raise HTTPException(400, "Generate test scenarios for this plan version first.")
+    if not session.deployed:
+        raise HTTPException(409, "Deploy this plan version first - scenarios run against the real components.")
+    if not 0 <= body.index < len(session.scenarios.scenarios):
+        raise HTTPException(404, "No such scenario.")
+    url, token = credentials(body.org, body.instance_url, body.access_token)
+    try:
+        if await anon_apex.is_production(url, token, session.api_version):
+            raise HTTPException(403, "Scenarios only run in a sandbox or scratch org, never production.")
+        run = await anon_apex.run_anonymous(
+            url, token, session.scenarios.scenarios[body.index].apex, session.api_version,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return run.as_dict()
 
 
 class AgentPublishRequest(OrgRequest):
@@ -3292,6 +3369,9 @@ def plan_report(session_id: str) -> PlainTextResponse:
         meta=f"{len(session.steps)} step(s) - {status}"
         + (f" - Ref: {session.reference}" if session.reference else ""),
         plan=session.plan,
+        scenarios=(
+            session.scenarios if session.scenarios_version == session.version else None
+        ),
     )
     return PlainTextResponse(
         report, media_type="text/html",
