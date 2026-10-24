@@ -877,7 +877,7 @@ class TestHouseRules:
         provider = typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         plan = make_plan(client, house_rules="prefix every class with ACME_")
         planner_text = [c for c in provider.calls if c[0] == "plan"][0][1][0].content
-        assert "House rules" in planner_text and "prefix every class with ACME_" in planner_text
+        assert "<house_rules>" in planner_text and "prefix every class with ACME_" in planner_text
         assert server.PLANS[plan["plan_id"]].plan.house_rules == "prefix every class with ACME_"
 
         execute(client, plan["plan_id"])
@@ -889,7 +889,7 @@ class TestHouseRules:
         provider = typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)
         plan = make_plan(client)
         execute(client, plan["plan_id"])
-        assert all("House rules" not in c[1][0].content for c in provider.calls)
+        assert all("house_rules" not in c[1][0].content for c in provider.calls)
 
     def test_rules_are_capped(self, client, typed_scripted):
         typed_scripted(plan=BUNDLE_PLAN, object=VALID_OBJECT, field=VALID_FIELD, apex=VALID_APEX)

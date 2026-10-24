@@ -1416,6 +1416,11 @@ async function planAgentPublish(agentName, button, status) {
 
 function renderPlanSteps(data) {
   state.planAgentUser = data.agent_user || "";
+  const rulesBox = $("planHouseRulesBox");
+  if (rulesBox) {
+    rulesBox.hidden = !data.house_rules;
+    $("planHouseRules").textContent = data.house_rules || "";
+  }
   state.planDeployed = !!data.deployed;
   state.planAgentPublish = data.agent_publish || {};
   const container = $("planSteps");
@@ -4266,6 +4271,16 @@ async function boot() {
   $("planApproveBtn").onclick = planApprove;
   $("planRefInput").onchange = () => saveReference("plan", $("planRefInput"));
   $("planValidateBtn").onclick = planValidate;
+  const showOptionsTab = (advanced) => {
+    $("optBasic").hidden = advanced;
+    $("optAdvanced").hidden = !advanced;
+    $("optTabBasic").classList.toggle("active", !advanced);
+    $("optTabAdvanced").classList.toggle("active", advanced);
+    $("optTabBasic").setAttribute("aria-selected", String(!advanced));
+    $("optTabAdvanced").setAttribute("aria-selected", String(advanced));
+  };
+  $("optTabBasic").onclick = () => showOptionsTab(false);
+  $("optTabAdvanced").onclick = () => showOptionsTab(true);
   $("planCompareBtn").onclick = () => planCompare($("planCompareBtn"));
   try {
     $("houseRules").value = localStorage.getItem("flowtool.houseRules") || "";

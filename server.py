@@ -60,7 +60,7 @@ from flowtool.lwc_guide import to_lwc_test_guide
 from flowtool.mermaid import element_index, to_markdown, to_mermaid, to_test_guide
 from flowtool.parse import UnsupportedFlow, parse_flow
 from flowtool.planner import (
-    HOUSE_RULES_MAX, Plan, PlanStep, PlannerGenerator, StepResult, execute_plan, house_rules_text,
+    Plan, PlanStep, PlannerGenerator, StepResult, clean_house_rules, execute_plan, house_rules_text,
     refine_step, repair_step, revise_plan,
 )
 from flowtool.compare import OrgReader, compare_steps
@@ -2312,6 +2312,7 @@ def plan_view(session_id: str, session: PlanSession) -> Dict[str, Any]:
         "how_to_test": session.plan.how_to_test,
         "reference": session.reference,
         "agent_user": session.plan.agent_user,
+        "house_rules": session.plan.house_rules,
         "steps": [_step_view(r) for r in session.steps],
         "deployed": session.deployed,
         "agent_publish": session.agent_publish,
@@ -2468,7 +2469,7 @@ async def plan_start(body: PlanRequest) -> Dict[str, Any]:
         )
 
     generator = PlannerGenerator(planner_of(provider))
-    house_rules = (body.house_rules or "").strip()[:HOUSE_RULES_MAX] or None
+    house_rules = clean_house_rules(body.house_rules)
     request_text = body.request + _org_context_text(body.org_context) + house_rules_text(house_rules)
     task = asyncio.create_task(asyncio.to_thread(generator.generate, request_text))
     job_id = uuid.uuid4().hex

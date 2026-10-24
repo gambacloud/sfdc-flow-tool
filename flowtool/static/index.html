@@ -312,8 +312,11 @@
     <div class="pad" id="sharedOptions">
       <details id="options">
         <summary>Options</summary>
-        <div class="options">
-          <div class="options-heading">Basic</div>
+        <div class="opt-tabs" role="tablist">
+          <button type="button" class="opt-tab active" id="optTabBasic" role="tab" aria-selected="true">Basic</button>
+          <button type="button" class="opt-tab" id="optTabAdvanced" role="tab" aria-selected="false">Advanced</button>
+        </div>
+        <div class="options" id="optBasic" role="tabpanel">
           <label>Provider
             <select id="provider"></select>
           </label>
@@ -331,13 +334,12 @@
               <option selected>medium</option><option>high</option>
             </select>
           </label>
-          <label>House rules <span class="dim">(optional - your standing conventions, applied to every step: naming, tests, style)</span>
+        </div>
+        <div class="options" id="optAdvanced" role="tabpanel" hidden>
+          <label>House rules <span class="dim">(optional - your style preferences for every step: naming, tests, comments. They never change what gets built or how it is checked, and you see them on the plan)</span>
             <textarea id="houseRules" rows="3" maxlength="2000"
               placeholder="e.g. prefix every new class with ACME_, always write a test class, add a description to every field"></textarea>
           </label>
-          <details class="advanced">
-            <summary>Advanced</summary>
-            <div class="options">
           <label>API version
             <input id="apiVersion" value="64.0" size="6">
           </label>
@@ -366,8 +368,6 @@
               <a class="link-btn" href="/install/sfdc-flow-forge-installer.sh" download>macOS (.sh)</a>
             </div>
           </label>
-            </div>
-          </details>
         </div>
       </details>
     </div>
@@ -484,6 +484,10 @@
       </div>
 
       <p class="desc" id="planReasoning" hidden></p>
+      <details id="planHouseRulesBox" class="house-rules-applied" hidden>
+        <summary>House rules applied to this plan</summary>
+        <pre id="planHouseRules"></pre>
+      </details>
       <details class="plan-how-to-test" id="planHowToTestBox" hidden>
         <summary>How to test</summary>
         <pre id="planHowToTest"></pre>
