@@ -74,6 +74,33 @@
       </div>
     </div>
   </div>
+  <div class="dropdown-wrap manual-wrap" id="scratchWrap" hidden>
+    <button id="scratchBtn" class="dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false">
+      Scratch org
+    </button>
+    <div class="dropdown-panel manual-panel" id="scratchPanel" hidden>
+      <label>Name
+        <input id="scratchAlias" type="text" maxlength="40" placeholder="my-feature-scratch" autocomplete="off">
+      </label>
+      <label>Lifetime (days)
+        <input id="scratchDays" type="number" min="1" max="30" value="7">
+      </label>
+      <label>Edition
+        <select id="scratchEdition"></select>
+      </label>
+      <label>Dev Hub
+        <select id="scratchHub"></select>
+      </label>
+      <button id="scratchCreateBtn" type="button" class="primary">Create and use</button>
+      <p class="dim scratch-note" id="scratchStatus">Takes a few minutes. The new org is selected for Validate when it is ready.</p>
+      <div class="scratch-existing" id="scratchExisting" hidden>
+        <label>Existing scratch orgs
+          <select id="scratchList"></select>
+        </label>
+        <button id="scratchDeleteBtn" type="button">Delete selected</button>
+      </div>
+    </div>
+  </div>
   <div class="dropdown-wrap logs-wrap">
     <button id="logsBtn" class="dropdown-btn logs-btn" type="button" aria-haspopup="true" aria-expanded="false">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">

@@ -2720,6 +2720,86 @@ def _start_plan_deploy(
     session.pending_deploy = PendingDeploy(task=task, instance_url=url, token=token)
 
 
+# --- Scratch orgs ------------------------------------------------------------
+# Create (and delete) a throwaway org through the sf CLI, so a plan can be
+# validated against a clean org rather than a shared one. Local only: hosted
+# mode refuses /api/scratch, and the extension has no CLI.
+
+SCRATCH_JOBS: Dict[str, "asyncio.Task"] = {}
+SCRATCH_ALIASES: Dict[str, str] = {}  # alias -> job_id, while it is being created
+
+
+class ScratchCreateRequest(BaseModel):
+    alias: str
+    duration_days: int = 7
+    edition: str = "developer"
+    dev_hub: Optional[str] = None
+
+
+class ScratchDeleteRequest(BaseModel):
+    alias: str
+    confirm: bool = False
+
+
+@app.get("/api/scratch/info")
+async def scratch_info() -> Dict[str, Any]:
+    from flowtool.orgs import SfCliError, scratch_overview
+
+    try:
+        return await asyncio.to_thread(scratch_overview)
+    except SfCliError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/scratch/start")
+async def scratch_start(body: ScratchCreateRequest) -> Dict[str, Any]:
+    from flowtool.orgs import SfCliError, create_scratch_org, validate_scratch_request
+
+    alias = body.alias.strip()
+    try:
+        validate_scratch_request(alias, body.duration_days, body.edition)
+    except SfCliError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if alias in SCRATCH_ALIASES:
+        raise HTTPException(409, f"{alias} is already being created.")
+    job_id = uuid.uuid4().hex
+    SCRATCH_ALIASES[alias] = job_id
+    SCRATCH_JOBS[job_id] = asyncio.create_task(
+        asyncio.to_thread(create_scratch_org, alias, body.duration_days, body.edition, body.dev_hub or None)
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/scratch/status")
+async def scratch_status(job_id: str) -> Dict[str, Any]:
+    task = SCRATCH_JOBS.get(job_id)
+    if task is None:
+        raise HTTPException(404, "Unknown scratch org job.")
+    if not task.done():
+        return {"done": False}
+    del SCRATCH_JOBS[job_id]
+    for alias, owner in list(SCRATCH_ALIASES.items()):
+        if owner == job_id:
+            del SCRATCH_ALIASES[alias]
+    try:
+        return {"done": True, "org": task.result()}
+    except Exception as exc:  # noqa: BLE001 - the CLI's own reason is what the person needs
+        raise HTTPException(400, f"Could not create the scratch org: {exc}") from exc
+
+
+@app.post("/api/scratch/delete")
+async def scratch_delete(body: ScratchDeleteRequest) -> Dict[str, Any]:
+    from flowtool.orgs import SfCliError, delete_scratch_org
+
+    if not body.confirm:
+        raise HTTPException(400, "Deleting a scratch org needs an explicit confirmation.")
+    try:
+        await asyncio.to_thread(delete_scratch_org, body.alias.strip())
+    except SfCliError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"deleted": body.alias.strip()}
+
+
 # --- Compare with the org ----------------------------------------------------
 # Read-only: for each step, is it new in the org or does it exist, and what would
 # deploying change. Runs on its own job so it never delays or blocks a validate.

@@ -6,6 +6,7 @@ hand. Optional — everything still works with a session id typed at the prompt.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -38,18 +39,18 @@ def _sf_executable() -> str:
     return exe
 
 
-def _run_sf_raw(args: List[str]) -> subprocess.CompletedProcess:
+def _run_sf_raw(args: List[str], timeout: int = 120) -> subprocess.CompletedProcess:
     exe = _sf_executable()
     try:
         return subprocess.run(
-            [exe, *args], capture_output=True, text=True, timeout=120
+            [exe, *args], capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired as exc:
         raise SfCliError(f"sf {' '.join(args)} timed out") from exc
 
 
-def _run_sf(args: List[str]) -> dict:
-    proc = _run_sf_raw([*args, "--json"])
+def _run_sf(args: List[str], timeout: int = 120) -> dict:
+    proc = _run_sf_raw([*args, "--json"], timeout)
 
     # The CLI reports failures in JSON on stdout, so parse before checking the code.
     try:
@@ -179,3 +180,93 @@ def list_orgs() -> List[str]:
             if name and name not in names:
                 names.append(name)
     return names
+
+
+# --------------------------------------------------------------------------
+# Scratch orgs
+# --------------------------------------------------------------------------
+
+SCRATCH_EDITIONS = (
+    "developer", "enterprise", "group", "professional",
+    "partner-developer", "partner-enterprise", "partner-group", "partner-professional",
+)
+MAX_SCRATCH_DAYS = 30
+# Leading letter or digit so an alias can never be read by the CLI as a flag.
+_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+# Creation is queued, then provisioned; the CLI's own --wait is minutes.
+SCRATCH_WAIT_MINUTES = 15
+
+
+def scratch_overview() -> dict:
+    """Dev Hubs this CLI can create from, and the scratch orgs it already knows."""
+    result = _run_sf(["org", "list"])
+    hubs: List[str] = []
+    for org in result.get("devHubs", []) or []:
+        name = org.get("alias") or org.get("username")
+        if name and name not in hubs:
+            hubs.append(name)
+    scratch = [
+        {
+            "name": org.get("alias") or org.get("username"),
+            "expires": org.get("expirationDate") or "",
+            "expired": bool(org.get("isExpired")),
+        }
+        for org in result.get("scratchOrgs", []) or []
+        if org.get("alias") or org.get("username")
+    ]
+    return {"dev_hubs": hubs, "scratch_orgs": scratch, "editions": list(SCRATCH_EDITIONS), "max_days": MAX_SCRATCH_DAYS}
+
+
+def validate_scratch_request(alias: str, duration_days: int, edition: str) -> None:
+    if not _ALIAS_RE.match(alias or ""):
+        raise SfCliError(
+            "The scratch org name must be 1-40 characters: letters, digits, '-' and '_', "
+            "starting with a letter or digit."
+        )
+    if not 1 <= duration_days <= MAX_SCRATCH_DAYS:
+        raise SfCliError(f"A scratch org lives 1-{MAX_SCRATCH_DAYS} days.")
+    if edition not in SCRATCH_EDITIONS:
+        raise SfCliError(f"Unknown edition {edition!r}.")
+
+
+def create_scratch_org(alias: str, duration_days: int, edition: str, dev_hub: Optional[str]) -> dict:
+    """
+    Create a scratch org and return {alias, username, instance_url, expires}.
+    Blocks until the org is ready (or the CLI gives up), so call it off the
+    event loop. The org is not made the default - the caller selects it.
+    """
+    validate_scratch_request(alias, duration_days, edition)
+    args = [
+        "org", "create", "scratch",
+        "--alias", alias,
+        "--edition", edition,
+        "--duration-days", str(duration_days),
+        "--wait", str(SCRATCH_WAIT_MINUTES),
+        "--no-track-source",
+    ]
+    if dev_hub:
+        args += ["--target-dev-hub", dev_hub]
+    else:
+        hubs = scratch_overview()["dev_hubs"]
+        if not hubs:
+            raise SfCliError(
+                "No Dev Hub is connected. Enable Dev Hub in a Developer/Production org, then:\n"
+                "    sf org login web --set-default-dev-hub --alias devhub"
+            )
+        args += ["--target-dev-hub", hubs[0]]
+
+    result = _run_sf(args, timeout=(SCRATCH_WAIT_MINUTES + 2) * 60)
+    return {
+        "alias": alias,
+        "username": result.get("username", ""),
+        "instance_url": result.get("instanceUrl", ""),
+        "expires": result.get("expirationDate", ""),
+    }
+
+
+def delete_scratch_org(alias: str) -> None:
+    """Delete one scratch org - refuses anything `sf org list` does not call a scratch org."""
+    known = {o["name"] for o in scratch_overview()["scratch_orgs"]}
+    if alias not in known:
+        raise SfCliError(f"{alias!r} is not a scratch org this CLI knows - nothing was deleted.")
+    _run_sf(["org", "delete", "scratch", "--target-org", alias, "--no-prompt"])

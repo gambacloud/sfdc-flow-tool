@@ -4052,6 +4052,96 @@ function orgCredentials() {
   return org ? { org } : {};
 }
 
+// Scratch orgs: created through the sf CLI (so local server only - the panel
+// stays hidden without it), then selected in the Org picker so the next
+// Validate runs against the fresh org.
+function selectOrg(name) {
+  const org = $("org");
+  if (![...org.options].some((o) => o.value === name)) org.add(new Option(name, name));
+  org.value = name;
+  // A browser login wins in orgCredentials(); drop it, or Validate would
+  // silently go to that org instead of the scratch org just chosen.
+  state.org = null;
+  renderOAuthStatus();
+}
+
+async function loadScratchInfo() {
+  const info = await api("api/scratch/info");
+  const fill = (select, values) => {
+    const keep = select.value;
+    select.replaceChildren(...values.map((v) => new Option(v, v)));
+    if (keep && values.includes(keep)) select.value = keep;
+  };
+  fill($("scratchEdition"), info.editions);
+  fill($("scratchHub"), info.dev_hubs);
+  $("scratchDays").max = info.max_days;
+  const names = info.scratch_orgs.map((o) => o.name);
+  const list = $("scratchList");
+  list.replaceChildren(
+    ...info.scratch_orgs.map((o) => {
+      const label = o.expired ? `${o.name} (expired)` : o.expires ? `${o.name} (until ${o.expires})` : o.name;
+      return new Option(label, o.name);
+    })
+  );
+  $("scratchExisting").hidden = !names.length;
+  if (!info.dev_hubs.length) {
+    $("scratchStatus").textContent =
+      "No Dev Hub is connected: sf org login web --set-default-dev-hub --alias devhub";
+  }
+}
+
+async function createScratchOrg() {
+  const button = $("scratchCreateBtn");
+  const panel = $("scratchPanel");
+  showError(panel, "");
+  const alias = $("scratchAlias").value.trim();
+  if (!alias) {
+    showError(panel, "Give the scratch org a name.");
+    return;
+  }
+  busy(button, true, "Creating...");
+  $("scratchStatus").textContent = "Creating - this usually takes a few minutes...";
+  try {
+    const { job_id } = await api("api/scratch/start", {
+      alias,
+      duration_days: Number($("scratchDays").value) || 7,
+      edition: $("scratchEdition").value || "developer",
+      dev_hub: $("scratchHub").value || null,
+    });
+    const result = await poll("api/scratch/status", { job_id });
+    selectOrg(result.org.alias);
+    $("scratchStatus").textContent = `${result.org.alias} is ready (until ${result.org.expires || "?"}) and selected.`;
+    $("scratchAlias").value = "";
+    await loadScratchInfo().catch(() => {});
+  } catch (err) {
+    $("scratchStatus").textContent = "";
+    showError(panel, err.message);
+    logError("Create scratch org", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function deleteScratchOrg() {
+  const alias = $("scratchList").value;
+  if (!alias || !confirm(`Delete scratch org "${alias}"? This cannot be undone.`)) return;
+  const button = $("scratchDeleteBtn");
+  showError($("scratchPanel"), "");
+  busy(button, true, "Deleting...");
+  try {
+    await api("api/scratch/delete", { alias, confirm: true });
+    const org = $("org");
+    [...org.options].filter((o) => o.value === alias).forEach((o) => o.remove());
+    $("scratchStatus").textContent = `${alias} was deleted.`;
+    await loadScratchInfo().catch(() => {});
+  } catch (err) {
+    showError($("scratchPanel"), err.message);
+    logError("Delete scratch org", err.message);
+  } finally {
+    busy(button, false);
+  }
+}
+
 // The manual-entry alternative to OAuth: for a host with no Connected App
 // configured, or anyone who would rather paste a token they already have
 // than click through a login redirect. Feeds the same state.org the OAuth
@@ -4136,6 +4226,7 @@ async function boot() {
 
     state.sfCli = config.sf_cli;
     if (config.sf_cli) {
+      $("scratchWrap").hidden = false;
       const org = $("org");
       if (config.orgs.length) {
         org.add(new Option("(default org)", ""));
@@ -4410,6 +4501,14 @@ async function boot() {
   renderLogs();
 
   wireDropdown($("manualBtn"), $("manualPanel"));
+  wireDropdown($("scratchBtn"), $("scratchPanel"));
+  const openScratch = $("scratchBtn").onclick;
+  $("scratchBtn").onclick = (event) => {
+    openScratch(event);
+    if (!$("scratchPanel").hidden) loadScratchInfo().catch((err) => showError($("scratchPanel"), err.message));
+  };
+  $("scratchCreateBtn").onclick = createScratchOrg;
+  $("scratchDeleteBtn").onclick = deleteScratchOrg;
   $("manualConnectBtn").onclick = connectManually;
 }
 
